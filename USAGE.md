@@ -7,6 +7,7 @@
 - [安装](#安装)
 - [快速开始](#快速开始)
 - [配置文件](#配置文件)
+- [任务类型](#任务类型)
 - [执行方式](#执行方式)
 - [最佳实践](#最佳实践)
 - [故障排除](#故障排除)
@@ -46,39 +47,37 @@ codebuddy -p "login_test"
 创建 `todos.yaml` 文件：
 
 ```yaml
-version: 1
-workspace: /path/to/your/project
-
 tasks:
   # 简单任务示例
   - id: 1
-    description: "准备数据集"
+    name: "下载数据集"
     type: simple
-    command: "python prepare_data.py"
-    expected_output: "数据准备完成"
+    completion_criteria: "data.csv 文件存在且大小 > 10MB"
+    initial_hint: "使用 python download.py"
     
-  # 循环任务示例
+  # 嵌套任务示例
   - id: 2
-    description: "优化模型精度到 90% 以上"
-    type: loop
-    max_retries: 5
-    completion_criteria: |
-      模型精度（accuracy）需要 >= 0.9
-      训练无崩溃，无 OOM
-    initial_instruction: "将学习率从 0.001 调整到 0.0001"
+    name: "优化模型性能"
+    type: nested
+    completion_criteria: "训练成功完成且 val_loss < 0.5"
+    subtasks:
+      - id: 2.1
+        name: "修改训练代码"
+        type: ai_action
+        completion_criteria: "代码修改完成"
+        
+      - id: 2.2
+        name: "运行训练"
+        type: long_running
+        command: "python train.py --config modified_config.yaml"
+        completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
 ### 步骤 2：运行 Orchestrator
 
 ```bash
 # 运行所有任务
-python todo_orchestrator.py
-
-# 运行特定任务
-python todo_orchestrator.py --task 2
-
-# 使用指定的配置文件
-python todo_orchestrator.py --config custom_todos.yaml
+python orchestrator.py
 ```
 
 ### 步骤 3：查看输出
@@ -86,39 +85,34 @@ python todo_orchestrator.py --config custom_todos.yaml
 Orchestrator 会实时输出执行日志：
 
 ```
-============================================================
-开始执行任务 1: 准备数据集
-============================================================
+📋 执行任务 1: 下载数据集
+   类型: simple
 
-📝 执行任务 1: 准备数据集
-   命令: python prepare_data.py
-   结果: ✅ 成功
+   尝试 #1
+      AI 尝试完成任务...
+   ✅ 任务 1 完成！
 
-============================================================
-开始执行任务 2: 优化模型精度到 90% 以上
-============================================================
+📋 执行任务 2: 优化模型性能
+   类型: nested
 
-🔄 第 1 次尝试: AI 修改代码
-   AI 决策: 调整学习率为 0.0001
-🏋️ 运行训练...
-   训练结果: ✅ 成功
-🔍 AI 检查完成情况...
-   AI 判断: ❌ 未完成
-   理由: accuracy = 0.85，未达到 0.9
+   📌 执行子任务 2.1: 修改训练代码
+      类型: ai_action
+      
+      尝试 #1
+         AI 尝试完成任务...
+      ✅ 子任务 2.1 完成！
 
-🔄 第 2 次尝试: AI 修改代码
-   AI 决策: 增加 batch_size 到 128
-🏋️ 运行训练...
-   训练结果: ✅ 成功
-🔍 AI 检查完成情况...
-   AI 判断: ✅ 已完成
-   理由: accuracy = 0.92，达到要求
+   📌 执行子任务 2.2: 运行训练
+      类型: long_running
+      
+      启动长时间任务...
+      命令: python train.py --config modified_config.yaml
+      日志: logs/2.2.log
+      ✅ 任务已启动，正在监控...
 
-============================================================
-执行总结:
-  ✅ 任务 1: 准备数据集
-  ✅ 任务 2: 优化模型精度到 90% 以上
-============================================================
+   📊 子任务全部完成，检查主任务完成条件...
+      AI 检查结果...
+   ✅ 主任务 2 完成！
 ```
 
 ## 配置文件
@@ -126,88 +120,170 @@ Orchestrator 会实时输出执行日志：
 ### 完整配置示例
 
 ```yaml
-version: 1
-workspace: /data/workspace/project
-codebuddy:
-  path: /root/.local/bin/codebuddy
-  model: glm-4.7
-  timeout: 3600
-
 tasks:
   # 简单任务
   - id: 1
     name: "prepare_data"
-    description: "准备数据集"
     type: simple
-    command: "python prepare_data.py"
-    timeout: 300
-    working_dir: ./scripts
-    expected_output: "数据准备完成"
+    completion_criteria: "data.csv 文件存在且包含 10000 条数据"
+    initial_hint: "运行 python prepare_data.py"
     
-  # 循环任务
+  # 嵌套任务
   - id: 2
     name: "optimize_accuracy"
-    description: "优化模型精度"
-    type: loop
-    max_retries: 5
-    timeout: 1800
+    type: nested
     completion_criteria: |
-      模型精度（accuracy）需要 >= 0.9
-      训练无崩溃，无 OOM
-      损失函数 loss < 0.1
-    initial_instruction: "将学习率从 0.001 调整到 0.0001"
-    success_criteria:
-      - "accuracy >= 0.9"
-      - "loss < 0.1"
+      训练成功完成
+      验证集精度 >= 0.9
+      验证集 loss < 0.1
+    subtasks:
+      - id: 2.1
+        name: "修改模型配置"
+        type: ai_action
+        completion_criteria: "配置修改完成"
+        
+      - id: 2.2
+        name: "训练模型"
+        type: long_running
+        command: "python train.py --config config.yaml"
+        completion_criteria: "训练成功完成且指标达标"
 ```
 
 ### 配置字段说明
 
-#### 全局配置
+#### 全局字段
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `version` | int | 是 | 配置文件版本 |
-| `workspace` | string | 是 | 项目工作目录 |
-| `codebuddy.path` | string | 否 | CodeBuddy 路径（默认：/root/.local/bin/codebuddy） |
-| `codebuddy.model` | string | 否 | 使用的模型（默认：glm-4.7） |
-| `codebuddy.timeout` | int | 否 | CodeBuddy 调用超时时间（默认：3600秒） |
+| `tasks` | list | 是 | 任务列表 |
 
-#### 任务配置
+#### 任务通用字段
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `id` | int | 是 | 任务 ID（唯一标识） |
-| `name` | string | 否 | 任务名称（用于日志和状态管理） |
-| `description` | string | 是 | 任务描述（发送给 AI） |
-| `type` | string | 是 | 任务类型：`simple` 或 `loop` |
-| `timeout` | int | 否 | 执行超时时间（秒） |
-| `working_dir` | string | 否 | 工作目录（相对于 workspace） |
+| `id` | int/string | 是 | 任务 ID（唯一标识） |
+| `name` | string | 是 | 任务名称 |
+| `type` | string | 是 | 任务类型：`simple`、`nested`、`ai_action`、`long_running` |
+| `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
 
-#### 简单任务（type: simple）
+#### 简单任务 (type: simple)
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `initial_hint` | string | 否 | 初始提示（给 AI 的参考信息） |
+
+#### 嵌套任务 (type: nested)
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `subtasks` | list | 是 | 子任务列表 |
+
+#### AI 操作任务 (type: ai_action)
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| 无额外字段 | - | - | 使用通用的 completion_criteria |
+
+#### 长时间任务 (type: long_running)
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `command` | string | 是 | 要执行的命令 |
-| `expected_output` | string | 否 | 预期的输出内容（可选验证） |
+| `completion_criteria` | string | 是 | 完成标准 |
 
-#### 循环任务（type: loop）
+## 任务类型
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `max_retries` | int | 否 | 最大重试次数（默认：3） |
-| `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
-| `initial_instruction` | string | 否 | 初始修改指令 |
-| `success_criteria` | list | 否 | 成功标准列表（可选） |
+### 1. 简单任务 (simple)
 
-### 配置验证
+**适用场景**：一次性执行的任务，由 AI 判断是否完成
 
-Orchestrator 会自动验证配置文件：
-
-```bash
-# 仅验证配置，不执行任务
-python todo_orchestrator.py --validate
+**配置示例**：
+```yaml
+- id: 1
+  name: "下载数据集"
+  type: simple
+  completion_criteria: "data.csv 文件存在且大小 > 10MB"
+  initial_hint: "使用 python download.py"
 ```
+
+**执行流程**：
+1. AI 根据 initial_hint 尝试完成任务
+2. AI 自我评估是否满足完成条件
+3. 如果满足：标记完成
+4. 如果不满足：AI 决定如何改进，重新尝试
+5. 循环直到满足条件或达到最大尝试次数
+
+### 2. 嵌套任务 (nested)
+
+**适用场景**：需要多个步骤的复杂任务
+
+**配置示例**：
+```yaml
+- id: 2
+  name: "优化模型性能"
+  type: nested
+  completion_criteria: "训练成功完成且 val_loss < 0.5"
+  subtasks:
+    - id: 2.1
+      name: "修改训练代码"
+      type: ai_action
+      completion_criteria: "代码修改完成"
+      
+    - id: 2.2
+      name: "运行训练"
+      type: long_running
+      command: "python train.py --config modified_config.yaml"
+      completion_criteria: "训练正常退出且验证集指标满足要求"
+```
+
+**执行流程**：
+1. 按顺序执行所有子任务
+2. 所有子任务完成后，AI 判断主任务是否完成
+3. 如果未完成，重新从第一个子任务开始
+4. 循环直到满足条件或达到最大尝试次数
+
+### 3. AI 操作任务 (ai_action)
+
+**适用场景**：需要 AI 修改代码或执行其他操作的任务
+
+**配置示例**：
+```yaml
+- id: 2.1
+  name: "修改训练代码"
+  type: ai_action
+  completion_criteria: "代码修改完成"
+```
+
+**执行流程**：
+1. 调用 CodeBuddy 执行操作
+2. AI 自我评估是否满足完成条件
+3. 如果满足：标记完成
+4. 如果不满足：继续改进
+5. 循环直到满足条件或达到最大尝试次数
+
+### 4. 长时间任务 (long_running)
+
+**适用场景**：可能超过 CodeBuddy 超时限制的任务（如模型训练）
+
+**配置示例**：
+```yaml
+- id: 2.2
+  name: "运行训练"
+  type: long_running
+  command: "python train.py --config modified_config.yaml"
+  completion_criteria: "训练正常退出且验证集指标满足要求"
+```
+
+**执行流程**：
+1. 使用 nohup 在后台运行命令
+2. 启动监控进程持续检查日志
+3. 检测到完成标志后通知 AI
+4. AI 判断是否满足完成条件
+
+**技术细节**：
+- 使用 `nohup` 避免超时
+- 独立的监控进程检查日志
+- 自动检测错误和完成标志
 
 ## 执行方式
 
@@ -216,146 +292,31 @@ python todo_orchestrator.py --validate
 默认模式，实时输出日志：
 
 ```bash
-python todo_orchestrator.py
+python orchestrator.py
 ```
 
-### 2. 静默执行
-
-输出到日志文件：
+### 2. 后台执行
 
 ```bash
-python todo_orchestrator.py --silent --log orchestrator.log
+nohup python orchestrator.py > orchestrator.log 2>&1 &
 ```
 
-### 3. 后台执行
-
-```bash
-nohup python todo_orchestrator.py > orchestrator.log 2>&1 &
-```
-
-### 4. 断点续传
+### 3. 断点续传
 
 如果执行中断，可以从断点继续：
 
 ```bash
 # 会自动检测未完成的任务
-python todo_orchestrator.py --continue
+python orchestrator.py
 ```
 
-### 5. 指定任务
+状态保存在 `todos_state.yaml` 中，程序会自动读取并继续执行。
 
-执行特定任务：
+### 4. 查看状态
 
 ```bash
-# 执行单个任务
-python todo_orchestrator.py --task 3
-
-# 执行多个任务
-python todo_orchestrator.py --tasks 1,2,5
-
-# 执行指定范围的任务
-python todo_orchestrator.py --task-range 1-5
-```
-
-### 6. 跳过任务
-
-跳过某些任务：
-
-```bash
-# 跳过已完成的任务
-python todo_orchestrator.py --skip-completed
-
-# 跳过特定任务
-python todo_orchestrator.py --skip 2,4
-```
-
-## 高级用法
-
-### 1. 条件任务
-
-使用 `depends_on` 定义任务依赖：
-
-```yaml
-tasks:
-  - id: 1
-    description: "准备数据"
-    type: simple
-    command: "python prepare_data.py"
-    
-  - id: 2
-    description: "训练模型"
-    type: loop
-    depends_on: [1]  # 依赖任务 1
-    completion_criteria: "accuracy >= 0.9"
-```
-
-### 2. 并行任务
-
-使用 `parallel` 关键字：
-
-```yaml
-tasks:
-  - id: 1
-    description: "并行数据预处理"
-    type: parallel
-    commands:
-      - "python process_part1.py"
-      - "python process_part2.py"
-      - "python process_part3.py"
-```
-
-### 3. 任务组
-
-使用 `group` 组织相关任务：
-
-```yaml
-groups:
-  - name: "数据准备"
-    tasks: [1, 2, 3]
-    
-  - name: "模型训练"
-    tasks: [4, 5, 6]
-
-tasks:
-  - id: 1
-    description: "下载数据"
-    type: simple
-    command: "python download.py"
-  
-  # ... 其他任务
-```
-
-### 4. 环境变量
-
-在任务中使用环境变量：
-
-```yaml
-tasks:
-  - id: 1
-    description: "使用 GPU 训练"
-    type: simple
-    command: "CUDA_VISIBLE_DEVICES=0 python train.py"
-    
-  - id: 2
-    description: "设置学习率"
-    type: simple
-    command: "LEARNING_RATE=0.001 python train.py"
-```
-
-### 5. Git 集成
-
-自动提交代码修改：
-
-```yaml
-tasks:
-  - id: 1
-    description: "优化代码"
-    type: loop
-    completion_criteria: "性能提升 20%"
-    git:
-      auto_commit: true
-      commit_message: "优化: ${task.description}"
-      branch: "feature/optimization"
+# 查看状态文件
+cat todos_state.yaml
 ```
 
 ## 最佳实践
@@ -364,7 +325,7 @@ tasks:
 
 - ✅ 任务描述要清晰明确
 - ✅ 完成标准要可验证
-- ✅ 合理设置重试次数
+- ✅ 合理设置初始提示
 - ✅ 避免任务过于复杂
 
 **示例**：
@@ -372,25 +333,29 @@ tasks:
 ```yaml
 # ❌ 不好：任务过于复杂
 - id: 1
-  description: "优化整个项目"
-  type: loop
+  name: "优化整个项目"
+  type: simple
   completion_criteria: "所有指标都好"
 
 # ✅ 好：任务拆分
 - id: 1
-  description: "优化数据加载速度"
-  type: loop
+  name: "优化数据加载速度"
+  type: simple
   completion_criteria: "数据加载时间 < 1s"
 
 - id: 2
-  description: "优化训练速度"
-  type: loop
+  name: "优化训练速度"
+  type: nested
   completion_criteria: "每个 epoch < 5min"
-
-- id: 3
-  description: "优化模型精度"
-  type: loop
-  completion_criteria: "accuracy >= 0.9"
+  subtasks:
+    - id: 2.1
+      name: "修改训练代码"
+      type: ai_action
+      completion_criteria: "代码修改完成"
+    - id: 2.2
+      name: "运行训练测试"
+      type: simple
+      completion_criteria: "测试完成且性能达标"
 ```
 
 ### 2. 完成标准编写
@@ -413,47 +378,54 @@ completion_criteria: |
   最后 3 个 epoch 的准确率方差 < 0.01
 ```
 
-### 3. 重试策略
+### 3. 嵌套任务使用
 
-- ✅ 合理设置 max_retries
-- ✅ 考虑收敛时间
-- ✅ 避免无限循环
+**适用场景**：
+- 需要多步骤的复杂任务
+- 某些步骤可能需要很长时间（如训练）
+- 需要根据后续步骤的结果判断整体是否完成
 
 **示例**：
 
 ```yaml
-# ❌ 不好：重试次数过多
-- id: 1
-  max_retries: 100  # 可能需要几天
-
-# ✅ 好：合理设置
-- id: 1
-  max_retries: 5  # 根据任务复杂度调整
+- id: 2
+  name: "优化模型性能"
+  type: nested
+  completion_criteria: "训练成功完成且 val_loss < 0.5"
+  subtasks:
+    # 步骤1：AI 修改代码
+    - id: 2.1
+      name: "修改训练代码"
+      type: ai_action
+      completion_criteria: "代码修改完成"
+      
+    # 步骤2：长时间训练（避免超时）
+    - id: 2.2
+      name: "运行训练"
+      type: long_running
+      command: "python train.py --config modified_config.yaml"
+      completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
-### 4. 日志管理
+### 4. 长时间任务使用
 
-- ✅ 定期清理日志
-- ✅ 使用日志轮转
-- ✅ 保存重要日志
+**适用场景**：
+- 任务执行时间可能超过 CodeBuddy 超时限制
+- 模型训练、数据处理等长时间任务
+
+**注意事项**：
+- 确保日志中有明确的完成标志
+- 监控进程会定期检查日志
+- CodeBuddy 必须先登录（settings.json 存在）
+
+### 5. 日志管理
 
 ```bash
-# 设置日志轮转
-python todo_orchestrator.py --log orchestrator.log --log-max-size 100M --log-keep 5
-```
+# 查看长时间任务的日志
+tail -f logs/2.2.log
 
-### 5. 错误处理
-
-- ✅ 配置错误通知
-- ✅ 设置合理的超时
-- ✅ 保存失败状态
-
-```yaml
-# 全局错误处理配置
-error_handling:
-  notify_on_failure: true
-  save_failure_state: true
-  max_consecutive_failures: 3
+# 查看监控进程的日志
+tail -f monitors/2.2.log
 ```
 
 ## 故障排除
@@ -473,159 +445,57 @@ codebuddy -p "login_test"
 
 # 验证 settings.json 存在
 ls ~/.codebuddy/settings.json
-
-# 使用 API Key（备选方案）
-export CODEBUDDY_API_KEY="your-api-key"
 ```
 
-### 问题 2：训练超时
-
-**错误信息**：
-```
-TimeoutError: Command timed out after 1800 seconds
-```
-
-**解决方案**：
-
-```yaml
-# 增加超时时间
-- id: 1
-  type: loop
-  timeout: 7200  # 2 小时
-```
-
-### 问题 3：AI 返回无效 JSON
-
-**错误信息**：
-```
-JSONDecodeError: Expecting value: line 1 column 1 (char 0)
-```
-
-**解决方案**：
-
-1. 检查 AI 模型是否正确配置
-2. 尝试使用其他模型（如 glm-4.7）
-3. 增加提示词中的 JSON 格式要求
-
-```python
-# 在提示词中明确要求 JSON
-prompt = """
-请严格按照以下 JSON 格式返回：
-{
-  "completed": true/false,
-  "reason": "理由"
-}
-
-不要返回其他任何内容。
-"""
-```
-
-### 问题 4：任务卡住不执行
+### 问题 2：长时间任务卡住
 
 **检查步骤**：
 
 ```bash
-# 查看进程状态
-ps aux | grep todo_orchestrator
+# 查看任务状态
+cat todos_state.yaml
 
 # 查看日志文件
-tail -f orchestrator.log
+tail -f logs/2.2.log
 
-# 检查 CodeBuddy 进程
-ps aux | grep codebuddy
+# 查看监控进程
+ps aux | grep monitor
 
-# 查看状态文件
-cat .orchestrator_state.json
+# 查看训练进程
+ps aux | grep train.py
 ```
 
-### 问题 5：状态文件损坏
+### 问题 3：AI 无限循环
+
+**原因**：完成条件设置不合理，AI 无法满足
+
+**解决方案**：
+- 检查完成条件是否合理
+- 重新设计任务，拆分为更小的任务
+- 设置更合理的初始提示
+
+### 问题 4：状态文件损坏
 
 **解决方案**：
 
 ```bash
 # 删除状态文件，重新开始
-rm .orchestrator_state.json
-
-# 或使用 --reset 参数
-python todo_orchestrator.py --reset
+rm todos_state.yaml
 ```
 
-### 问题 6：内存溢出（OOM）
+### 问题 5：监控进程无法启动
 
-**解决方案**：
-
-```yaml
-# 减少批量大小
-- id: 1
-  type: loop
-  initial_instruction: "将 batch_size 减少到 32"
-
-# 或在命令中限制内存
-- id: 1
-  command: "ulimit -v 8388608 && python train.py"
-```
-
-## 性能优化
-
-### 1. 并行执行
-
-```yaml
-# 使用并行任务提高效率
-- id: 1
-  type: parallel
-  commands:
-    - "python script1.py"
-    - "python script2.py"
-    - "python script3.py"
-```
-
-### 2. 缓存 AI 响应
-
-```python
-# 启用缓存
-codebuddy = CodeBuddyClient(cache_enabled=True)
-```
-
-### 3. 减少不必要的 AI 调用
-
-```yaml
-# 对于简单的判断，不使用 AI
-- id: 1
-  type: simple
-  command: "python test.py"
-  # 不使用 check_completion，直接检查退出码
-```
-
-## 调试技巧
-
-### 1. 启用详细日志
+**检查步骤**：
 
 ```bash
-python todo_orchestrator.py --verbose
-```
+# 检查 monitors 目录权限
+ls -la monitors/
 
-### 2. 单步执行
+# 检查监控脚本内容
+cat monitors/2.2.sh
 
-```bash
-# 执行单个任务并暂停
-python todo_orchestrator.py --task 1 --pause-after
-```
-
-### 3. 查看 LangGraph 图
-
-```python
-# 查看执行图
-from todo_orchestrator import TodoOrchestrator
-
-orchestrator = TodoOrchestrator()
-print(orchestrator.loop_graph.get_graph().print_ascii())
-```
-
-### 4. 导出执行历史
-
-```bash
-# 导出为 JSON
-python todo_orchestrator.py --export history.json
+# 手动执行监控脚本测试
+bash monitors/2.2.sh
 ```
 
 ## 常见问题
@@ -634,10 +504,7 @@ python todo_orchestrator.py --export history.json
 
 ```bash
 # 查看状态文件
-cat .orchestrator_state.json
-
-# 或使用命令行
-python todo_orchestrator.py --status
+cat todos_state.yaml
 ```
 
 ### Q: 如何中断执行？
@@ -645,25 +512,15 @@ python todo_orchestrator.py --status
 ```bash
 # Ctrl+C 中断当前任务
 # 下次运行时可以从中断点继续
-python todo_orchestrator.py --continue
+python orchestrator.py
 ```
 
-### Q: 如何回滚到之前的状态？
+### Q: 如何重新开始某个任务？
 
 ```bash
-# Git 方式
-git checkout HEAD~1
-
-# 或删除状态文件重新开始
-rm .orchestrator_state.json
-```
-
-### Q: 如何自定义 AI 模型？
-
-```yaml
-# 在配置文件中指定
-codebuddy:
-  model: "glm-4.7"  # 或其他支持的模型
+# 删除该任务的状态，重新运行
+# 编辑 todos_state.yaml，删除对应任务的状态
+python orchestrator.py
 ```
 
 ### Q: 支持哪些模型？
@@ -676,21 +533,12 @@ codebuddy:
 - DeepSeek-V3.1-Terminus
 - DeepSeek-V3.2
 
-### Q: 如何集成到 CI/CD？
+### Q: 如何自定义 CodeBuddy 模型？
 
-```yaml
-# GitHub Actions 示例
-name: Run Orchestrator
-on: [push]
-jobs:
-  run:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Install dependencies
-        run: pip install langgraph pyyaml
-      - name: Run orchestrator
-        run: python todo_orchestrator.py
+可以在代码中指定：
+
+```python
+codebuddy = CodeBuddyClient(model="glm-4.7")
 ```
 
 ## 总结
@@ -698,11 +546,11 @@ jobs:
 本文档涵盖了：
 
 - ✅ 完整的安装和配置流程
-- ✅ 详细的使用说明
-- ✅ 高级用法和最佳实践
+- ✅ 详细的任务类型说明
+- ✅ 完整的使用指南
+- ✅ 最佳实践建议
 - ✅ 常见问题和解决方案
 
 如有其他问题，请参考：
 - [README.md](README.md) - 项目介绍
 - [ARCHITECTURE.md](ARCHITECTURE.md) - 架构设计
-- [API_REFERENCE.md](API_REFERENCE.md) - API 文档

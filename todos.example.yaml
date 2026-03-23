@@ -1,39 +1,230 @@
-version: 1
-workspace: /data/workspace
+# 任务配置示例
+# 这是一个示例配置文件，你可以复制它作为 todos.yaml 的模板
 
-# CodeBuddy 配置
-codebuddy:
-  path: /root/.local/bin/codebuddy
-  model: glm-4.7
-  timeout: 3600
-
-# 任务列表
 tasks:
-  # 示例 1: 简单任务
+  # ==========================================
+  # 简单任务 (simple)
+  # 一次性执行，由 AI 判断是否完成
+  # ==========================================
+  
   - id: 1
-    name: "prepare_data"
-    description: "准备数据集"
+    name: "下载数据集"
     type: simple
-    command: "echo '准备数据集...'"
-    timeout: 300
+    completion_criteria: "data.csv 文件存在且大小 > 10MB"
+    initial_hint: "使用 python download.py"
     
-  # 示例 2: 简单任务
   - id: 2
-    name: "run_tests"
-    description: "运行单元测试"
+    name: "运行代码检查"
     type: simple
-    command: "echo '运行测试...'"
-    timeout: 600
+    completion_criteria: "pylint 评分 >= 9.0 且无严重错误"
+    initial_hint: "运行 pylint src/"
     
-  # 示例 3: 循环任务
   - id: 3
-    name: "optimize_model"
-    description: "优化模型精度到 90% 以上"
-    type: loop
-    max_retries: 5
-    timeout: 1800
+    name: "分析性能瓶颈"
+    type: simple
+    completion_criteria: "生成性能分析报告并保存到 profile_report.txt"
+    initial_hint: "运行 python profile.py"
+    
+  # ==========================================
+  # 嵌套任务 (nested)
+  # 包含多个子任务的复杂任务
+  # ==========================================
+  
+  - id: 10
+    name: "优化模型精度"
+    type: nested
     completion_criteria: |
-      模型精度（accuracy）需要 >= 0.9
-      训练无崩溃，无 OOM
-      损失函数 loss < 0.1
-    initial_instruction: "将学习率从 0.001 调整到 0.0001"
+      训练成功完成
+      验证集精度 >= 0.9
+      验证集 loss < 0.1
+    subtasks:
+      # AI 操作任务：修改代码
+      - id: 10.1
+        name: "修改模型配置"
+        type: ai_action
+        completion_criteria: "模型配置修改完成，包括学习率、网络结构等参数"
+        
+      # 长时间任务：运行训练
+      - id: 10.2
+        name: "训练模型"
+        type: long_running
+        command: "python train.py --config config.yaml"
+        completion_criteria: "训练正常退出且验证集指标满足要求（accuracy >= 0.9）"
+        
+  - id: 11
+    name: "优化代码性能"
+    type: nested
+    completion_criteria: |
+      运行时间 < 5 秒
+      功能测试全部通过
+    subtasks:
+      # AI 操作任务：优化代码
+      - id: 11.1
+        name: "优化热点代码"
+        type: ai_action
+        completion_criteria: "热点代码优化完成，包括算法优化和数据结构优化"
+        
+      # 简单任务：运行测试
+      - id: 11.2
+        name: "运行基准测试"
+        type: simple
+        completion_criteria: "基准测试完成且性能达标（运行时间 < 5s）"
+        initial_hint: "运行 python benchmark.py"
+        
+      # 简单任务：功能验证
+      - id: 11.3
+        name: "功能验证"
+        type: simple
+        completion_criteria: "所有功能测试通过"
+        initial_hint: "运行 python test.py"
+        
+  - id: 12
+    name: "修复代码质量问题"
+    type: nested
+    completion_criteria: |
+      pylint 评分 >= 9.0
+      符合 PEP8 规范
+      无严重警告
+    subtasks:
+      # AI 操作任务：分析问题
+      - id: 12.1
+        name: "分析代码警告"
+        type: ai_action
+        completion_criteria: "分析所有 pylint 警告，生成问题列表和修复方案"
+        
+      # AI 操作任务：修复代码
+      - id: 12.2
+        name: "修复代码问题"
+        type: ai_action
+        completion_criteria: "所有警告和问题已修复"
+        
+  # ==========================================
+  # 更复杂的嵌套任务示例
+  # ==========================================
+  
+  - id: 20
+    name: "端到端机器学习流程"
+    type: nested
+    completion_criteria: |
+      数据准备完成
+      模型训练成功
+      模型评估通过
+      验证集精度 >= 0.95
+    subtasks:
+      # 步骤1：数据准备
+      - id: 20.1
+        name: "准备训练数据"
+        type: simple
+        completion_criteria: "训练数据和验证数据准备完成，文件格式正确"
+        initial_hint: "运行 python prepare_data.py"
+        
+      # 步骤2：数据增强（AI 操作）
+      - id: 20.2
+        name: "实现数据增强"
+        type: ai_action
+        completion_criteria: "数据增强功能实现完成，包括随机裁剪、旋转等"
+        
+      # 步骤3：训练（长时间任务）
+      - id: 20.3
+        name: "训练模型"
+        type: long_running
+        command: "python train.py --data augmented_data --model model.yaml"
+        completion_criteria: "训练正常完成，模型文件保存成功"
+        
+      # 步骤4：评估
+      - id: 20.4
+        name: "评估模型"
+        type: simple
+        completion_criteria: "模型评估完成，生成评估报告"
+        initial_hint: "运行 python evaluate.py --model model.pth"
+        
+  # ==========================================
+  # 仅 AI 操作任务的示例
+  # （通常作为嵌套任务的子任务使用）
+  # ==========================================
+  
+  # - id: 30
+  #   name: "重构代码结构"
+  #   type: ai_action
+  #   completion_criteria: "代码重构完成，结构清晰，可维护性提升"
+    
+  # - id: 31
+  #   name: "添加单元测试"
+  #   type: ai_action
+  #   completion_criteria: "核心功能的单元测试添加完成，测试覆盖率达到 80%"
+
+# ==========================================
+# 配置说明
+# ==========================================
+#
+# 任务类型说明：
+#
+# 1. simple（简单任务）
+#    - 一次性执行的任务
+#    - 由 AI 判断是否完成
+#    - 适用于：数据下载、代码检查、测试运行等
+#
+# 2. nested（嵌套任务）
+#    - 包含多个子任务的复杂任务
+#    - 子任务按顺序执行
+#    - 所有子任务完成后，AI 判断主任务是否完成
+#    - 适用于：模型训练、性能优化、代码重构等
+#
+# 3. ai_action（AI 操作任务）
+#    - 调用 AI 修改代码或执行其他操作
+#    - 由 AI 判断是否完成
+#    - 通常作为嵌套任务的子任务使用
+#    - 适用于：代码修改、逻辑实现、问题分析等
+#
+# 4. long_running（长时间任务）
+#    - 使用 nohup 后台运行的任务
+#    - 避免超时问题
+#    - 启动监控进程检查状态
+#    - 适用于：模型训练、数据处理等长时间任务
+#
+# 字段说明：
+#
+# 通用字段：
+#   - id: 任务 ID（唯一标识）
+#   - name: 任务名称
+#   - type: 任务类型
+#   - completion_criteria: 完成标准（自然语言描述）
+#
+# simple 类型额外字段：
+#   - initial_hint: 初始提示（给 AI 的参考信息）
+#
+# nested 类型额外字段：
+#   - subtasks: 子任务列表
+#
+# ai_action 类型：
+#   - 无额外字段
+#
+# long_running 类型额外字段：
+#   - command: 要执行的命令
+#
+# ==========================================
+# 使用建议
+# ==========================================
+#
+# 1. 完成标准要具体明确
+#    ✅ 好："accuracy >= 0.9"
+#    ❌ 不好："精度要高"
+#
+# 2. 任务描述要清晰
+#    ✅ 好："修改学习率从 0.001 到 0.0001"
+#    ❌ 不好："优化参数"
+#
+# 3. 合理使用嵌套任务
+#    - 需要多步骤的复杂任务使用 nested
+#    - 简单一次性任务使用 simple
+#
+# 4. 长时间任务使用 long_running
+#    - 模型训练
+#    - 大数据处理
+#    - 其他可能超时的任务
+#
+# 5. AI 操作任务用于需要 AI 决策的场景
+#    - 代码修改
+#    - 逻辑实现
+#    - 问题分析
+# ==========================================

@@ -6,8 +6,10 @@
 
 - [系统架构](#系统架构)
 - [核心组件](#核心组件)
+- [任务类型](#任务类型)
 - [数据流](#数据流)
 - [状态管理](#状态管理)
+- [长时间任务处理](#长时间任务处理)
 - [错误处理](#错误处理)
 - [扩展性设计](#扩展性设计)
 
@@ -18,22 +20,22 @@
 ```
 ┌─────────────────────────────────────────┐
 │  应用层 (Application Layer)             │
-│  - todo_orchestrator.py                 │
+│  - orchestrator.py                      │
 │  - CLI 命令行接口                        │
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
 │  业务逻辑层 (Business Logic Layer)      │
-│  - TodoOrchestrator 类                  │
+│  - TaskOrchestrator 类                  │
 │  - 任务调度器                           │
 │  - 配置解析器                           │
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
-│  流程编排层 (Orchestration Layer)       │
-│  - LangGraph 图构建器                   │
-│  - 节点函数                             │
-│  - 条件边函数                           │
+│  任务执行层 (Task Execution Layer)      │
+│  - SimpleTaskExecutor                   │
+│  - NestedTaskExecutor                   │
+│  - SubtaskExecutor                      │
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
@@ -47,6 +49,7 @@
 │  基础设施层 (Infrastructure Layer)      │
 │  - 文件系统                             │
 │  - 子进程执行                           │
+│  - Nohup 监控                           │
 │  - Git 操作（可选）                     │
 └─────────────────────────────────────────┘
 ```
@@ -54,166 +57,246 @@
 ### 模块依赖关系
 
 ```
-todo_orchestrator.py
+orchestrator.py
     ├── yaml (配置解析)
-    ├── langgraph (流程编排)
-    └── codebuddy_client.py (AI 能力)
-            ├── subprocess (调用 CodeBuddy)
-            └── json (响应解析)
+    ├── task_executor.py (任务执行)
+    │   ├── codebuddy_client.py (AI 能力)
+    │   │   └── subprocess (调用 CodeBuddy)
+    │   └── subprocess (执行命令)
+    └── monitor.py (长时间任务监控)
+        └── subprocess (监控进程)
 ```
 
 ## 核心组件
 
-### 1. TodoOrchestrator
+### 1. TaskOrchestrator
 
 **职责**：任务编排和执行管理
 
 **核心方法**：
 ```python
-class TodoOrchestrator:
-    def __init__(self, todos_file: str = "todos.yaml")
+class TaskOrchestrator:
+    def __init__(self, todos_file: str = "todos.yaml", state_file: str = "todos_state.yaml")
     def load_todos(self) -> list
-    def execute_task(self, task: dict) -> bool
-    def run(self, task_id: int = None)
+    def load_state(self) -> dict
+    def save_state(self, state: dict)
+    def run(self)
+    def execute_task(self, task: dict)
+    def execute_simple_task(self, task: dict)
+    def execute_nested_task(self, task: dict)
+    def execute_subtask(self, parent_task_id: str, subtask: dict)
+    def call_codebuddy(self, prompt: str) -> str
 ```
 
 **设计要点**：
 - 单一职责：只负责任务调度，不涉及具体执行逻辑
-- 依赖注入：通过构造函数注入 CodeBuddyClient
 - 状态持久化：支持保存和恢复执行状态
+- 统一接口：所有任务类型通过统一接口调用
 
 ### 2. SimpleTaskExecutor
 
-**职责**：执行简单的一次性任务
+**职责**：执行简单任务（一次性命令 + AI 判断）
 
-**核心方法**：
+**执行流程**：
 ```python
-def execute_simple_task_node(state: TodoState) -> TodoState:
-    """执行简单任务（一次性命令）"""
-    task = state['current_task']
-    command = task['command']
+def execute_simple_task_node(task: dict) -> bool:
+    """执行简单任务"""
+    attempts = 0
+    max_attempts = 100  # 防止无限循环
     
-    result = subprocess.run(command, shell=True, ...)
+    while attempts < max_attempts:
+        attempts += 1
+        
+        # 1. 调用 AI 尝试完成任务
+        result = call_codebuddy(f"""
+        任务：{task['description']}
+        
+        完成条件：{task['completion_criteria']}
+        
+        初始提示：{task.get('initial_hint', '无')}
+        
+        请尝试完成这个任务。
+        
+        完成后，请回复以下格式：
+        - ✅ 完成：如果满足完成条件
+        - ❌ 未完成：如果不满足，并说明你打算如何改进
+        """)
+        
+        # 2. AI 自己判断是否达标
+        if "✅ 完成" in result:
+            mark_task_completed(task.id)
+            return True
+        
+        # 3. AI 决定如何改进，然后继续循环
+        # （AI 自己决定改什么、怎么改）
     
-    return {
-        **state,
-        'task_result': result,
-        'should_continue': False
-    }
+    return False
 ```
 
 **设计要点**：
-- 直接执行命令，不涉及 AI
-- 通过退出码判断成功/失败
-- 不支持重试
+- AI 完全自主判断完成条件
+- AI 完全自主决定如何改进
+- 持续迭代直到达标
+- 防止无限循环
 
-### 3. LoopTaskGraph (LangGraph)
+### 3. NestedTaskExecutor
 
-**职责**：管理循环任务的执行流程
+**职责**：执行嵌套任务（包含子任务）
 
-**核心节点**：
-
-#### modify_code_node
+**执行流程**：
 ```python
-def modify_code_node(state: TodoState) -> TodoState:
-    """AI 修改代码（循环任务的第一步）"""
-    prompt = f"""
-    任务: {task['description']}
-    完成标准: {task['completion_criteria']}
-    当前重试次数: {retry}/{task['max_retries']}
+def execute_nested_task(task: dict):
+    """执行嵌套任务"""
+    task_id = task['id']
+    mark_task_status(task_id, "in_progress")
     
-    请修改相关代码以完成任务。
-    """
+    # 执行所有子任务
+    for subtask in task['subtasks']:
+        execute_subtask(task_id, subtask)
     
-    ai_response = codebuddy.ask(prompt)
+    # 所有子任务完成后，AI 判断主任务是否完成
+    result = call_codebuddy(f"""
+    主任务：{task['name']}
     
-    return {**state, 'ai_decision': ai_response}
-```
-
-#### run_training_node
-```python
-def run_training_node(state: TodoState) -> TodoState:
-    """运行训练（循环任务第二步）"""
-    result = subprocess.run(
-        ["uv", "run", "train.py"],
-        capture_output=True,
-        text=True
-    )
+    完成条件：{task['completion_criteria']}
     
-    return {**state, 'task_result': result}
-```
-
-#### check_completion_node
-```python
-def check_completion_node(state: TodoState) -> TodoState:
-    """AI 检查是否完成任务（循环任务第三步）"""
-    prompt = f"""
-    任务: {task['description']}
-    完成标准: {task['completion_criteria']}
-    训练结果: {training_result}
+    所有子任务已完成。请检查子任务的执行结果，并告诉我主任务是否满足完成条件。
     
-    根据完成标准判断任务是否完成？
-    """
+    - ✅ 主任务完成：如果满足完成条件
+    - ❌ 主任务未完成：如果不满足，并说明原因
+    """)
     
-    ai_response = codebuddy.ask(prompt)
-    
-    return {
-        **state,
-        'ai_decision': ai_response,
-        'should_continue': not ai_response['completed']
-    }
-```
-
-**条件边**：
-
-```python
-def should_continue_edge(state: TodoState) -> str:
-    """决定是否继续循环"""
-    if not state['should_continue']:
-        return "done"
-    
-    if state['retry_count'] >= task['max_retries']:
-        return "failed"
-    
-    return "modify_code"
-```
-
-**执行图**：
-
-```
-modify_code_node
-    ↓ (普通边)
-run_training_node
-    ↓ (普通边)
-check_completion_node
-    ↓ (条件边 should_continue_edge)
-    ├─ should_continue=True + 未超限 → modify_code_node
-    ├─ should_continue=False → END
-    └─ 超过 max_retries → END (失败)
-```
-
-### 4. CodeBuddyClient
-
-**职责**：封装 CodeBuddy 调用逻辑
-
-**核心方法**：
-```python
-class CodeBuddyClient:
-    def __init__(self, 
-                 codebuddy_path: str = "/root/.local/bin/codebuddy",
-                 model: str = "glm-4.7",
-                 timeout: int = 3600)
-    
-    def ask(self, prompt: str, expect_json: bool = False) -> dict | str
-    def modify_code(self, file_path: str, instruction: str) -> dict
-    def check_completion(self, task_description: str, context: dict) -> bool
+    if "✅ 主任务完成" in result:
+        mark_task_status(task_id, "completed")
+    else:
+        mark_task_status(task_id, "failed")
 ```
 
 **设计要点**：
-- 统一的调用接口
-- 自动处理 JSON 解析
-- 超时控制
-- 错误重试
+- 子任务按顺序执行
+- 所有子任务完成后，AI 判断主任务是否完成
+- 如果未完成，重新从第一个子任务开始
+
+## 任务类型
+
+### 1. 简单任务 (simple)
+
+**定义**：一次性执行命令，由 AI 判断是否完成
+
+**配置示例**：
+```yaml
+- id: 1
+  name: "下载数据集"
+  type: simple
+  completion_criteria: "data.csv 文件存在且大小 > 10MB"
+  initial_hint: "使用 python download.py"
+```
+
+**执行流程**：
+```
+1. AI 尝试完成任务（根据 initial_hint）
+   ↓
+2. AI 自我评估是否满足完成条件
+   ↓
+3. 如果满足：标记完成
+   如果不满足：AI 决定如何改进，重新尝试
+   ↓
+4. 循环直到满足条件或达到最大尝试次数
+```
+
+### 2. 嵌套任务 (nested)
+
+**定义**：包含多个子任务的任务
+
+**配置示例**：
+```yaml
+- id: 2
+  name: "优化模型性能"
+  type: nested
+  completion_criteria: "训练成功完成且 val_loss < 0.5"
+  subtasks:
+    - id: 2.1
+      name: "修改训练代码"
+      type: ai_action
+      completion_criteria: "代码修改完成"
+      
+    - id: 2.2
+      name: "运行训练"
+      type: long_running
+      command: "python train.py --config modified_config.yaml"
+      completion_criteria: "训练正常退出且验证集指标满足要求"
+```
+
+**执行流程**：
+```
+1. 执行子任务 2.1（AI 修改代码）
+   ↓
+2. 执行子任务 2.2（运行训练，可能很长）
+   ↓
+3. 所有子任务完成后，AI 判断主任务是否完成
+   ↓
+4. 如果未完成：重新从子任务 2.1 开始
+   ↓
+5. 循环直到满足条件或达到最大尝试次数
+```
+
+### 3. AI 操作任务 (ai_action)
+
+**定义**：调用 AI 修改代码或执行其他操作
+
+**配置示例**：
+```yaml
+- id: 2.1
+  name: "修改训练代码"
+  type: ai_action
+  completion_criteria: "代码修改完成"
+```
+
+**执行流程**：
+```
+1. 调用 CodeBuddy 执行操作
+   ↓
+2. AI 自我评估是否满足完成条件
+   ↓
+3. 如果满足：标记完成
+   如果不满足：继续改进
+   ↓
+4. 循环直到满足条件或达到最大尝试次数
+```
+
+### 4. 长时间任务 (long_running)
+
+**定义**：使用 nohup 后台运行的任务，避免超时
+
+**配置示例**：
+```yaml
+- id: 2.2
+  name: "运行训练"
+  type: long_running
+  command: "python train.py --config modified_config.yaml"
+  completion_criteria: "训练正常退出且验证集指标满足要求"
+```
+
+**执行流程**：
+```
+1. 构造 nohup 命令
+   ↓
+2. 启动后台训练
+   ↓
+3. 启动监控进程
+   ↓
+4. 监控进程持续检查日志
+   ↓
+5. 检测到完成：调用 AI 检查结果
+   ↓
+6. AI 判断是否满足完成条件
+```
+
+**技术实现**：
+- 使用 `nohup` 在后台运行
+- 启动独立的监控进程
+- 监控进程持续检查日志文件
+- 检测到完成标志后通知 AI
 
 ## 数据流
 
@@ -224,123 +307,206 @@ class CodeBuddyClient:
    ↓
 2. 解析任务配置
    ↓
-3. 执行命令: subprocess.run(command)
+3. 尝试 #1：
+   ├─ 调用 CodeBuddy
+   ├─ AI 尝试完成任务
+   ├─ AI 自我评估
+   └─ 如果完成：标记完成
+      如果未完成：继续
    ↓
-4. 检查退出码
+4. 尝试 #2：
+   ├─ 调用 CodeBuddy
+   ├─ AI 根据上次的反馈改进
+   ├─ AI 自我评估
+   └─ 如果完成：标记完成
+      如果未完成：继续
    ↓
-5. 返回成功/失败
+5. 循环直到完成或达到最大尝试次数
 ```
 
-### 循环任务执行流程
+### 嵌套任务执行流程
 
 ```
 1. 加载 todos.yaml
    ↓
 2. 解析任务配置
    ↓
-3. 启动 LangGraph
+3. 执行主任务
    ↓
-4. modify_code_node
-   ├─ 构造提示词
+4. 执行子任务 2.1（ai_action）
    ├─ 调用 CodeBuddy
-   ├─ 返回 AI 响应
-   └─ 更新状态
+   ├─ AI 修改代码
+   └─ AI 判断是否完成
    ↓
-5. run_training_node
-   ├─ 执行训练命令
-   ├─ 捕获输出
-   └─ 更新状态
+5. 执行子任务 2.2（long_running）
+   ├─ 使用 nohup 启动后台训练
+   ├─ 启动监控进程
+   ├─ 监控进程检查日志
+   └─ 检测到完成：调用 AI 检查结果
    ↓
-6. check_completion_node
-   ├─ 构造提示词（包含训练结果）
-   ├─ 调用 CodeBuddy
-   ├─ 返回 AI 判断
-   └─ 更新状态
+6. 所有子任务完成
    ↓
-7. should_continue_edge (条件边)
-   ├─ 检查 should_continue
-   ├─ 检查 retry_count
-   ├─ 返回 "modify_code" / "done" / "failed"
-   └─ LangGraph 路由
-   ↓ (如果需要继续)
-4. modify_code_node (循环)
-   ...
+7. AI 判断主任务是否完成
+   ├─ 如果完成：标记主任务完成
+   └─ 如果未完成：重新从子任务 2.1 开始
+   ↓
+8. 循环直到主任务完成或达到最大尝试次数
 ```
 
 ## 状态管理
 
-### TodoState 定义
+### 状态文件结构
 
-```python
-class TodoState(TypedDict):
-    current_task: dict           # 当前任务信息
-    task_result: dict            # 任务执行结果
-    ai_decision: dict            # AI 决策结果
-    retry_count: int             # 当前重试次数
-    should_continue: bool        # 是否继续循环
-    completion_status: str       # 完成状态
-```
-
-### 状态传递机制
-
-LangGraph 自动管理状态传递：
-
-```python
-# 节点函数接收完整状态
-def modify_code_node(state: TodoState) -> TodoState:
-    # 1. 读取状态
-    task = state['current_task']
-    retry = state['retry_count']
+```yaml
+# todos_state.yaml
+tasks:
+  - id: 1
+    status: "completed"  # pending | in_progress | completed | failed
+    attempts: 3
+    last_attempt: "2026-03-23 22:30:00"
     
-    # 2. 执行逻辑
-    ai_response = call_codebuddy(...)
-    
-    # 3. 返回更新后的状态
-    return {
-        **state,                    # 保留原有状态
-        'ai_decision': ai_response, # 更新部分字段
-        'retry_count': retry + 1    # 更新部分字段
-    }
-
-# LangGraph 自动将返回的状态传递给下一个节点
+  - id: 2
+    status: "in_progress"
+    current_subtask: 2.2
+    subtasks:
+      - id: 2.1
+        status: "completed"
+        attempts: 3
+        history:
+          - attempt: 1
+            time: "2026-03-23 22:00:00"
+            action: "修改学习率为 0.001"
+            result: "修改完成"
+          - attempt: 2
+            action: "优化网络结构"
+            result: "修改完成"
+          - attempt: 3
+            action: "添加正则化"
+            result: "修改完成，满足条件"
+            
+      - id: 2.2
+        status: "running"  # running | completed | failed
+        started_at: "2026-03-23 22:30:00"
+        log_file: "logs/2.2.log"
+        monitor_pid: 12345
+        command: "python train.py --config modified_config.yaml"
 ```
 
 ### 状态持久化
 
 ```python
-class TodoOrchestrator:
-    def __init__(self):
-        self.state_file = ".orchestrator_state.json"
+class TaskOrchestrator:
+    def __init__(self, todos_file="todos.yaml", state_file="todos_state.yaml"):
+        self.todos_file = todos_file
+        self.state_file = state_file
+        self.todos = self.load_todos()
+        self.state = self.load_state()
     
-    def save_state(self, state: dict):
-        """保存状态到文件"""
-        with open(self.state_file, 'w') as f:
-            json.dump(state, f, indent=2)
-    
-    def load_state(self) -> dict:
-        """从文件加载状态"""
-        if os.path.exists(self.state_file):
+    def load_state(self):
+        try:
             with open(self.state_file) as f:
-                return json.load(f)
-        return {}
+                return yaml.safe_load(f) or {"tasks": {}}
+        except FileNotFoundError:
+            return {"tasks": {}}
     
-    def execute_task(self, task: dict):
-        """执行任务（支持恢复）"""
-        # 尝试加载已保存的状态
-        saved_state = self.load_state()
+    def save_state(self):
+        with open(self.state_file, "w") as f:
+            yaml.dump(self.state, f)
+    
+    def get_task_state(self, task_id):
+        return self.state["tasks"].get(task_id, {"status": "pending"})
+    
+    def mark_task_status(self, task_id, status, **kwargs):
+        if task_id not in self.state["tasks"]:
+            self.state["tasks"][task_id] = {}
         
-        if saved_state and saved_state['task_id'] == task['id']:
-            # 从中断点继续
-            initial_state = saved_state
-        else:
-            # 从头开始
-            initial_state = self._init_state(task)
+        self.state["tasks"][task_id]["status"] = status
+        self.state["tasks"][task_id].update(kwargs)
+        self.save_state()
+```
+
+## 长时间任务处理
+
+### 问题背景
+
+**为什么需要长时间任务处理？**
+
+CodeBuddy 有超时限制（通常 1 小时），但某些任务（如模型训练）可能需要更长时间。
+
+### 解决方案
+
+**使用 nohup 后台运行 + 独立监控进程：**
+
+```python
+def execute_long_running_task(subtask):
+    log_file = f"logs/{subtask_id}.log"
+    command = subtask["command"]
+    
+    # 1. 构造 nohup 命令
+    full_command = f"nohup {command} > {log_file} 2>&1 &"
+    
+    # 2. 启动后台任务
+    subprocess.run(full_command, shell=True)
+    mark_task_status(subtask_id, "running", 
+                    log_file=log_file, 
+                    started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+    
+    # 3. 启动监控
+    start_monitor(subtask_id, log_file, subtask["completion_criteria"])
+    
+    # 4. 等待监控完成
+    wait_for_completion(subtask_id)
+```
+
+### 监控进程
+
+```python
+def start_monitor(subtask_id, log_file, completion_criteria):
+    monitor_script = f"""#!/bin/bash
+LOG_FILE="{log_file}"
+SUBTASK_ID="{subtask_id}"
+COMPLETION_CRITERIA="{completion_criteria}"
+
+while true; do
+    if [ -f "$LOG_FILE" ]; then
+        # 检查是否有错误
+        if grep -q "ERROR\\|Exception\\|Traceback" "$LOG_FILE"; then
+            echo "检测到错误"
+            codebuddy -y -m "子任务 $SUBTASK_ID 检测到错误。请检查 $LOG_FILE 并修复问题。"
+            exit 1
+        fi
         
-        # 执行
-        final_state = self.loop_graph.invoke(initial_state)
-        
-        # 保存最终状态
-        self.save_state(final_state)
+        # 检查是否完成
+        if grep -q "Training completed\\|Done\\|Finished" "$LOG_FILE"; then
+            echo "任务完成"
+            codebuddy -y -m "子任务 $SUBTASK_ID 已完成。完成条件：$COMPLETION_CRITERIA。请检查 $LOG_FILE 中的结果，并告诉我是否满足完成条件。回复格式：- ✅ 子任务完成 或 - ❌ 子任务未完成"
+            exit 0
+        fi
+    fi
+    sleep 30
+done
+"""
+    
+    monitor_file = f"monitors/{subtask_id}.sh"
+    with open(monitor_file, "w") as f:
+        f.write(monitor_script)
+    
+    subprocess.run(f"chmod +x {monitor_file} && nohup {monitor_file} > monitors/{subtask_id}.log 2>&1 &", shell=True)
+```
+
+### 项目结构
+
+```
+langgraph-todo-orchestrator/
+├── orchestrator.py          # 主程序
+├── todos.yaml              # 任务定义
+├── todos_state.yaml        # 任务状态（自动生成）
+├── logs/                   # 长时间任务日志
+│   └── 2.2.log
+├── monitors/               # 监控脚本
+│   ├── 2.2.sh
+│   └── 2.2.log
+└── README.md
 ```
 
 ## 错误处理
@@ -359,7 +525,7 @@ class TodoOrchestrator:
 
 3. **AI 错误**
    - CodeBuddy 调用失败
-   - JSON 解析失败
+   - 响应解析失败
    - AI 返回无效响应
 
 ### 错误处理策略
@@ -372,11 +538,11 @@ def execute_task(self, task: dict) -> bool:
         
         # 2. 执行任务
         if task['type'] == 'simple':
-            result = self._execute_simple_task(task)
-        elif task['type'] == 'loop':
-            result = self._execute_loop_task(task)
+            result = self.execute_simple_task(task)
+        elif task['type'] == 'nested':
+            result = self.execute_nested_task(task)
         
-        return result['success']
+        return result
     
     except ConfigError as e:
         print(f"❌ 配置错误: {e}")
@@ -388,11 +554,6 @@ def execute_task(self, task: dict) -> bool:
     
     except AICallError as e:
         print(f"❌ AI 调用错误: {e}")
-        # 重试一次
-        return self._retry_with_new_prompt(task)
-    
-    except TimeoutError as e:
-        print(f"⏱️ 超时错误: {e}")
         return False
     
     except Exception as e:
@@ -401,49 +562,19 @@ def execute_task(self, task: dict) -> bool:
         return False
 ```
 
-### 重试机制
-
-```python
-def execute_with_retry(self, func, max_retries=3, backoff=2):
-    """带重试的执行"""
-    for attempt in range(max_retries):
-        try:
-            return func()
-        except Exception as e:
-            if attempt == max_retries - 1:
-                raise
-            
-            wait_time = backoff ** attempt
-            print(f"重试 {attempt + 1}/{max_retries}，等待 {wait_time}s...")
-            time.sleep(wait_time)
-```
-
 ## 扩展性设计
 
 ### 1. 新增任务类型
 
-```python
-# 在 todos.yaml 中定义新类型
-tasks:
-  - id: 1
-    type: parallel  # 并行任务
-    commands:
-      - "python script1.py"
-      - "python script2.py"
-
-# 在 todo_orchestrator.py 中实现新类型
-def execute_parallel_task_node(state: TodoState) -> TodoState:
-    """并行执行多个命令"""
-    from concurrent.futures import ThreadPoolExecutor
-    
-    with ThreadPoolExecutor() as executor:
-        futures = [
-            executor.submit(subprocess.run, cmd, shell=True)
-            for cmd in state['current_task']['commands']
-        ]
-        results = [f.result() for f in futures]
-    
-    return {**state, 'task_result': results}
+```yaml
+# 并行任务
+- id: 1
+  name: "并行数据预处理"
+  type: parallel
+  commands:
+    - "python process_part1.py"
+    - "python process_part2.py"
+    - "python process_part3.py"
 ```
 
 ### 2. 新增验证器
@@ -474,173 +605,16 @@ class Notifier:
     def notify(self, task_id: int, status: str, message: str):
         # 支持：邮件、企业微信、Slack 等
         pass
-
-class TodoOrchestrator:
-    def __init__(self, notifier: Notifier = None):
-        self.notifier = notifier
-    
-    def execute_task(self, task: dict):
-        result = self._execute_task(task)
-        
-        if self.notifier:
-            self.notifier.notify(
-                task_id=task['id'],
-                status="success" if result else "failed",
-                message=task['description']
-            )
 ```
-
-### 4. 新增状态后端
-
-```python
-class StateBackend:
-    """状态存储后端"""
-    
-    def save(self, key: str, state: dict):
-        pass
-    
-    def load(self, key: str) -> dict:
-        pass
-
-class FileStateBackend(StateBackend):
-    """文件存储后端"""
-    
-    def __init__(self, base_dir: str = ".orchestrator_state"):
-        self.base_dir = base_dir
-    
-    def save(self, key: str, state: dict):
-        path = os.path.join(self.base_dir, f"{key}.json")
-        with open(path, 'w') as f:
-            json.dump(state, f)
-    
-    def load(self, key: str) -> dict:
-        path = os.path.join(self.base_dir, f"{key}.json")
-        if os.path.exists(path):
-            with open(path) as f:
-                return json.load(f)
-        return {}
-
-class RedisStateBackend(StateBackend):
-    """Redis 存储后端（适用于分布式）"""
-    
-    def __init__(self, redis_client):
-        self.redis = redis_client
-    
-    def save(self, key: str, state: dict):
-        self.redis.set(key, json.dumps(state))
-    
-    def load(self, key: str) -> dict:
-        data = self.redis.get(key)
-        return json.loads(data) if data else {}
-```
-
-## 性能优化
-
-### 1. 并行执行
-
-对于不依赖的任务，可以并行执行：
-
-```python
-def execute_parallel_tasks(tasks: list):
-    """并行执行多个任务"""
-    from concurrent.futures import ThreadPoolExecutor
-    
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = {
-            executor.submit(execute_task, task): task
-            for task in tasks
-        }
-        
-        for future in as_completed(futures):
-            task = futures[future]
-            try:
-                result = future.result()
-                print(f"任务 {task['id']} 完成: {result}")
-            except Exception as e:
-                print(f"任务 {task['id']} 失败: {e}")
-```
-
-### 2. 缓存 AI 响应
-
-```python
-class CachedCodeBuddyClient(CodeBuddyClient):
-    """带缓存的 CodeBuddy 客户端"""
-    
-    def __init__(self, *args, cache_file: str = ".codebuddy_cache.json", **kwargs):
-        super().__init__(*args, **kwargs)
-        self.cache_file = cache_file
-        self.cache = self._load_cache()
-    
-    def ask(self, prompt: str, expect_json: bool = False):
-        # 计算提示词的 hash
-        prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
-        
-        # 检查缓存
-        if prompt_hash in self.cache:
-            print("使用缓存的 AI 响应")
-            return self.cache[prompt_hash]
-        
-        # 调用 CodeBuddy
-        response = super().ask(prompt, expect_json)
-        
-        # 保存到缓存
-        self.cache[prompt_hash] = response
-        self._save_cache()
-        
-        return response
-```
-
-### 3. 批量操作
-
-对于相似的任务，可以批量构造提示词：
-
-```python
-def batch_modify_code(files: list, instruction: str):
-    """批量修改多个文件"""
-    prompt = f"""
-    请修改以下文件以实现: {instruction}
-    
-    文件列表:
-    {chr(10).join(f'- {f}' for f in files)}
-    
-    返回格式: JSON
-    {{
-      "modifications": [
-        {{"file": "file1.py", "content": "...", "reason": "..."}},
-        {{"file": "file2.py", "content": "...", "reason": "..."}}
-      ]
-    }}
-    """
-    
-    response = codebuddy.ask(prompt, expect_json=True)
-    
-    for mod in response['modifications']:
-        with open(mod['file'], 'w') as f:
-            f.write(mod['content'])
-```
-
-## 安全考虑
-
-1. **命令注入防护**
-   - 使用 `subprocess.run` 的 `shell=False` 模式
-   - 验证命令白名单
-
-2. **敏感信息保护**
-   - 不要将 API Key 写入日志
-   - 使用环境变量管理敏感配置
-
-3. **资源限制**
-   - 设置超时时间
-   - 限制并发数量
-   - 监控内存使用
 
 ## 总结
 
 本架构设计实现了：
 
+- ✅ 统一的任务执行模型（不再区分简单任务和循环任务）
+- ✅ AI 完全自主判断完成条件
+- ✅ 支持嵌套任务
+- ✅ 支持长时间任务的 nohup 处理
 - ✅ 清晰的分层结构
-- ✅ 松耦合的组件设计
-- ✅ 可扩展的任务类型
-- ✅ 完善的错误处理
-- ✅ 灵活的状态管理
-- ✅ 良好的性能优化空间
+- ✅ 完善的状态管理
+- ✅ 可扩展的设计

@@ -8,36 +8,62 @@
 
 - 📝 通过简洁的 YAML 配置定义任务
 - 🤖 利用 CodeBuddy 的 AI 能力自动执行复杂任务
-- 🔄 支持循环执行直到任务完成
-- 🎯 区分简单任务（一次性执行）和循环任务（需验证）
+- 🔄 AI 自主判断完成条件，持续尝试直到达标
+- 🎯 支持简单任务和嵌套任务
+- 🚀 支持长时间任务的 nohup 后台运行
 - 📊 完整的状态追踪和执行日志
 
 ## 🎯 核心特性
 
-### 1. 任务类型分离
-- **简单任务（Simple Task）**：执行一次命令就结束
-- **循环任务（Loop Task）**：自动修改代码 → 训练 → 验证 → 循环直到完成
+### 1. 统一的任务执行模型
+**不再区分"循环任务"和"简单任务"，所有任务都遵循统一的执行模式：**
+- 尝试执行 → AI 自主评估 → 未达标则改进 → 重新尝试
+- AI 完全自主判断是否满足完成条件
+- 持续迭代直到达成目标或达到最大尝试次数
 
-### 2. AI 驱动的智能执行
+### 2. 嵌套任务支持
+支持任务包含子任务，每个子任务可以是：
+- **简单任务**：直接执行命令
+- **AI 操作任务**：调用 AI 修改代码
+- **长时间任务**：使用 nohup 后台运行（避免超时）
+
+**示例场景：**
+```
+主任务：优化模型性能
+├── 子任务1：修改训练代码（AI 操作）
+├── 子任务2：运行训练（长时间任务）
+└── 根据子任务2的结果判断主任务是否完成
+```
+
+### 3. AI 驱动的智能执行
 - CodeBuddy 负责代码修改和完成判断
 - LangGraph 负责流程控制和状态管理
-- 完全解耦，易于扩展
+- AI 完全自主决定如何改进、何时停止
 
-### 3. 灵活的配置方式
+### 4. 灵活的配置方式
 ```yaml
 tasks:
   - id: 1
-    description: "准备数据集"
+    name: "下载数据集"
     type: simple
-    command: "python prepare_data.py"
+    completion_criteria: "data.csv 文件存在且大小 > 10MB"
+    initial_hint: "使用 python download.py"
     
   - id: 2
-    description: "优化模型精度到 90% 以上"
-    type: loop
-    max_retries: 5
-    completion_criteria: |
-      模型精度（accuracy）需要 >= 0.9
-      训练无崩溃，无 OOM
+    name: "优化模型性能"
+    type: nested
+    completion_criteria: "训练成功完成且 val_loss < 0.5"
+    subtasks:
+      - id: 2.1
+        name: "修改训练代码"
+        type: ai_action
+        completion_criteria: "代码修改完成"
+        
+      - id: 2.2
+        name: "运行训练"
+        type: long_running
+        command: "python train.py --config modified_config.yaml"
+        completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
 ## 🏗️ 架构设计
@@ -53,22 +79,22 @@ tasks:
          ┌───────┴───────┐
          ▼               ▼
 ┌────────────────┐  ┌────────────────┐
-│  Simple Task   │  │  Loop Task     │
-│  - 直接执行命令│  │  - LangGraph   │
-│  - 一次完成    │  │  - 循环重试    │
+│  Simple Task   │  │  Nested Task   │
+│  - 直接执行命令│  │  - 执行子任务  │
+│  - AI 判断完成│  │  - AI 判断主任务│
 └────────────────┘  └────────┬───────┘
                              │
                     ┌────────┴────────┐
-                    │  LangGraph 图   │
-                    │  - modify_code  │
-                    │  - run_training │
-                    │  - check_...    │
+                    │  子任务执行流程  │
+                    │  - ai_action    │
+                    │  - long_running │
                     └────────┬────────┘
                              │
                     ┌────────▼────────┐
                     │  CodeBuddy      │
                     │  - AI 修改代码  │
                     │  - AI 判断完成  │
+                    │  - Nohup 监控   │
                     └─────────────────┘
 ```
 
@@ -79,8 +105,7 @@ tasks:
 | **[README.md](README.md)** | 项目介绍和快速开始（本文档） |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | 架构设计和核心概念 |
 | **[USAGE.md](USAGE.md)** | 使用指南和最佳实践 |
-| **[API_REFERENCE.md](API_REFERENCE.md)** | API 文档 |
-| **[EXAMPLES.md](EXAMPLES.md)** | 示例和用例 |
+| **[FILES.md](FILES.md)** | 项目文件说明 |
 
 ## 🚀 快速开始
 
@@ -98,9 +123,11 @@ pip install langgraph pyyaml
 # 检查 CodeBuddy 版本
 codebuddy --version
 
-# 如果需要登录
+# 如果需要登录（在交互式终端执行）
 codebuddy -p "login_test"
 ```
+
+**重要**：如果使用 nohup 后台运行，必须先在交互式终端完成登录，确保 `~/.codebuddy/settings.json` 存在。
 
 ### 3. 创建任务配置
 
@@ -108,18 +135,102 @@ codebuddy -p "login_test"
 # todos.yaml
 tasks:
   - id: 1
-    description: "准备数据集"
+    name: "下载数据集"
     type: simple
-    command: "python prepare_data.py"
+    completion_criteria: "data.csv 文件存在且大小 > 10MB"
+    initial_hint: "使用 python download.py"
+    
+  - id: 2
+    name: "优化模型性能"
+    type: nested
+    completion_criteria: "训练成功完成且 val_loss < 0.5"
+    subtasks:
+      - id: 2.1
+        name: "修改训练代码"
+        type: ai_action
+        completion_criteria: "代码修改完成"
+        
+      - id: 2.2
+        name: "运行训练"
+        type: long_running
+        command: "python train.py --config modified_config.yaml"
+        completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
 ### 4. 运行 Orchestrator
 
 ```bash
-python todo_orchestrator.py
+python orchestrator.py
 ```
 
 ## 💡 核心概念
+
+### 统一的任务执行模型
+
+**不再有"循环任务"的概念，所有任务都遵循相同的执行逻辑：**
+
+```
+for task in tasks:
+    while True:
+        # 1. AI 尝试完成任务
+        result = call_codebuddy(task)
+        
+        # 2. AI 自己判断是否达标
+        if result.completed:
+            mark_task_completed(task.id)
+            break
+        
+        # 3. AI 决定如何改进，然后继续循环
+        # （AI 自己决定改什么、怎么改）
+```
+
+**关键点：**
+- ✅ AI 自主判断完成条件
+- ✅ AI 自主决定如何改进
+- ✅ 持续迭代直到达标
+- ✅ 防止无限循环（设置最大尝试次数）
+
+### 嵌套任务
+
+**主任务可以包含多个子任务，子任务按顺序执行：**
+
+```yaml
+- id: 2
+  name: "优化模型性能"
+  type: nested
+  completion_criteria: "训练成功完成且 val_loss < 0.5"
+  subtasks:
+    - id: 2.1
+      name: "修改训练代码"
+      type: ai_action
+      
+    - id: 2.2
+      name: "运行训练"
+      type: long_running
+```
+
+**执行流程：**
+1. 执行子任务 2.1（AI 修改代码）
+2. 执行子任务 2.2（运行训练）
+3. 所有子任务完成后，AI 判断主任务是否完成
+4. 如果未完成，重新从子任务 2.1 开始
+
+### 长时间任务
+
+**使用 nohup 后台运行，避免 CodeBuddy timeout：**
+
+```yaml
+- id: 2.2
+  name: "运行训练"
+  type: long_running
+  command: "python train.py --config modified_config.yaml"
+  completion_criteria: "训练正常退出且验证集指标满足要求"
+```
+
+**技术实现：**
+- 使用 `nohup` 在后台运行
+- 启动监控进程持续检查日志
+- 完成后自动通知 AI 检查结果
 
 ### LangGraph 是什么？
 
@@ -141,15 +252,23 @@ CodeBuddy 是 AI 编程助手，它：
 ### 两者的协作关系
 
 ```
-LangGraph: "现在到了 modify_code 节点，调用 modify_code_node 函数"
+Orchestrator: "执行任务 2"
     ↓
-modify_code_node: "我需要 AI 的帮助，调用 CodeBuddy"
+Orchestrator: "执行子任务 2.1（ai_action）"
+    ↓
+Orchestrator: "调用 CodeBuddy"
     ↓
 CodeBuddy: "让我看看任务描述...返回修改方案"
     ↓
-modify_code_node: "收到 AI 响应，更新状态并返回"
+Orchestrator: "执行子任务 2.2（long_running）"
     ↓
-LangGraph: "收到返回，继续到下一个节点 run_training"
+Orchestrator: "使用 nohup 后台运行，启动监控"
+    ↓
+Monitor: "检测到训练完成，通知 AI"
+    ↓
+CodeBuddy: "检查结果...判断是否满足完成条件"
+    ↓
+Orchestrator: "更新任务状态"
 ```
 
 ## 🎨 使用场景
@@ -158,59 +277,88 @@ LangGraph: "收到返回，继续到下一个节点 run_training"
 
 ```yaml
 - id: 1
-  description: "准备数据集"
+  name: "准备数据集"
   type: simple
-  command: "bash prepare_data.sh"
+  completion_criteria: "data.csv 存在且包含 10000 条数据"
+  initial_hint: "运行 bash prepare_data.sh"
   
 - id: 2
-  description: "优化模型精度"
-  type: loop
-  max_retries: 10
-  completion_criteria: |
-    accuracy >= 0.9
-    loss < 0.1
+  name: "优化模型精度"
+  type: nested
+  completion_criteria: "accuracy >= 0.9 且 loss < 0.1"
+  subtasks:
+    - id: 2.1
+      name: "修改模型配置"
+      type: ai_action
+      completion_criteria: "配置修改完成"
+      
+    - id: 2.2
+      name: "训练模型"
+      type: long_running
+      command: "python train.py --config config.yaml"
+      completion_criteria: "训练成功完成且指标达标"
 ```
 
 ### 场景 2：代码质量改进
 
 ```yaml
 - id: 1
-  description: "运行代码检查"
+  name: "运行代码检查"
   type: simple
-  command: "pylint src/"
+  completion_criteria: "pylint 评分 >= 9.0"
+  initial_hint: "运行 pylint src/"
   
 - id: 2
-  description: "修复所有警告"
-  type: loop
-  max_retries: 5
-  completion_criteria: |
-    pylint 输出无警告
-    代码符合 PEP8 规范
+  name: "修复所有警告"
+  type: nested
+  completion_criteria: "pylint 输出无警告且符合 PEP8 规范"
+  subtasks:
+    - id: 2.1
+      name: "分析警告信息"
+      type: ai_action
+      completion_criteria: "警告分析完成"
+      
+    - id: 2.2
+      name: "修复代码"
+      type: ai_action
+      completion_criteria: "代码修复完成"
 ```
 
 ### 场景 3：性能优化
 
 ```yaml
 - id: 1
-  description: "分析性能瓶颈"
+  name: "分析性能瓶颈"
   type: simple
-  command: "python profile.py"
+  completion_criteria: "生成性能分析报告"
+  initial_hint: "运行 python profile.py"
   
 - id: 2
-  description: "优化代码使运行时间 < 5s"
-  type: loop
-  max_retries: 8
-  completion_criteria: |
-    运行时间 < 5 秒
-    功能不变
+  name: "优化代码性能"
+  type: nested
+  completion_criteria: "运行时间 < 5 秒且功能不变"
+  subtasks:
+    - id: 2.1
+      name: "优化热点代码"
+      type: ai_action
+      completion_criteria: "热点代码优化完成"
+      
+    - id: 2.2
+      name: "运行基准测试"
+      type: simple
+      completion_criteria: "基准测试完成且性能达标"
+      initial_hint: "运行 python benchmark.py"
 ```
 
 ## 🛠️ 开发计划
 
 - [x] 基础架构设计
-- [ ] 实现 TodoOrchestrator 核心类
-- [ ] 实现 LangGraph 循环图
+- [x] 完整文档编写
+- [ ] 实现 TaskOrchestrator 核心类
 - [ ] 实现简单任务执行器
+- [ ] 实现嵌套任务支持
+- [ ] 实现长时间任务的 nohup 处理
+- [ ] 实现监控进程
 - [ ] 实现 CodeBuddy 调用封装
 - [ ] 添加配置验证
 - [ ] 添加错误处理
