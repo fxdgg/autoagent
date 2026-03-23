@@ -1,0 +1,39 @@
+version: 1
+workspace: /data/workspace
+
+# CodeBuddy 配置
+codebuddy:
+  path: /root/.local/bin/codebuddy
+  model: glm-4.7
+  timeout: 3600
+
+# 任务列表
+tasks:
+  # 示例 1: 简单任务
+  - id: 1
+    name: "prepare_data"
+    description: "准备数据集"
+    type: simple
+    command: "echo '准备数据集...'"
+    timeout: 300
+    
+  # 示例 2: 简单任务
+  - id: 2
+    name: "run_tests"
+    description: "运行单元测试"
+    type: simple
+    command: "echo '运行测试...'"
+    timeout: 600
+    
+  # 示例 3: 循环任务
+  - id: 3
+    name: "optimize_model"
+    description: "优化模型精度到 90% 以上"
+    type: loop
+    max_retries: 5
+    timeout: 1800
+    completion_criteria: |
+      模型精度（accuracy）需要 >= 0.9
+      训练无崩溃，无 OOM
+      损失函数 loss < 0.1
+    initial_instruction: "将学习率从 0.001 调整到 0.0001"
