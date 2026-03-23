@@ -29,6 +29,7 @@
 │  - TaskOrchestrator 类                  │
 │  - 任务调度器                           │
 │  - 配置解析器                           │
+│  - Context 管理器                       │  ← 管理 CodeBuddy context 生命周期
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
@@ -43,6 +44,7 @@
 │  - CodeBuddyClient 类                   │
 │  - 提示词构造器                         │
 │  - 响应解析器                           │
+│  - Context 管理（--continue 参数）       │  ← 保持对话上下文连续性
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
@@ -300,6 +302,170 @@ execution_results:
 - 可以提出具体的修复建议
 - 可以主动终止任务（如果认为无法达成）
 - 完全掌控重试策略
+
+## Context 管理
+
+### 设计理念
+
+**重要设计决策**：每个主任务使用独立的 CodeBuddy context，主任务内的所有子任务共享该 context。
+
+### Context 分层策略
+
+#### 1. 主任务级别的 Context 隔离
+
+```python
+class TaskOrchestrator:
+    def execute_main_task(self, task: dict):
+        # 每个主任务创建独立的 CodeBuddyClient
+        context_id = f"task_{task['id']}"
+        client = CodeBuddyClient(context_id=context_id)
+        
+        # 第一次调用，不使用 --continue（创建新的 context）
+        initial_prompt = self._build_initial_prompt(task)
+        client.ask(initial_prompt, continue_session=False)
+        
+        # 后续所有子任务都使用 --continue（保持 context）
+        for subtask in task['subtasks']:
+            result = self._execute_subtask(client, subtask)
+            # ...
+```
+
+**优势**：
+- ✅ 不同主任务之间的实验完全隔离
+- ✅ 避免 context 污染（比如任务1修改了代码，任务2不受影响）
+- ✅ 可以并行执行多个主任务（每个使用独立的 context）
+- ✅ 便于调试和分析（可以追溯特定任务的完整对话历史）
+
+#### 2. 子任务级别的 Context 共享
+
+```python
+def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
+    """执行子任务，共享主任务的 context"""
+    
+    if subtask['type'] == 'ai_action':
+        # AI 操作任务：使用 --continue 保持上下文
+        prompt = self._build_subtask_prompt(subtask)
+        result = client.ask(prompt, continue_session=True)
+        
+    elif subtask['type'] == 'long_running':
+        # 长时间任务：启动后台进程，使用 --continue 继续监控
+        command = self._build_nohup_command(subtask)
+        self._start_background_task(command)
+        
+        # 监控完成后，使用 --continue 让 AI 分析结果
+        monitor_result = self._monitor_task(subtask)
+        analysis = client.ask(
+            f"分析任务结果：\n{monitor_result}",
+            continue_session=True
+        )
+```
+
+**优势**：
+- ✅ AI 可以记住之前的修改和决策
+- ✅ 子任务之间可以引用前一个子任务的结果
+- ✅ 保持对话的连贯性
+- ✅ 减少重复的上下文信息传递
+
+#### 3. Context 生命周期管理
+
+```
+主任务开始
+    ↓
+创建新的 CodeBuddyClient (context_id="task_x")
+    ↓
+第一次调用：continue_session=False
+    ↓
+执行子任务 1：continue_session=True
+    ↓
+执行子任务 2：continue_session=True
+    ↓
+执行子任务 3：continue_session=True
+    ↓
+所有子任务完成
+    ↓
+调用 AI 评估主任务：continue_session=True
+    ↓
+主任务完成/失败
+    ↓
+（可选）清理 context 或保留用于后续分析
+```
+
+### 状态文件中的 Context 信息
+
+在 `todos_state.yaml` 中记录 context 信息：
+
+```yaml
+tasks:
+  - id: 2
+    status: "in_progress"
+    context_id: "task_2"  # ← 新增：记录 context_id
+    context_created_at: "2026-03-23 22:00:00"  # ← 新增
+    max_attempts: 20
+    subtasks:
+      - id: 2.1
+        status: "completed"
+        # ...
+```
+
+### CodeBuddy 命令构造
+
+#### 第一次调用（创建新 context）
+
+```bash
+codebuddy -m "glm-4.7" -y "请阅读 program.md 并开始执行任务 2"
+```
+
+#### 后续调用（继续现有 context）
+
+```bash
+codebuddy --continue -m "glm-4.7" -y "检查子任务 2.1 的执行结果"
+```
+
+#### 长时间任务的特殊处理
+
+```bash
+# 启动后台训练（不使用 --continue，因为是独立的子进程）
+nohup python train.py --config config.yaml > logs/2.2.log 2>&1 &
+
+# 训练完成后，使用 --continue 继续 context 分析结果
+codebuddy --continue -m "glm-4.7" -y "分析训练日志并判断是否满足完成条件"
+```
+
+### 错误处理与 Context 恢复
+
+如果系统在执行过程中崩溃，可以通过 `context_id` 恢复：
+
+```python
+# 从状态文件中恢复
+state = load_state("todos_state.yaml")
+for task in state['tasks']:
+    if task['status'] == 'in_progress':
+        # 恢复之前的 context
+        client = CodeBuddyClient(context_id=task['context_id'])
+        
+        # 继续执行
+        resume_task(client, task)
+```
+
+### 实现要点
+
+1. **Context ID 生成规则**：
+   - 使用任务 ID 作为 context ID：`task_{task_id}`
+   - 确保唯一性：不同主任务的 context ID 不会冲突
+
+2. **--continue 参数的使用**：
+   - 第一次调用：`continue_session=False`
+   - 后续调用：`continue_session=True`
+   - 跨系统重启后：如果 context 仍然存在，使用 `continue_session=True`
+
+3. **Context 清理策略**：
+   - 主任务成功：保留 context 24小时（用于审计和分析）
+   - 主任务失败：立即清理（避免资源浪费）
+   - 超过最大尝试次数：清理 context 并记录日志
+
+4. **并发控制**：
+   - 每个主任务使用独立的 context，可以并发执行
+   - 同一个主任务的子任务必须串行执行（共享 context）
 
 ## 任务类型
 

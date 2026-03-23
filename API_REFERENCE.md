@@ -254,7 +254,8 @@ class CodeBuddyClient:
         model: str = "glm-4.7",
         workspace: str = "/data/workspace",
         timeout: int = 3600,
-        cache_enabled: bool = False
+        cache_enabled: bool = False,
+        context_id: str = None
     )
 ```
 
@@ -267,6 +268,41 @@ class CodeBuddyClient:
 | `workspace` | str | "/data/workspace" | 工作目录 |
 | `timeout` | int | 3600 | 超时时间（秒） |
 | `cache_enabled` | bool | False | 是否启用缓存 |
+| `context_id` | str | None | Context 标识符（用于区分不同的对话上下文） |
+
+### Context 管理策略
+
+**重要设计决策**：
+
+1. **主任务级别的 Context**：
+   - 每个主任务创建一个独立的 CodeBuddyClient 实例
+   - 每个主任务对应一个独立的 codebuddy context
+   - 不同主任务之间的实验完全隔离
+
+2. **子任务级别的 Context 共享**：
+   - 同一个主任务的子任务共享同一个 context
+   - 子任务执行时使用 `--continue` 参数保持上下文连续性
+   - AI 可以记住之前的修改、决策和上下文
+
+3. **Context 生命周期**：
+   - 主任务开始时创建新的 context
+   - 主任务结束时 context 可以保留或清理
+   - 如果支持断点续传，context 可以跨系统重启保留
+
+**示例**：
+
+```python
+# 主任务 1：优化模型 A
+client1 = CodeBuddyClient(context_id="task_1")
+client1.ask("修改模型 A 的代码", continue_session=False)  # 第一次调用，不使用 --continue
+client1.ask("检查修改是否正确", continue_session=True)    # 继续在同一 context
+client1.ask("评估模型性能", continue_session=True)        # 继续在同一 context
+
+# 主任务 2：优化模型 B（完全独立的 context）
+client2 = CodeBuddyClient(context_id="task_2")
+client2.ask("修改模型 B 的代码", continue_session=False)  # 新的 context
+client2.ask("检查修改是否正确", continue_session=True)    # 继续 task_2 的 context
+```
 
 ### 方法
 
@@ -279,7 +315,8 @@ def ask(
     self,
     prompt: str,
     expect_json: bool = False,
-    timeout: int = None
+    timeout: int = None,
+    continue_session: bool = False
 ) -> Union[str, dict]
 ```
 
@@ -288,6 +325,39 @@ def ask(
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `prompt` | str | - | 提示词 |
+| `expect_json` | bool | False | 是否期望返回 JSON 格式 |
+| `timeout` | int | None | 超时时间（秒，None 表示使用实例默认值） |
+| `continue_session` | bool | False | 是否继续上一个会话（使用 --continue 参数） |
+
+**返回值**：
+
+- 如果 `expect_json=True`：返回解析后的字典
+- 如果 `expect_json=False`：返回字符串
+
+**示例**：
+
+```python
+# 第一次调用，创建新的 context
+result = client.ask(
+    "请阅读 program.md 并开始执行任务 1",
+    continue_session=False  # 不使用 --continue
+)
+
+# 后续调用，继续同一个 context
+result = client.ask(
+    "检查上一个任务的执行结果",
+    continue_session=True  # 使用 --continue
+)
+
+# 期望返回 JSON
+decision = client.ask(
+    "分析失败原因并决定重试策略",
+    expect_json=True,
+    continue_session=True
+)
+print(decision['retry_from'])  # "task_2.1"
+print(decision['suggested_fix'])  # "减少网络层数"
+```
 | `expect_json` | bool | False | 是否期望返回 JSON |
 | `timeout` | int | None | 超时时间（覆盖默认值） |
 
