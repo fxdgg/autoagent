@@ -1,6 +1,6 @@
 # 使用指南
 
-本文档提供 LangGraph + CodeBuddy Todo Orchestrator 的详细使用说明。
+本文档提供 CodeBuddy Todo Orchestrator 的详细使用说明。
 
 ## 目录
 
@@ -23,7 +23,7 @@
 ### 2. 安装依赖
 
 ```bash
-pip install langgraph pyyaml
+pip install pyyaml
 ```
 
 ### 3. 配置 CodeBuddy
@@ -240,7 +240,7 @@ tasks:
 1. 按顺序执行所有子任务
 2. 如果某个子任务失败，**调用AI分析失败原因**，AI决定从哪个子任务开始重试
 3. 所有子任务完成后，**调用AI评估主任务是否完成**
-4. 如果未完成，AI提出下一轮的优化策略，重置所有子任务，开始新一轮尝试
+4. 如果未完成，AI提出下一轮的优化策略，通过`retry_from`指定重试起点，开始新一轮尝试
 5. 循环直到满足条件或达到最大尝试次数
 
 **AI决策机制**：

@@ -1,6 +1,6 @@
 # 文档索引
 
-欢迎使用 LangGraph + CodeBuddy Todo Orchestrator！
+欢迎使用 CodeBuddy Todo Orchestrator！
 
 本文档索引帮助你快速找到需要的文档。
 
@@ -39,6 +39,11 @@
 5. **[FILES.md](FILES.md)** 📁
    - 项目文件说明
    - 目录结构
+
+6. **[API_REFERENCE.md](API_REFERENCE.md)** 🔧
+   - 完整 API 参考
+   - 类定义和方法说明
+   - 状态类型和配置类型
 
 ## 🎯 按需求查找
 
@@ -88,7 +93,7 @@
 ### 1. 安装依赖
 
 ```bash
-pip install langgraph pyyaml
+pip install pyyaml
 ```
 
 ### 2. 配置 CodeBuddy
@@ -248,7 +253,7 @@ for task in tasks:
 **执行流程：**
 1. 执行所有子任务
 2. 所有子任务完成后，AI 判断主任务是否完成
-3. 如果未完成，重新从第一个子任务开始
+3. 如果未完成，AI 决定从哪个子任务重新开始
 
 ### 长时间任务处理
 
@@ -259,12 +264,12 @@ for task in tasks:
 - 启动监控进程持续检查日志
 - 完成后自动通知 AI 检查结果
 
-### LangGraph
+### Orchestrator
 
-流程编排框架，负责：
-- ✅ 管理状态传递
-- ✅ 执行节点函数
-- ✅ 根据条件边路由流程
+任务编排引擎，负责：
+- ✅ 管理任务队列和状态
+- ✅ 执行任务调度
+- ✅ 根据 AI 决策控制流程
 
 ### CodeBuddy
 
@@ -364,7 +369,6 @@ Orchestrator: "更新任务状态"
 
 ## 🔗 相关资源
 
-- [LangGraph 官方文档](https://langchain-ai.github.io/langgraph/)
 - [CodeBuddy 文档](https://iwiki.woa.com/space/CodeBuddy)
 - [Karpathy AutoResearch](https://github.com/karpathy/autoresearch)
 

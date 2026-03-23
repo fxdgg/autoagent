@@ -1,6 +1,6 @@
-# LangGraph + CodeBuddy Todo Orchestrator
+# CodeBuddy Todo Orchestrator
 
-基于 LangGraph 框架和 CodeBuddy AI 编程助手的智能任务编排系统。
+基于 CodeBuddy AI 编程助手的智能任务编排系统。
 
 ## 📋 项目简介
 
@@ -78,10 +78,10 @@
 - ✅ **符合用户理念**：AI自主判断完成条件，系统只提供框架和支持
 
 ### 4. CodeBuddy 负责代码修改和完成判断
-- LangGraph 负责流程控制和状态管理
+- Orchestrator 负责流程控制和状态管理
 - AI 完全自主决定如何改进、何时停止
 
-### 4. 灵活的配置方式
+### 5. 灵活的配置方式
 ```yaml
 tasks:
   - id: 1
@@ -146,6 +146,7 @@ tasks:
 | **[README.md](README.md)** | 项目介绍和快速开始（本文档） |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | 架构设计和核心概念 |
 | **[USAGE.md](USAGE.md)** | 使用指南和最佳实践 |
+| **[API_REFERENCE.md](API_REFERENCE.md)** | API 参考文档 |
 | **[FILES.md](FILES.md)** | 项目文件说明 |
 
 ## 🚀 快速开始
@@ -153,7 +154,7 @@ tasks:
 ### 1. 安装依赖
 
 ```bash
-pip install langgraph pyyaml
+pip install pyyaml
 ```
 
 ### 2. 配置 CodeBuddy
@@ -254,7 +255,7 @@ for task in tasks:
 1. 执行子任务 2.1（AI 修改代码）
 2. 执行子任务 2.2（运行训练）
 3. 所有子任务完成后，AI 判断主任务是否完成
-4. 如果未完成，重新从子任务 2.1 开始
+4. 如果未完成，AI 决定从哪个子任务重新开始
 
 ### 长时间任务
 
@@ -273,12 +274,13 @@ for task in tasks:
 - 启动监控进程持续检查日志
 - 完成后自动通知 AI 检查结果
 
-### LangGraph 是什么？
+### Orchestrator 是什么？
 
-LangGraph 是一个流程编排框架，它：
-- ✅ 管理状态传递
-- ✅ 执行节点函数
-- ✅ 根据条件边路由流程
+Orchestrator 是任务编排引擎，它：
+- ✅ 管理任务队列和状态
+- ✅ 执行任务调度
+- ✅ 根据 AI 决策控制流程
+- ✅ 持久化状态支持断点续传
 - ❌ 不提供 AI 能力
 - ❌ 不调用 LLM API
 
@@ -417,6 +419,5 @@ MIT License
 
 ## 🔗 相关链接
 
-- [LangGraph 官方文档](https://langchain-ai.github.io/langgraph/)
 - [CodeBuddy 文档](https://iwiki.woa.com/space/CodeBuddy)
 - [Karpathy AutoResearch](https://github.com/karpathy/autoresearch)

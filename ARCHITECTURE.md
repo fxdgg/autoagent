@@ -1,6 +1,6 @@
 # 架构设计文档
 
-本文档详细描述 LangGraph + CodeBuddy Todo Orchestrator 的架构设计。
+本文档详细描述 CodeBuddy Todo Orchestrator 的架构设计。
 
 ## 目录
 
@@ -104,7 +104,7 @@ class TaskOrchestrator:
 def execute_simple_task_node(task: dict) -> bool:
     """执行简单任务"""
     attempts = 0
-    max_attempts = 100  # 防止无限循环
+    max_attempts = 20  # 防止无限循环，可在配置中覆盖
     
     while attempts < max_attempts:
         attempts += 1
@@ -196,9 +196,10 @@ def execute_nested_task(task: dict):
             mark_task_completed(task_id)
             return True
         else:
-            # 主任务未完成，准备下一轮
+            # 主任务未完成，AI决定从哪里开始重试
             increase_task_attempts(task_id)
-            reset_all_subtasks(task_id)
+            retry_from = ai_evaluation.retry_from  # AI决定重试起点
+            reset_subtasks_from(task_id, retry_from)
             record_ai_evaluation(task_id, ai_evaluation)
     
     return False
@@ -208,7 +209,7 @@ def execute_nested_task(task: dict):
 - 子任务失败时，**必须调用AI分析**并让AI决定重试起点
 - AI可以通过`retry_from`字段指定从哪个子任务开始重试
 - 所有子任务完成后，**必须调用AI评估**主任务是否完成
-- 如果主任务未完成，重置所有子任务为pending，开始新一轮尝试
+- 如果主任务未完成，AI通过`retry_from`指定从哪个子任务开始新一轮尝试
 
 #### AI决策点1：子任务失败分析
 
@@ -525,7 +526,7 @@ for task in state['tasks']:
    ↓
 3. 所有子任务完成后，AI 判断主任务是否完成
    ↓
-4. 如果未完成：重新从子任务 2.1 开始
+4. 如果未完成：AI 决定从哪个子任务重新开始
    ↓
 5. 循环直到满足条件或达到最大尝试次数
 ```
@@ -663,10 +664,10 @@ for task in state['tasks']:
         完成？ → 主任务成功
               ↓ 否
           增加主任务attempt计数
-          重置所有子任务为pending
+          根据AI的retry_from重置相应子任务
           记录AI评估
               ↓
-          从第一个子任务重新开始
+          从AI指定的子任务重新开始
 ```
 
 **关键流程说明**：
@@ -774,7 +775,8 @@ pending → in_progress → completed/failed
    - 比如AI返回`retry_from: "task_2.1"`，则2.1和2.2都重置为pending
 
 2. **主任务新一轮尝试**：
-   - 所有子任务重置为pending
+   - AI通过`retry_from`指定重试起点
+   - 从`retry_from`开始的子任务重置为pending
    - `current_round`加1
    - 主任务`attempts`加1
 
@@ -856,26 +858,29 @@ def execute_long_running_task(subtask):
 
 ### 监控进程
 
+**设计原则**：监控进程只负责检测任务完成/失败，并写入状态文件。**不直接调用 CodeBuddy**——这样可以保持 Context 的一致性，由 Orchestrator 用正确的 `--continue` context 调用 AI 分析结果。
+
 ```python
 def start_monitor(subtask_id, log_file, completion_criteria):
     monitor_script = f"""#!/bin/bash
 LOG_FILE="{log_file}"
 SUBTASK_ID="{subtask_id}"
-COMPLETION_CRITERIA="{completion_criteria}"
+STATUS_FILE="monitors/${{SUBTASK_ID}}.status"
 
 while true; do
     if [ -f "$LOG_FILE" ]; then
         # 检查是否有错误
-        if grep -q "ERROR\\|Exception\\|Traceback" "$LOG_FILE"; then
-            echo "检测到错误"
-            codebuddy -y -m "子任务 $SUBTASK_ID 检测到错误。请检查 $LOG_FILE 并修复问题。"
+        if grep -q "ERROR\\|Exception\\|Traceback\\|CUDA out of memory" "$LOG_FILE"; then
+            echo "error" > "$STATUS_FILE"
+            echo "检测到错误，已写入状态文件"
             exit 1
         fi
         
-        # 检查是否完成
-        if grep -q "Training completed\\|Done\\|Finished" "$LOG_FILE"; then
-            echo "任务完成"
-            codebuddy -y -m "子任务 $SUBTASK_ID 已完成。完成条件：$COMPLETION_CRITERIA。请检查 $LOG_FILE 中的结果，并告诉我是否满足完成条件。回复格式：- ✅ 子任务完成 或 - ❌ 子任务未完成"
+        # 检查进程是否仍在运行
+        if ! ps -p $(cat monitors/${{SUBTASK_ID}}.pid 2>/dev/null) > /dev/null 2>&1; then
+            # 进程已结束，检查退出码
+            echo "finished" > "$STATUS_FILE"
+            echo "进程已结束，已写入状态文件"
             exit 0
         fi
     fi
@@ -888,6 +893,32 @@ done
         f.write(monitor_script)
     
     subprocess.run(f"chmod +x {monitor_file} && nohup {monitor_file} > monitors/{subtask_id}.log 2>&1 &", shell=True)
+```
+
+**Orchestrator 端的处理**：
+
+```python
+def wait_and_analyze_long_running(self, subtask, client):
+    """等待长时间任务完成，然后用正确的 context 调用 AI 分析"""
+    status_file = f"monitors/{subtask['id']}.status"
+    log_file = f"logs/{subtask['id']}.log"
+    
+    # 轮询等待监控进程写入状态
+    while not os.path.exists(status_file):
+        time.sleep(30)
+    
+    status = open(status_file).read().strip()
+    log_content = open(log_file).read()[-2000:]  # 取最后 2000 字符
+    
+    # 用 --continue 保持 context，调用 AI 分析结果
+    result = client.ask(
+        f"长时间任务已完成，状态：{status}\n"
+        f"日志（最后部分）：\n{log_content}\n"
+        f"完成条件：{subtask['completion_criteria']}\n"
+        f"请判断是否满足完成条件。",
+        continue_session=True
+    )
+    return result
 ```
 
 ### 项目结构
@@ -946,7 +977,7 @@ graph TD
     U --> V{主任务完成?}
     V -->|是| W[标记任务成功]
     V -->|否| X[增加尝试次数]
-    X --> Y[重置所有子任务为pending]
+    X --> Y[根据AI的retry_from重置子任务]
     Y --> D
     
     W --> AA[任务完成]
@@ -1024,7 +1055,7 @@ AI返回评估：
     ↓
 系统根据main_task_completed决定：
   - true: 标记任务成功
-  - false: 增加尝试次数，重置所有子任务，开始新一轮
+  - false: 增加尝试次数，根据AI的retry_from重置子任务，开始新一轮
     ↓
 系统记录AI评估到状态文件
     ↓
@@ -1073,156 +1104,6 @@ stateDiagram-v2
    - CodeBuddy 调用失败
    - 响应解析失败
    - AI 返回无效响应
-
-### 系统与AI的协作流程图
-
-### 完整的嵌套任务执行流程（包含所有AI决策点）
-
-```mermaid
-graph TD
-    A[开始嵌套任务] --> B[加载任务状态]
-    B --> C{达到最大尝试次数?}
-    C -->|是| Z[任务失败，终止]
-    C -->|否| D[获取待执行子任务列表]
-    
-    D --> E[遍历子任务]
-    E --> F{子任务状态?}
-    F -->|completed| G[跳过]
-    F -->|pending| H[执行子任务]
-    F -->|failed| I[从失败子任务开始]
-    
-    G --> J{还有子任务?}
-    J -->|是| E
-    J -->|否| K[所有子任务完成]
-    
-    H --> L{执行成功?}
-    I --> L
-    
-    L -->|是| M[标记completed]
-    M --> J
-    
-    L -->|否| N[记录错误信息]
-    N --> O[调用AI分析失败]
-    
-    O --> P[AI返回决策]
-    P --> Q{AI要求从哪里重试?}
-    Q --> R[重置子任务状态]
-    R --> S[记录AI决策]
-    S --> D
-    
-    K --> T[调用AI评估主任务]
-    T --> U[AI返回评估结果]
-    U --> V{主任务完成?}
-    V -->|是| W[标记任务成功]
-    V -->|否| X[增加尝试次数]
-    X --> Y[重置所有子任务为pending]
-    Y --> D
-    
-    W --> AA[任务完成]
-    Z --> AA
-```
-
-### AI决策详细流程
-
-#### 决策点1：子任务失败分析
-
-```
-系统检测到子任务失败
-    ↓
-系统构造上下文：
-  - 失败的子任务信息（命令、退出码、错误日志）
-  - 任务历史记录（之前尝试的信息）
-  - 相关文件路径
-  - 完成条件
-    ↓
-系统调用CodeBuddy
-    ↓
-AI分析：
-  1. 读取错误日志
-  2. 分析失败原因
-  3. 检查历史尝试
-  4. 评估是否是前面子任务的问题
-    ↓
-AI返回决策：
-  {
-    "analysis": "...",          // 失败原因分析
-    "retry_from": "task_2.1",   // 从哪个子任务重试
-    "reasoning": "...",         // 推理过程
-    "suggested_fix": "...",     // 修复建议
-    "confidence": "high"        // 置信度
-  }
-    ↓
-系统解析AI决策
-    ↓
-系统根据retry_from重置子任务状态
-    ↓
-系统记录AI决策到状态文件
-    ↓
-系统重新开始子任务循环
-```
-
-#### 决策点2：主任务完成评估
-
-```
-所有子任务都完成
-    ↓
-系统构造上下文：
-  - 主任务信息（名称、完成条件）
-  - 所有子任务的执行结果
-  - 训练日志、指标数据
-  - 历史评估记录
-    ↓
-系统调用CodeBuddy
-    ↓
-AI评估：
-  1. 检查每个子任务的结果
-  2. 评估是否满足完成条件
-  3. 分析结果与目标的差距
-  4. 提出下一轮的优化方向
-    ↓
-AI返回评估：
-  {
-    "main_task_completed": false,
-    "analysis": "...",                    // 结果分析
-    "next_strategy": "继续优化",         // 下一轮策略
-    "suggested_improvements": [...],     // 改进建议
-    "confidence": "medium"
-  }
-    ↓
-系统解析AI评估
-    ↓
-系统根据main_task_completed决定：
-  - true: 标记任务成功
-  - false: 增加尝试次数，重置所有子任务，开始新一轮
-    ↓
-系统记录AI评估到状态文件
-    ↓
-系统继续执行
-```
-
-### 状态管理流程
-
-```mermaid
-stateDiagram-v2
-    [*] --> pending: 任务创建
-    pending --> in_progress: 开始执行
-    in_progress --> completed: 主任务完成
-    in_progress --> failed: 达到最大尝试次数
-    
-    in_progress --> in_progress: 子任务失败，AI决策重试
-    
-    state in_progress {
-        [*] --> subtask_pending
-        subtask_pending --> subtask_in_progress: 开始执行
-        subtask_in_progress --> subtask_completed: 成功
-        subtask_in_progress --> subtask_failed: 失败
-        subtask_failed --> subtask_pending: AI决策重试
-        subtask_completed --> [*]
-    }
-    
-    completed --> [*]
-    failed --> [*]
-```
 
 ## 错误处理策略
 

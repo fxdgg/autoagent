@@ -1,6 +1,6 @@
 # 项目文件说明
 
-本文档详细说明 LangGraph + CodeBuddy Todo Orchestrator 的项目结构和各个文件的作用。
+本文档详细说明 CodeBuddy Todo Orchestrator 的项目结构和各个文件的作用。
 
 ## 📁 目录结构
 
@@ -82,7 +82,6 @@ langgraph-todo-orchestrator/
 - **作用**：Python 依赖列表
 - **内容**：
   ```txt
-  langgraph>=0.0.20
   pyyaml>=6.0
   ```
 - **用途**：通过 `pip install -r requirements.txt` 安装依赖
