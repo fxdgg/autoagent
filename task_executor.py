@@ -46,7 +46,7 @@ class SimpleTaskExecutor:
     until the criteria are met or max attempts are reached.
     """
 
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, is_subtask: bool = False) -> bool:
+    def execute(self, task: dict, client: CodeBuddyClient, state_manager, is_subtask: bool = False, conv_logger=None, parent_task_id: str = None) -> bool:
         """
         Execute a simple task.
         
@@ -55,6 +55,8 @@ class SimpleTaskExecutor:
             client: CodeBuddyClient instance
             state_manager: State manager for persistence
             is_subtask: Whether this is a subtask within a nested task
+            conv_logger: Optional ConversationLogger instance
+            parent_task_id: Parent task ID if this is a subtask (for log organization)
             
         Returns:
             bool: True if task completed successfully
@@ -87,6 +89,17 @@ class SimpleTaskExecutor:
                 
                 result = client.ask(prompt, continue_session=continue_session)
                 
+                # Log conversation (use full log with tool calls if available)
+                if conv_logger:
+                    conv_logger.log_conversation(
+                        task_id=task_id,
+                        task_name=task['name'],
+                        prompt=prompt,
+                        response=client.last_full_log or result,
+                        attempt=attempts,
+                        parent_task_id=parent_task_id,
+                    )
+                
                 # Check if AI reports completion
                 if self._check_completion(result):
                     print(f"   ✅ Task {task_id} completed!")
@@ -116,6 +129,17 @@ class SimpleTaskExecutor:
             except AICallError as e:
                 logger.error(f"AI call failed for task {task_id}: {e}")
                 print(f"   ❌ AI call error: {e}")
+                # Log error conversation
+                if conv_logger:
+                    conv_logger.log_conversation(
+                        task_id=task_id,
+                        task_name=task['name'],
+                        prompt=prompt,
+                        response=f"❌ AI Call Error: {e}",
+                        attempt=attempts,
+                        parent_task_id=parent_task_id,
+                        metadata={"type": "error"},
+                    )
                 state_manager.add_task_history(task_id, {
                     "attempt": attempts,
                     "time": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -158,8 +182,8 @@ class SimpleTaskExecutor:
         parts.append(
             "\nPlease try to complete this task. "
             "When done, indicate the result:\n"
-            "- ✅ COMPLETED: if the completion criteria are met\n"
-            "- ❌ NOT_COMPLETED: if not met, explain what you plan to improve"
+            "- ✅ completed: if the completion criteria are met\n"
+            "- ❌ not completed: if not met, explain what you plan to improve"
         )
         
         return "\n\n".join(parts)
@@ -181,22 +205,23 @@ class SimpleTaskExecutor:
             "✅ completed",
             "✅ complete",
             "✅ 完成",
-            "completed",
-            "task completed",
-            "criteria met",
-            "criteria are met",
-            "successfully completed",
+            "✅completed",
+            "✅complete",
+            "✅完成",
         ]
         
         # Negative indicators
         failure_markers = [
             "❌ not_completed",
             "❌ not completed",
+            "❌ not_complete",
+            "❌ not complete",
             "❌ 未完成",
-            "not yet completed",
-            "not_completed",
-            "criteria not met",
-            "criteria are not met",
+            "❌not_completed",
+            "❌not completed",
+            "❌not_complete",
+            "❌not complete",
+            "❌未完成",
         ]
         
         # Check negative first (more specific)
@@ -225,7 +250,7 @@ class NestedTaskExecutor:
     def __init__(self):
         self.subtask_executor = SubtaskExecutor()
 
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager) -> bool:
+    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None) -> bool:
         """
         Execute a nested task.
         
@@ -233,6 +258,7 @@ class NestedTaskExecutor:
             task: Task configuration with subtasks
             client: CodeBuddyClient instance  
             state_manager: State manager for persistence
+            conv_logger: Optional ConversationLogger instance
             
         Returns:
             bool: True if main task completed
@@ -243,6 +269,11 @@ class NestedTaskExecutor:
         
         if not subtasks:
             raise ConfigError(f"Nested task {task_id} has no subtasks")
+        
+        # Register nested task with conversation logger
+        if conv_logger:
+            subtask_ids = [str(st['id']) for st in subtasks]
+            conv_logger.register_nested_task(task_id, task['name'], subtask_ids)
         
         logger.info(f"Executing nested task {task_id}: {task['name']}")
         
@@ -274,7 +305,10 @@ class NestedTaskExecutor:
                 print(f"\n   📌 Executing subtask {subtask_id}: {subtask['name']}")
                 print(f"      Type: {subtask['type']}")
                 
-                result = self.subtask_executor.execute(subtask, client, state_manager)
+                result = self.subtask_executor.execute(
+                    subtask, client, state_manager,
+                    conv_logger=conv_logger, parent_task_id=task_id,
+                )
                 
                 if not result.success:
                     all_completed = False
@@ -282,7 +316,8 @@ class NestedTaskExecutor:
                     
                     # AI Decision Point 1: Analyze failure
                     ai_decision = self._ai_analyze_failure(
-                        client, task, subtask, subtasks, result, state_manager
+                        client, task, subtask, subtasks, result, state_manager,
+                        conv_logger=conv_logger, round_num=attempts,
                     )
                     
                     # Reset subtasks based on AI decision
@@ -309,7 +344,8 @@ class NestedTaskExecutor:
             # All subtasks completed - AI Decision Point 2: Evaluate main task
             print(f"\n   📊 All subtasks completed, evaluating main task...")
             ai_evaluation = self._ai_evaluate_main_task(
-                client, task, subtasks, state_manager
+                client, task, subtasks, state_manager,
+                conv_logger=conv_logger, round_num=attempts,
             )
             
             if ai_evaluation.get('main_task_completed', False):
@@ -358,7 +394,8 @@ class NestedTaskExecutor:
         return False
 
     def _ai_analyze_failure(
-        self, client, task, failed_subtask, all_subtasks, result, state_manager
+        self, client, task, failed_subtask, all_subtasks, result, state_manager,
+        conv_logger=None, round_num=1,
     ) -> dict:
         """
         AI Decision Point 1: Analyze subtask failure.
@@ -421,6 +458,18 @@ Available subtask IDs: {[str(s['id']) for s in all_subtasks]}
             print(f"      AI Analysis: {decision.get('analysis', 'N/A')[:200]}")
             print(f"      AI Decision: retry_from = {decision.get('retry_from', failed_id)}")
             print(f"      Suggested Fix: {decision.get('suggested_fix', 'N/A')[:200]}")
+            # Log AI decision (use full log with tool calls if available)
+            if conv_logger:
+                import json
+                response_for_log = client.last_full_log or json.dumps(decision, indent=2, ensure_ascii=False)
+                conv_logger.log_nested_task_ai_call(
+                    task_id=str(task['id']),
+                    task_name=task['name'],
+                    call_type="failure_analysis",
+                    prompt=prompt,
+                    response=response_for_log,
+                    round_num=round_num,
+                )
             return decision
         except AICallError as e:
             logger.warning(f"Failed to get AI decision, using default: {e}")
@@ -434,7 +483,8 @@ Available subtask IDs: {[str(s['id']) for s in all_subtasks]}
             }
 
     def _ai_evaluate_main_task(
-        self, client, task, subtasks, state_manager
+        self, client, task, subtasks, state_manager,
+        conv_logger=None, round_num=1,
     ) -> dict:
         """
         AI Decision Point 2: Evaluate main task completion.
@@ -515,6 +565,18 @@ Important:
             completed = evaluation.get('main_task_completed', False)
             print(f"      AI Evaluation: {'✅ COMPLETED' if completed else '❌ NOT COMPLETED'}")
             print(f"      Analysis: {evaluation.get('analysis', 'N/A')[:200]}")
+            # Log AI evaluation (use full log with tool calls if available)
+            if conv_logger:
+                import json
+                response_for_log = client.last_full_log or json.dumps(evaluation, indent=2, ensure_ascii=False)
+                conv_logger.log_nested_task_ai_call(
+                    task_id=str(task['id']),
+                    task_name=task['name'],
+                    call_type="main_task_evaluation",
+                    prompt=prompt,
+                    response=response_for_log,
+                    round_num=round_num,
+                )
             return evaluation
         except AICallError as e:
             logger.warning(f"Failed to get AI evaluation, defaulting to not completed: {e}")
@@ -578,7 +640,7 @@ class SubtaskExecutor:
     def __init__(self):
         self.simple_executor = SimpleTaskExecutor()
 
-    def execute(self, subtask: dict, client: CodeBuddyClient, state_manager) -> SubtaskResult:
+    def execute(self, subtask: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None) -> SubtaskResult:
         """
         Execute a single subtask.
         
@@ -586,6 +648,8 @@ class SubtaskExecutor:
             subtask: Subtask configuration
             client: CodeBuddyClient instance
             state_manager: State manager
+            conv_logger: Optional ConversationLogger instance
+            parent_task_id: Parent task ID for log organization
             
         Returns:
             SubtaskResult: Result of execution
@@ -593,18 +657,26 @@ class SubtaskExecutor:
         subtask_type = subtask.get('type', 'simple')
         
         if subtask_type == 'simple':
-            return self._execute_simple_subtask(subtask, client, state_manager)
+            return self._execute_simple_subtask(
+                subtask, client, state_manager,
+                conv_logger=conv_logger, parent_task_id=parent_task_id,
+            )
         elif subtask_type == 'long_running':
-            return self._execute_long_running_subtask(subtask, client, state_manager)
+            return self._execute_long_running_subtask(
+                subtask, client, state_manager,
+                conv_logger=conv_logger, parent_task_id=parent_task_id,
+            )
         else:
             raise ConfigError(f"Unknown subtask type: {subtask_type}")
 
     def _execute_simple_subtask(
-        self, subtask: dict, client: CodeBuddyClient, state_manager
+        self, subtask: dict, client: CodeBuddyClient, state_manager,
+        conv_logger=None, parent_task_id: str = None,
     ) -> SubtaskResult:
         """Execute a simple subtask via AI."""
         success = self.simple_executor.execute(
-            subtask, client, state_manager, is_subtask=True
+            subtask, client, state_manager, is_subtask=True,
+            conv_logger=conv_logger, parent_task_id=parent_task_id,
         )
         
         subtask_id = str(subtask['id'])
@@ -618,7 +690,8 @@ class SubtaskExecutor:
         )
 
     def _execute_long_running_subtask(
-        self, subtask: dict, client: CodeBuddyClient, state_manager
+        self, subtask: dict, client: CodeBuddyClient, state_manager,
+        conv_logger=None, parent_task_id: str = None,
     ) -> SubtaskResult:
         """
         Execute a long-running subtask using nohup.
@@ -674,7 +747,8 @@ class SubtaskExecutor:
         
         # Ask AI to analyze the result
         return self._ai_analyze_long_running_result(
-            subtask, client, state_manager, result, log_file
+            subtask, client, state_manager, result, log_file,
+            conv_logger=conv_logger, parent_task_id=parent_task_id,
         )
 
     def _monitor_and_wait(self, subtask_id: str, log_file: str, pid_file: str) -> str:
@@ -734,7 +808,8 @@ class SubtaskExecutor:
         return "timeout"
 
     def _ai_analyze_long_running_result(
-        self, subtask, client, state_manager, status, log_file
+        self, subtask, client, state_manager, status, log_file,
+        conv_logger=None, parent_task_id: str = None,
     ) -> SubtaskResult:
         """
         Ask AI to analyze the result of a long-running task.
@@ -771,6 +846,18 @@ Respond with:
         
         try:
             result = client.ask(prompt, continue_session=True)
+            
+            # Log conversation (use full log with tool calls if available)
+            if conv_logger:
+                conv_logger.log_conversation(
+                    task_id=str(subtask['id']),
+                    task_name=subtask['name'],
+                    prompt=prompt,
+                    response=client.last_full_log or result,
+                    attempt=1,
+                    parent_task_id=parent_task_id,
+                    metadata={"type": "long_running_analysis"},
+                )
             
             # Check completion
             completion_markers = ["✅ completed", "✅ complete", "✅ 完成", "criteria met", "criteria are met"]

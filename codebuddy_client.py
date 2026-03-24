@@ -60,6 +60,8 @@ class CodeBuddyClient:
         self.timeout = timeout
         self.context_id = context_id
         self._session_started = False
+        # Full conversation log including tool calls (set after each ask() call)
+        self.last_full_log = ""
 
     def ask(
         self,
@@ -137,6 +139,7 @@ class CodeBuddyClient:
             # Stream stdout in real-time while collecting the full response
             stdout_chunks = []
             assistant_text_parts = []
+            full_log_parts = []  # Collect full log including tool calls
             deadline = time.monotonic() + effective_timeout
             try:
                 for line in process.stdout:
@@ -147,7 +150,9 @@ class CodeBuddyClient:
                         )
                     stdout_chunks.append(line)
                     # Parse stream-json lines for real-time display
-                    self._handle_stream_line(line.rstrip('\n'), assistant_text_parts)
+                    self._handle_stream_line(
+                        line.rstrip('\n'), assistant_text_parts, full_log_parts
+                    )
             except subprocess.TimeoutExpired:
                 process.kill()
                 raise
@@ -178,6 +183,11 @@ class CodeBuddyClient:
                 response = stdout_text.strip()
             if not response:
                 raise AICallError("CodeBuddy returned empty response")
+
+            # Store full log (with tool calls) for conversation logger
+            self.last_full_log = "\n".join(full_log_parts).strip()
+            if not self.last_full_log:
+                self.last_full_log = response
 
             self._session_started = True
             logger.info(f"[{self.context_id}] Got response ({len(response)} chars)")
@@ -231,7 +241,7 @@ class CodeBuddyClient:
         
         return " ".join(parts)
 
-    def _handle_stream_line(self, line: str, assistant_text_parts: list):
+    def _handle_stream_line(self, line: str, assistant_text_parts: list, full_log_parts: list = None):
         """
         Parse a single line of stream-json output and display relevant info in real-time.
         
@@ -245,7 +255,11 @@ class CodeBuddyClient:
         Args:
             line: A single line of stream-json output
             assistant_text_parts: List to collect assistant text for final response
+            full_log_parts: List to collect full log including tool calls
         """
+        if full_log_parts is None:
+            full_log_parts = []
+
         if not line.strip():
             return
         
@@ -269,12 +283,16 @@ class CodeBuddyClient:
                     text = block.get("text", "")
                     if text:
                         assistant_text_parts.append(text)
+                        full_log_parts.append(text)
                         sys.stdout.write(text)
                         sys.stdout.flush()
                 elif block_type == "tool_use":
                     tool_name = block.get("name", "unknown")
                     tool_input = block.get("input", {})
                     self._display_tool_use(tool_name, tool_input)
+                    # Log tool call to full_log
+                    tool_log = self._format_tool_use_for_log(tool_name, tool_input)
+                    full_log_parts.append(tool_log)
         
         elif event_type == "user":
             # User message containing tool_result
@@ -284,12 +302,22 @@ class CodeBuddyClient:
                 for block in content_blocks:
                     if isinstance(block, dict) and block.get("type") == "tool_result":
                         content = block.get("content", "")
+                        is_error = block.get("is_error", False)
                         if isinstance(content, str) and content:
                             preview = content[:500]
                             if len(content) > 500:
                                 preview += f"... ({len(content)} chars total)"
                             sys.stdout.write(f"   ↳ {preview}\n")
                             sys.stdout.flush()
+                            # Log tool result to full_log
+                            error_marker = " ❌" if is_error else ""
+                            # For log: include more content (up to 2000 chars)
+                            log_content = content[:2000]
+                            if len(content) > 2000:
+                                log_content += f"\n... ({len(content)} chars total)"
+                            full_log_parts.append(
+                                f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
+                            )
         
         elif event_type == "result":
             # Final result
@@ -301,10 +329,10 @@ class CodeBuddyClient:
             duration_ms = event.get("duration_ms", 0)
             num_turns = event.get("num_turns", 0)
             status = "❌ Error" if is_error else "✅ Done"
-            sys.stdout.write(
-                f"\n--- {status} ({num_turns} turns, {duration_ms/1000:.1f}s) ---\n"
-            )
+            summary = f"\n--- {status} ({num_turns} turns, {duration_ms/1000:.1f}s) ---\n"
+            sys.stdout.write(summary)
             sys.stdout.flush()
+            full_log_parts.append(f"\n{summary}")
 
     def _display_tool_use(self, tool_name: str, tool_input: dict):
         """Display a tool use event with a readable summary."""
@@ -323,6 +351,53 @@ class CodeBuddyClient:
         else:
             sys.stdout.write(f"\n🔧 [{tool_name}]\n")
         sys.stdout.flush()
+
+    def _format_tool_use_for_log(self, tool_name: str, tool_input: dict) -> str:
+        """
+        Format a tool use event as a Markdown string for the conversation log.
+        
+        Args:
+            tool_name: Tool name (e.g. "Bash", "Read", "Edit")
+            tool_input: Tool input parameters
+            
+        Returns:
+            str: Formatted markdown string for the tool call
+        """
+        if tool_name == "Bash":
+            cmd = tool_input.get("command", "")
+            return f"\n🔧 **[Bash]**\n```bash\n{cmd}\n```\n"
+        elif tool_name in ("Edit", "Write"):
+            path = tool_input.get("file_path", tool_input.get("filePath", ""))
+            content = tool_input.get("content", tool_input.get("new_string", ""))
+            result = f"\n📝 **[{tool_name}]** `{path}`\n"
+            if content:
+                # Truncate very long edits for readability
+                preview = content[:1000]
+                if len(content) > 1000:
+                    preview += f"\n... ({len(content)} chars total)"
+                result += f"```\n{preview}\n```\n"
+            return result
+        elif tool_name == "MultiEdit":
+            path = tool_input.get("file_path", tool_input.get("filePath", ""))
+            edits = tool_input.get("edits", [])
+            return f"\n📝 **[MultiEdit]** `{path}` ({len(edits)} edits)\n"
+        elif tool_name == "Read":
+            path = tool_input.get("file_path", tool_input.get("filePath", ""))
+            return f"\n📖 **[Read]** `{path}`\n"
+        elif tool_name in ("Glob", "Grep"):
+            pattern = tool_input.get("pattern", tool_input.get("regex", ""))
+            return f"\n🔍 **[{tool_name}]** `{pattern}`\n"
+        elif tool_name == "TodoRead":
+            return f"\n📋 **[TodoRead]**\n"
+        elif tool_name in ("TaskCreate", "TaskUpdate"):
+            task_desc = tool_input.get("description", tool_input.get("task", ""))
+            if isinstance(task_desc, str) and task_desc:
+                return f"\n🔧 **[{tool_name}]** {task_desc[:200]}\n"
+            return f"\n🔧 **[{tool_name}]**\n"
+        else:
+            # Generic tool
+            summary = json.dumps(tool_input, ensure_ascii=False)[:200]
+            return f"\n🔧 **[{tool_name}]** {summary}\n"
 
     def _parse_json_response(self, response: str) -> dict:
         """

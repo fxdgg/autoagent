@@ -29,6 +29,7 @@ from task_executor import (
     ExecutionError,
 )
 from state_manager import StateManager
+from conversation_logger import ConversationLogger
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ class TodoOrchestrator:
         model: str = "glm-5.0-ioa",
         workspace: str = ".",
         timeout: int = 3600,
+        log_dir: str = None,
     ):
         """
         Initialize the TodoOrchestrator.
@@ -64,6 +66,7 @@ class TodoOrchestrator:
             model: AI model to use
             workspace: Working directory for CodeBuddy
             timeout: Default timeout for AI calls
+            log_dir: Root directory for conversation logs (None to disable)
         """
         self.todos_file = todos_file
         self.codebuddy_path = codebuddy_path
@@ -72,6 +75,7 @@ class TodoOrchestrator:
         self.timeout = timeout
         
         self.state_manager = StateManager(state_file)
+        self.conv_logger = ConversationLogger(log_dir) if log_dir else None
         self.simple_executor = SimpleTaskExecutor()
         self.nested_executor = NestedTaskExecutor()
         
@@ -293,11 +297,13 @@ class TodoOrchestrator:
         try:
             if task_type == 'simple':
                 return self.simple_executor.execute(
-                    task, client, self.state_manager, is_subtask=False
+                    task, client, self.state_manager, is_subtask=False,
+                    conv_logger=self.conv_logger,
                 )
             elif task_type == 'nested':
                 return self.nested_executor.execute(
-                    task, client, self.state_manager
+                    task, client, self.state_manager,
+                    conv_logger=self.conv_logger,
                 )
             else:
                 raise ConfigError(f"Unknown task type: {task_type}")
@@ -487,6 +493,11 @@ Examples:
         action='store_true',
         help='Enable verbose/debug logging',
     )
+    parser.add_argument(
+        '--log-dir',
+        default=None,
+        help='Root directory for conversation logs (e.g. logs). Disabled if not set.',
+    )
     
     args = parser.parse_args()
     
@@ -502,6 +513,7 @@ Examples:
             model=args.model,
             workspace=args.workspace,
             timeout=args.timeout,
+            log_dir=args.log_dir,
         )
         
         # Handle special commands
@@ -526,6 +538,11 @@ Examples:
             skip_completed=not args.no_skip,
         )
         
+        # Finalize conversation logs
+        if orchestrator.conv_logger:
+            orchestrator.conv_logger.finalize()
+            print(f"📝 Conversation logs saved to: {orchestrator.conv_logger.get_session_dir()}")
+        
         # Exit with error code if any tasks failed
         if results['failed_tasks'] > 0:
             sys.exit(1)
@@ -534,6 +551,10 @@ Examples:
         print(f"❌ Configuration error: {e}")
         sys.exit(1)
     except KeyboardInterrupt:
+        # Finalize conversation logs even on interrupt
+        if 'orchestrator' in dir() and orchestrator.conv_logger:
+            orchestrator.conv_logger.finalize()
+            print(f"\n📝 Conversation logs saved to: {orchestrator.conv_logger.get_session_dir()}")
         print(f"\n\n⚠️  Interrupted by user. State has been saved.")
         print(f"    Run again to resume from where you left off.")
         sys.exit(130)
