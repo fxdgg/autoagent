@@ -79,7 +79,7 @@ tasks:
     subtasks:
       - id: 1.1
         name: "修改模型配置"
-        type: ai_action
+        type: simple
         completion_criteria: "模型配置修改完成，包括学习率、网络结构等参数"
 
       - id: 1.2
@@ -95,7 +95,7 @@ tasks:
 📋 执行任务 1: 优化模型精度
    类型: nested
 
-   📌 子任务 1.1: 修改模型配置 (ai_action)
+   📌 子任务 1.1: 修改模型配置 (simple)
       AI 修改代码...
       ✅ 子任务 1.1 完成
 
@@ -108,7 +108,7 @@ tasks:
       AI 分析: "模型参数过多导致 GPU 内存不足，需要回到 1.1 减少网络层数"
       AI 决策: retry_from = "1.1"
 
-   📌 子任务 1.1: 修改模型配置 (ai_action) [重试]
+   📌 子任务 1.1: 修改模型配置 (simple) [重试]
       AI 修改代码: 减少网络层数
       ✅ 子任务 1.1 完成
 
@@ -145,7 +145,7 @@ tasks:
     subtasks:
       - id: 2.1
         name: "实现数据增强"
-        type: ai_action
+        type: simple
         completion_criteria: "数据增强功能实现完成，包括随机裁剪、旋转等"
 
       - id: 2.2
@@ -181,7 +181,7 @@ tasks:
     subtasks:
       - id: 1.1
         name: "实现模型剪枝"
-        type: ai_action
+        type: simple
         completion_criteria: "模型剪枝代码实现完成"
 
       - id: 1.2
@@ -213,12 +213,12 @@ tasks:
     subtasks:
       - id: 1.1
         name: "分析代码警告"
-        type: ai_action
+        type: simple
         completion_criteria: "分析所有 pylint 警告，生成问题列表和修复方案"
 
       - id: 1.2
         name: "修复代码问题"
-        type: ai_action
+        type: simple
         completion_criteria: "所有警告和问题已修复"
 ```
 
@@ -235,12 +235,12 @@ tasks:
     subtasks:
       - id: 1.1
         name: "分析未覆盖代码"
-        type: ai_action
+        type: simple
         completion_criteria: "生成未覆盖代码的分析报告"
 
       - id: 1.2
         name: "编写测试用例"
-        type: ai_action
+        type: simple
         completion_criteria: "为未覆盖的代码编写测试用例"
 
       - id: 1.3
@@ -266,7 +266,7 @@ tasks:
     subtasks:
       - id: 1.1
         name: "优化算法实现"
-        type: ai_action
+        type: simple
         completion_criteria: "使用更高效的算法和数据结构"
 
       - id: 1.2
@@ -289,7 +289,7 @@ tasks:
     subtasks:
       - id: 1.1
         name: "分析并优化查询"
-        type: ai_action
+        type: simple
         completion_criteria: "查询优化完成，添加必要索引"
 
       - id: 1.2
@@ -305,7 +305,7 @@ tasks:
 
 - ✅ 任务描述清晰明确
 - ✅ 完成标准可量化验证
-- ✅ 合理使用任务类型（simple / nested / ai_action / long_running）
+- ✅ 合理使用任务类型（simple / nested / long_running）
 - ✅ 子任务粒度适中
 - ✅ 充分利用 AI 的决策能力
 

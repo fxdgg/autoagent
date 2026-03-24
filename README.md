@@ -23,8 +23,7 @@
 
 ### 2. 嵌套任务支持
 支持任务包含子任务，每个子任务可以是：
-- **简单任务**：直接执行命令
-- **AI 操作任务**：调用 AI 修改代码
+- **简单任务**：AI 自主完成（含代码修改、命令执行等）
 - **长时间任务**：使用 nohup 后台运行（避免超时）
 
 **示例场景：**
@@ -97,7 +96,7 @@ tasks:
     subtasks:
       - id: 2.1
         name: "修改训练代码"
-        type: ai_action
+        type: simple
         completion_criteria: "代码修改完成"
         
       - id: 2.2
@@ -127,7 +126,7 @@ tasks:
                              │
                     ┌────────┴────────┐
                     │  子任务执行流程  │
-                    │  - ai_action    │
+                    │  - simple       │
                     │  - long_running │
                     └────────┬────────┘
                              │
@@ -189,7 +188,7 @@ tasks:
     subtasks:
       - id: 2.1
         name: "修改训练代码"
-        type: ai_action
+        type: simple
         completion_criteria: "代码修改完成"
         
       - id: 2.2
@@ -244,7 +243,7 @@ for task in tasks:
   subtasks:
     - id: 2.1
       name: "修改训练代码"
-      type: ai_action
+      type: simple
       
     - id: 2.2
       name: "运行训练"
@@ -298,7 +297,7 @@ CodeBuddy 是 AI 编程助手，它：
 ```
 Orchestrator: "执行任务 2"
     ↓
-Orchestrator: "执行子任务 2.1（ai_action）"
+Orchestrator: "执行子任务 2.1（simple）"
     ↓
 Orchestrator: "调用 CodeBuddy"
     ↓
@@ -333,7 +332,7 @@ Orchestrator: "更新任务状态"
   subtasks:
     - id: 2.1
       name: "修改模型配置"
-      type: ai_action
+      type: simple
       completion_criteria: "配置修改完成"
       
     - id: 2.2
@@ -359,12 +358,12 @@ Orchestrator: "更新任务状态"
   subtasks:
     - id: 2.1
       name: "分析警告信息"
-      type: ai_action
+      type: simple
       completion_criteria: "警告分析完成"
       
     - id: 2.2
       name: "修复代码"
-      type: ai_action
+      type: simple
       completion_criteria: "代码修复完成"
 ```
 
@@ -384,7 +383,7 @@ Orchestrator: "更新任务状态"
   subtasks:
     - id: 2.1
       name: "优化热点代码"
-      type: ai_action
+      type: simple
       completion_criteria: "热点代码优化完成"
       
     - id: 2.2

@@ -288,8 +288,7 @@ class SubtaskExecutor:
 
 | 类型 | 说明 | 执行方式 |
 |------|------|----------|
-| `ai_action` | AI 修改代码 | 调用 `client.ask()` |
-| `simple` | 执行命令 | `subprocess.run()` + AI 判断 |
+| `simple` | AI 自主完成（含代码修改、命令执行等） | 调用 `client.ask()` |
 | `long_running` | 长时间任务 | `nohup` 后台 + 监控 + AI 判断 |
 
 ---
@@ -350,9 +349,9 @@ class TaskConfig(TypedDict, total=False):
 class SubtaskConfig(TypedDict, total=False):
     id: Union[int, str]                                # 必填
     name: str                                          # 必填
-    type: Literal["ai_action", "simple", "long_running"]  # 必填
+    type: Literal["simple", "long_running"]            # 必填
     completion_criteria: str                            # 必填
-    command: str                                       # long_running / simple 必填
+    command: str                                       # long_running 必填
     initial_hint: str                                  # simple 可选
     max_attempts: int                                  # 可选，默认 5
 ```

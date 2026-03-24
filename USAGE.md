@@ -63,7 +63,7 @@ tasks:
     subtasks:
       - id: 2.1
         name: "修改训练代码"
-        type: ai_action
+        type: simple
         completion_criteria: "代码修改完成"
         
       - id: 2.2
@@ -96,7 +96,7 @@ Orchestrator 会实时输出执行日志：
    类型: nested
 
    📌 执行子任务 2.1: 修改训练代码
-      类型: ai_action
+      类型: simple
       
       尝试 #1
          AI 尝试完成任务...
@@ -139,7 +139,7 @@ tasks:
     subtasks:
       - id: 2.1
         name: "修改模型配置"
-        type: ai_action
+        type: simple
         completion_criteria: "配置修改完成"
         
       - id: 2.2
@@ -163,7 +163,7 @@ tasks:
 |------|------|------|------|
 | `id` | int/string | 是 | 任务 ID（唯一标识） |
 | `name` | string | 是 | 任务名称 |
-| `type` | string | 是 | 任务类型：`simple`、`nested`、`ai_action`、`long_running` |
+| `type` | string | 是 | 任务类型：`simple`、`nested`、`long_running` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
 
 #### 简单任务 (type: simple)
@@ -178,12 +178,6 @@ tasks:
 |------|------|------|------|
 | `subtasks` | list | 是 | 子任务列表 |
 
-#### AI 操作任务 (type: ai_action)
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| 无额外字段 | - | - | 使用通用的 completion_criteria |
-
 #### 长时间任务 (type: long_running)
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -195,16 +189,25 @@ tasks:
 
 ### 1. 简单任务 (simple)
 
-**适用场景**：一次性执行的任务，由 AI 判断是否完成
+**适用场景**：由 AI 自主完成的任务，包括命令执行、代码修改、分析等所有场景
 
 **配置示例**：
 ```yaml
+# 顶层任务
 - id: 1
   name: "下载数据集"
   type: simple
   completion_criteria: "data.csv 文件存在且大小 > 10MB"
   initial_hint: "使用 python download.py"
+
+# 作为子任务（代码修改）
+- id: 2.1
+  name: "修改训练代码"
+  type: simple
+  completion_criteria: "代码修改完成，添加了 dropout 层"
 ```
+
+> **设计理念**：不区分"执行命令"和"修改代码"——对 AI 来说这是同一件事。用户只需要判断：**"这个任务需要在后台长时间运行吗？"** 需要就用 `long_running`，不需要就用 `simple`。
 
 **执行流程**：
 1. AI 根据 initial_hint 尝试完成任务
@@ -226,7 +229,7 @@ tasks:
   subtasks:
     - id: 2.1
       name: "修改训练代码"
-      type: ai_action
+      type: simple
       completion_criteria: "代码修改完成"
       
     - id: 2.2
@@ -259,26 +262,7 @@ tasks:
    - 如果未完成，AI提出下一轮的优化方向和具体建议
    - 系统根据AI的评估决定是标记完成还是开始新一轮尝试
 
-### 3. AI 操作任务 (ai_action)
-
-**适用场景**：需要 AI 修改代码或执行其他操作的任务
-
-**配置示例**：
-```yaml
-- id: 2.1
-  name: "修改训练代码"
-  type: ai_action
-  completion_criteria: "代码修改完成"
-```
-
-**执行流程**：
-1. 调用 CodeBuddy 执行操作
-2. AI 自我评估是否满足完成条件
-3. 如果满足：标记完成
-4. 如果不满足：继续改进
-5. 循环直到满足条件或达到最大尝试次数
-
-### 4. 长时间任务 (long_running)
+### 3. 长时间任务 (long_running)
 
 **适用场景**：可能超过 CodeBuddy 超时限制的任务（如模型训练）
 
@@ -367,7 +351,7 @@ cat todos_state.yaml
   subtasks:
     - id: 2.1
       name: "修改训练代码"
-      type: ai_action
+      type: simple
       completion_criteria: "代码修改完成"
     - id: 2.2
       name: "运行训练测试"
@@ -413,7 +397,7 @@ completion_criteria: |
     # 步骤1：AI 修改代码
     - id: 2.1
       name: "修改训练代码"
-      type: ai_action
+      type: simple
       completion_criteria: "代码修改完成"
       
     # 步骤2：长时间训练（避免超时）
@@ -459,13 +443,13 @@ tail -f monitors/2.2.log
 # ❌ 不好：AI很难判断
 - id: 2.1
   name: "优化模型"
-  type: ai_action
+  type: simple
   completion_criteria: "代码变好了"
 
 # ✅ 好：明确的标准
 - id: 2.1
   name: "优化模型"
-  type: ai_action
+  type: simple
   completion_criteria: |
     代码修改已完成，具体包括：
     1. 添加了dropout层

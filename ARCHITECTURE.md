@@ -351,8 +351,8 @@ class TaskOrchestrator:
 def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
     """执行子任务，共享主任务的 context"""
     
-    if subtask['type'] == 'ai_action':
-        # AI 操作任务：使用 --continue 保持上下文
+    if subtask['type'] == 'simple':
+        # 简单任务：使用 --continue 保持上下文，AI 自主完成
         prompt = self._build_subtask_prompt(subtask)
         result = client.ask(prompt, continue_session=True)
         
@@ -482,16 +482,25 @@ for task in state['tasks']:
 
 ### 1. 简单任务 (simple)
 
-**定义**：一次性执行命令，由 AI 判断是否完成
+**定义**：由 AI 自主完成的任务，涵盖命令执行、代码修改、分析等所有场景
 
 **配置示例**：
 ```yaml
+# 作为顶层任务
 - id: 1
   name: "下载数据集"
   type: simple
   completion_criteria: "data.csv 文件存在且大小 > 10MB"
   initial_hint: "使用 python download.py"
+
+# 作为子任务（代码修改场景）
+- id: 2.1
+  name: "修改训练代码"
+  type: simple
+  completion_criteria: "代码修改完成，添加了 dropout 层和学习率调度器"
 ```
+
+> **设计理念**：不区分"执行命令"和"修改代码"——对 AI 来说这是同一件事。AI 看到"修改训练代码"自然知道要改代码，看到"运行测试"自然知道要运行命令。用户只需要回答一个问题：**"这个任务需要在后台长时间运行吗？"** 需要就用 `long_running`，不需要就用 `simple`。
 
 **执行流程**：
 ```
@@ -518,7 +527,7 @@ for task in state['tasks']:
   subtasks:
     - id: 2.1
       name: "修改训练代码"
-      type: ai_action
+      type: simple
       completion_criteria: "代码修改完成"
       
     - id: 2.2
@@ -547,31 +556,7 @@ for task in state['tasks']:
 7. 循环直到满足条件或达到最大尝试次数
 ```
 
-### 3. AI 操作任务 (ai_action)
-
-**定义**：调用 AI 修改代码或执行其他操作
-
-**配置示例**：
-```yaml
-- id: 2.1
-  name: "修改训练代码"
-  type: ai_action
-  completion_criteria: "代码修改完成"
-```
-
-**执行流程**：
-```
-1. 调用 CodeBuddy 执行操作
-   ↓
-2. AI 自我评估是否满足完成条件
-   ↓
-3. 如果满足：标记完成
-   如果不满足：继续改进
-   ↓
-4. 循环直到满足条件或达到最大尝试次数
-```
-
-### 4. 长时间任务 (long_running)
+### 3. 长时间任务 (long_running)
 
 **定义**：使用 nohup 后台运行的任务，避免超时
 
@@ -1338,6 +1323,7 @@ context:
 本架构设计实现了：
 
 - ✅ 统一的任务执行模型（不再区分简单任务和循环任务）
+- ✅ 精简的任务类型体系（simple / nested / long_running）
 - ✅ AI完全自主判断完成条件
 - ✅ 支持嵌套任务
 - ✅ 支持长时间任务的nohup处理

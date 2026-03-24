@@ -217,10 +217,10 @@ tasks:
       验证集精度 >= 0.9
       验证集 loss < 0.1
     subtasks:
-      # AI 操作任务
+      # 简单任务（代码修改）
       - id: 2.1
         name: "修改训练代码"
-        type: ai_action
+        type: simple
         completion_criteria: "代码修改完成"
         
       # 长时间任务
@@ -253,10 +253,6 @@ tasks:
 | 额外字段 | 类型 | 必填 | 说明 |
 |---------|------|------|------|
 | `subtasks` | list | 是 | 子任务列表 |
-
-#### AI 操作任务 (type: ai_action)
-
-无额外字段，使用通用的 `completion_criteria`。
 
 #### 长时间任务 (type: long_running)
 
