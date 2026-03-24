@@ -4,7 +4,7 @@
 
 ## 目录
 
-- [TaskOrchestrator](#todoorchestrator)
+- [TodoOrchestrator](#todoorchestrator)
 - [CodeBuddyClient](#codebuddyclient)
 - [任务执行器](#任务执行器)
 - [状态类型](#状态类型)
@@ -128,7 +128,7 @@ class CodeBuddyClient:
 | `model` | str | "glm-4.7" | 使用的模型 |
 | `workspace` | str | "/data/workspace" | 工作目录 |
 | `timeout` | int | 3600 | 超时时间（秒） |
-| `context_id` | str | None | Context 标识符，用于区分不同主任务的对话上下文 |
+| `context_id` | str | None | Context 标识符，用于状态记录和日志追踪（注意：`--continue` 只能继续最近一次对话，不支持指定 context ID） |
 
 ### Context 管理策略
 
@@ -316,13 +316,16 @@ class TaskState(TypedDict, total=False):
 
 ```python
 class SubtaskState(TypedDict, total=False):
-    status: str           # "pending" | "in_progress" | "completed" | "failed" | "running"
+    status: str           # "pending" | "in_progress" | "completed" | "failed"
     attempts: int
     error_type: str       # "timeout" | "oom" | "crash" | "validation_failed"
     log_file: str         # 日志文件路径（long_running 类型）
+    pid_file: str         # PID 文件路径（long_running 类型）
     ai_reasoning: str     # AI 的推理记录
     history: list         # 执行历史
 ```
+
+> **注意**：`in_progress` 状态同时覆盖"正在执行命令"和"长时间任务正在后台运行"两种场景。可通过 `log_file` 和 `pid_file` 字段区分是否为长时间任务。
 
 ---
 

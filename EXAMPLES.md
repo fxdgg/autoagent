@@ -8,915 +8,306 @@
 - [机器学习场景](#机器学习场景)
 - [代码质量场景](#代码质量场景)
 - [性能优化场景](#性能优化场景)
-- [数据处理场景](#数据处理场景)
-- [高级用例](#高级用例)
 
 ## 基础示例
 
 ### 示例 1：简单任务
 
-创建一个简单的一次性任务。
+创建一个简单的一次性任务，AI 自主判断如何完成。
 
 **配置文件 (todos.yaml)**：
 
 ```yaml
-version: 1
-workspace: /data/workspace/example
-
 tasks:
   - id: 1
-    name: "hello_world"
-    description: "打印 Hello World"
+    name: "下载数据集"
     type: simple
-    command: "echo 'Hello, World!'"
-    expected_output: "Hello, World!"
+    completion_criteria: "data.csv 文件存在且大小 > 10MB"
+    initial_hint: "使用 python download.py"
 ```
 
-**执行**：
-
-```bash
-python todo_orchestrator.py
-```
-
-**输出**：
+**执行流程**：
 
 ```
-============================================================
-开始执行任务 1: 打印 Hello World
-============================================================
+📋 执行任务 1: 下载数据集
+   类型: simple
 
-📝 执行任务 1: 打印 Hello World
-   命令: echo 'Hello, World!'
-   结果: ✅ 成功
-
-============================================================
-执行总结:
-  ✅ 任务 1: 打印 Hello World
-============================================================
+   尝试 #1
+      AI 尝试完成任务...
+      AI 判断: ✅ 完成
+   任务 1 完成！
 ```
 
 ### 示例 2：多个简单任务
 
 按顺序执行多个简单任务。
 
-**配置文件**：
-
 ```yaml
-version: 1
-workspace: /data/workspace/example
-
 tasks:
   - id: 1
-    description: "创建目录"
+    name: "准备环境"
     type: simple
-    command: "mkdir -p output"
-    
+    completion_criteria: "所有依赖安装完成，python -c 'import torch' 无报错"
+    initial_hint: "运行 pip install -r requirements.txt"
+
   - id: 2
-    description: "生成数据"
+    name: "运行代码检查"
     type: simple
-    command: "python -c 'print(1, 2, 3)' > output/data.txt"
-    
+    completion_criteria: "pylint 评分 >= 9.0 且无严重错误"
+    initial_hint: "运行 pylint src/"
+
   - id: 3
-    description: "查看数据"
+    name: "分析性能瓶颈"
     type: simple
-    command: "cat output/data.txt"
+    completion_criteria: "生成性能分析报告并保存到 profile_report.txt"
+    initial_hint: "运行 python profile.py"
 ```
 
-### 示例 3：循环任务
+### 示例 3：嵌套任务
 
-创建一个需要 AI 优化的循环任务。
-
-**配置文件**：
+包含多个子任务的复杂任务，子任务失败时 AI 分析原因并决定重试策略。
 
 ```yaml
-version: 1
-workspace: /data/workspace/example
-
 tasks:
   - id: 1
-    description: "优化代码性能"
-    type: loop
-    max_retries: 5
+    name: "优化模型精度"
+    type: nested
     completion_criteria: |
-      运行时间 < 1 秒
-      结果正确
-    initial_instruction: "添加缓存机制"
-```
+      训练成功完成
+      验证集精度 >= 0.9
+      验证集 loss < 0.1
+    subtasks:
+      - id: 1.1
+        name: "修改模型配置"
+        type: ai_action
+        completion_criteria: "模型配置修改完成，包括学习率、网络结构等参数"
 
-**示例代码 (script.py)**：
-
-```python
-import time
-
-def slow_function():
-    time.sleep(2)  # 模拟慢操作
-    return 42
-
-if __name__ == "__main__":
-    import time
-    start = time.time()
-    result = slow_function()
-    duration = time.time() - start
-    print(f"结果: {result}, 耗时: {duration:.2f}s")
+      - id: 1.2
+        name: "训练模型"
+        type: long_running
+        command: "python train.py --config config.yaml"
+        completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
 **执行流程**：
 
 ```
-🔄 第 1 次尝试: AI 修改代码
-   AI 决策: 添加缓存机制
-🏋️ 运行训练...
-   结果: 结果: 42, 耗时: 0.01s
-🔍 AI 检查完成情况...
-   AI 判断: ✅ 已完成
-   理由: 耗时 0.01s，满足 < 1s 的要求
+📋 执行任务 1: 优化模型精度
+   类型: nested
+
+   📌 子任务 1.1: 修改模型配置 (ai_action)
+      AI 修改代码...
+      ✅ 子任务 1.1 完成
+
+   📌 子任务 1.2: 训练模型 (long_running)
+      启动后台训练: nohup python train.py --config config.yaml > logs/1.2.log 2>&1 &
+      监控中...
+      ❌ 子任务 1.2 失败 (CUDA out of memory)
+
+   🤖 【AI 决策点1：失败分析】
+      AI 分析: "模型参数过多导致 GPU 内存不足，需要回到 1.1 减少网络层数"
+      AI 决策: retry_from = "1.1"
+
+   📌 子任务 1.1: 修改模型配置 (ai_action) [重试]
+      AI 修改代码: 减少网络层数
+      ✅ 子任务 1.1 完成
+
+   📌 子任务 1.2: 训练模型 (long_running) [重试]
+      启动后台训练...
+      ✅ 子任务 1.2 完成 (accuracy=0.92, loss=0.08)
+
+   🤖 【AI 决策点2：主任务评估】
+      AI 评估: accuracy=0.92 >= 0.9 ✅, loss=0.08 < 0.1 ✅
+      AI 决策: main_task_completed = true
+
+   ✅ 主任务 1 完成！
 ```
 
 ## 机器学习场景
 
-### 示例 4：模型训练优化
-
-自动优化模型训练。
-
-**配置文件**：
+### 示例 4：端到端训练流程
 
 ```yaml
-version: 1
-workspace: /data/workspace/ml-project
-
 tasks:
   - id: 1
-    description: "准备数据集"
+    name: "准备训练数据"
     type: simple
-    command: "python prepare_dataset.py"
-    timeout: 600
-    
+    completion_criteria: "训练数据和验证数据准备完成，文件格式正确"
+    initial_hint: "运行 python prepare_data.py"
+
   - id: 2
-    description: "优化模型精度到 90% 以上"
-    type: loop
-    max_retries: 10
-    timeout: 1800
+    name: "训练并优化模型"
+    type: nested
     completion_criteria: |
-      模型精度（accuracy）需要 >= 0.9
-      训练无崩溃，无 OOM
-      损失函数 loss < 0.1
-      最后 3 个 epoch 的准确率方差 < 0.01
-    initial_instruction: "将学习率从 0.001 调整到 0.0001"
+      验证集精度 >= 0.95
+      验证集 loss < 0.05
+      模型文件保存成功
+    subtasks:
+      - id: 2.1
+        name: "实现数据增强"
+        type: ai_action
+        completion_criteria: "数据增强功能实现完成，包括随机裁剪、旋转等"
+
+      - id: 2.2
+        name: "训练模型"
+        type: long_running
+        command: "python train.py --data augmented_data --model model.yaml"
+        completion_criteria: "训练正常完成，模型文件保存成功"
+
+      - id: 2.3
+        name: "评估模型"
+        type: simple
+        completion_criteria: "模型评估完成，生成评估报告"
+        initial_hint: "运行 python evaluate.py --model model.pth"
 ```
 
-**示例训练脚本 (train.py)**：
+**AI 决策场景**：
 
-```python
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import time
+- 如果子任务 2.2 训练失败（OOM）→ AI 可能决定 `retry_from: "2.1"` 减少数据增强的复杂度
+- 如果子任务 2.3 评估不达标 → 所有子任务完成后，AI 在主任务评估中决定 `retry_from: "2.1"` 调整策略
+- 如果子任务 2.2 训练成功但指标不够 → AI 在主任务评估中建议调整学习率或网络结构
 
-class SimpleModel(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.fc1 = nn.Linear(10, 50)
-        self.fc2 = nn.Linear(50, 10)
-    
-    def forward(self, x):
-        x = torch.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
-
-def train(learning_rate=0.001, batch_size=32, epochs=10):
-    model = SimpleModel()
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    
-    # 模拟训练
-    losses = []
-    accuracies = []
-    
-    for epoch in range(epochs):
-        # 模拟训练数据
-        inputs = torch.randn(batch_size, 10)
-        targets = torch.randint(0, 10, (batch_size,))
-        
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, targets)
-        loss.backward()
-        optimizer.step()
-        
-        losses.append(loss.item())
-        
-        # 模拟准确率
-        accuracy = 0.5 + epoch * 0.05
-        accuracies.append(accuracy)
-        
-        print(f"Epoch {epoch+1}/{epochs}, Loss: {loss.item():.4f}, Accuracy: {accuracy:.2f}")
-    
-    final_accuracy = sum(accuracies[-3:]) / 3
-    final_loss = sum(losses[-3:]) / 3
-    
-    return {
-        "final_accuracy": final_accuracy,
-        "final_loss": final_loss,
-        "losses": losses,
-        "accuracies": accuracies
-    }
-
-if __name__ == "__main__":
-    learning_rate = 0.001  # 可以被 AI 修改
-    batch_size = 32        # 可以被 AI 修改
-    
-    print(f"开始训练，学习率: {learning_rate}, batch_size: {batch_size}")
-    result = train(learning_rate, batch_size)
-    
-    print(f"\n最终结果:")
-    print(f"Accuracy: {result['final_accuracy']:.2f}")
-    print(f"Loss: {result['final_loss']:.4f}")
-```
-
-**执行过程**：
-
-```
-============================================================
-开始执行任务 2: 优化模型精度到 90% 以上
-============================================================
-
-🔄 第 1 次尝试: AI 修改代码
-   AI 决策: 将学习率从 0.001 调整到 0.0001
-🏋️ 运行训练...
-   Epoch 1/10, Loss: 2.3456, Accuracy: 0.55
-   Epoch 10/10, Loss: 1.2345, Accuracy: 0.95
-🔍 AI 检查完成情况...
-   AI 判断: ✅ 已完成
-   理由: accuracy = 0.95，已达到 0.9 的要求
-```
-
-### 示例 5：超参数调优
-
-自动搜索最优超参数。
-
-**配置文件**：
+### 示例 5：模型压缩
 
 ```yaml
-version: 1
-workspace: /data/workspace/ml-project
-
 tasks:
   - id: 1
-    description: "搜索最优超参数组合"
-    type: loop
-    max_retries: 15
-    timeout: 3600
-    completion_criteria: |
-      验证集准确率 >= 0.92
-      测试集准确率 >= 0.90
-      训练时间 < 10 分钟
-    initial_instruction: "尝试调整学习率和 batch_size"
-```
-
-**执行流程**：
-
-```
-尝试 1: learning_rate=0.001, batch_size=32 → accuracy=0.85
-尝试 2: learning_rate=0.0001, batch_size=64 → accuracy=0.88
-尝试 3: learning_rate=0.0005, batch_size=128 → accuracy=0.91
-尝试 4: learning_rate=0.0003, batch_size=128 → accuracy=0.93 ✅
-```
-
-### 示例 6：模型压缩
-
-减少模型参数量。
-
-**配置文件**：
-
-```yaml
-version: 1
-workspace: /data/workspace/ml-project
-
-tasks:
-  - id: 1
-    description: "压缩模型参数量 50%"
-    type: loop
-    max_retries: 8
+    name: "压缩模型参数量"
+    type: nested
     completion_criteria: |
       模型参数量 < 2.5M（原模型 5M）
       精度下降 < 2%
       推理速度提升 > 30%
-    initial_instruction: "减少中间层神经元数量"
+    subtasks:
+      - id: 1.1
+        name: "实现模型剪枝"
+        type: ai_action
+        completion_criteria: "模型剪枝代码实现完成"
+
+      - id: 1.2
+        name: "训练压缩模型"
+        type: long_running
+        command: "python train_compressed.py --prune-ratio 0.5"
+        completion_criteria: "训练完成，模型保存成功"
+
+      - id: 1.3
+        name: "对比评估"
+        type: simple
+        completion_criteria: "生成压缩前后的对比报告"
+        initial_hint: "运行 python compare_models.py"
 ```
 
 ## 代码质量场景
 
-### 示例 7：代码规范检查
-
-自动修复代码规范问题。
-
-**配置文件**：
+### 示例 6：修复代码规范问题
 
 ```yaml
-version: 1
-workspace: /data/workspace/code-quality
-
 tasks:
   - id: 1
-    description: "运行代码检查"
-    type: simple
-    command: "pylint src/ --output-format=json > pylint_report.json"
-    
-  - id: 2
-    description: "修复所有 Pylint 警告"
-    type: loop
-    max_retries: 5
+    name: "修复所有 Pylint 警告"
+    type: nested
     completion_criteria: |
-      Pylint 报告中无警告和错误
-      代码评分 >= 9.0
-    initial_instruction: "修复所有 pylint 报告的问题"
+      Pylint 评分 >= 9.0
+      符合 PEP8 规范
+      无严重警告
+    subtasks:
+      - id: 1.1
+        name: "分析代码警告"
+        type: ai_action
+        completion_criteria: "分析所有 pylint 警告，生成问题列表和修复方案"
+
+      - id: 1.2
+        name: "修复代码问题"
+        type: ai_action
+        completion_criteria: "所有警告和问题已修复"
 ```
 
-**示例代码 (src/module.py)**：
-
-```python
-# 有问题的代码
-def add(a,b):
-    x=a+b
-    return x
-
-# 缺少文档字符串
-class Calculator:
-    def __init__(self):
-        self.result=0
-    
-    def calculate(self, x, y):
-        self.result=x*y
-        return self.result
-```
-
-**执行流程**：
-
-```
-尝试 1: AI 添加文档字符串，修复命名规范
-尝试 2: AI 添加类型注解
-尝试 3: AI 添加空行和注释
-尝试 4: ✅ Pylint 评分 9.5
-```
-
-### 示例 8：单元测试覆盖
-
-提高测试覆盖率。
-
-**配置文件**：
+### 示例 7：提高测试覆盖率
 
 ```yaml
-version: 1
-workspace: /data/workspace/code-quality
-
 tasks:
   - id: 1
-    description: "检查测试覆盖率"
-    type: simple
-    command: "pytest --cov=src --cov-report=json"
-    
-  - id: 2
-    description: "提高测试覆盖率到 90%"
-    type: loop
-    max_retries: 5
+    name: "提高测试覆盖率到 90%"
+    type: nested
     completion_criteria: |
       代码覆盖率 >= 90%
       所有测试通过
-    initial_instruction: "为未覆盖的代码添加测试"
-```
+    subtasks:
+      - id: 1.1
+        name: "分析未覆盖代码"
+        type: ai_action
+        completion_criteria: "生成未覆盖代码的分析报告"
 
-### 示例 9：重构代码
+      - id: 1.2
+        name: "编写测试用例"
+        type: ai_action
+        completion_criteria: "为未覆盖的代码编写测试用例"
 
-重构复杂代码。
-
-**配置文件**：
-
-```yaml
-version: 1
-workspace: /data/workspace/code-quality
-
-tasks:
-  - id: 1
-    description: "重构复杂函数"
-    type: loop
-    max_retries: 5
-    completion_criteria: |
-      圈复杂度 <= 5
-      函数长度 <= 50 行
-      功能保持不变
-    initial_instruction: "将大函数拆分为多个小函数"
-```
-
-**示例代码**：
-
-```python
-# 重构前：复杂的函数
-def process_data(data):
-    result = []
-    for item in data:
-        if item > 0:
-            processed = item * 2
-            if processed > 100:
-                processed = 100
-            result.append(processed)
-        elif item < 0:
-            processed = abs(item)
-            if processed < 10:
-                processed = 10
-            result.append(processed)
-    return result
-
-# 重构后：拆分为多个小函数
-def process_positive_item(item):
-    processed = item * 2
-    return min(processed, 100)
-
-def process_negative_item(item):
-    processed = abs(item)
-    return max(processed, 10)
-
-def process_data(data):
-    result = []
-    for item in data:
-        if item > 0:
-            result.append(process_positive_item(item))
-        elif item < 0:
-            result.append(process_negative_item(item))
-    return result
+      - id: 1.3
+        name: "运行测试验证"
+        type: simple
+        completion_criteria: "所有测试通过且覆盖率 >= 90%"
+        initial_hint: "运行 pytest --cov=src --cov-report=term"
 ```
 
 ## 性能优化场景
 
-### 示例 10：算法优化
-
-优化算法性能。
-
-**配置文件**：
+### 示例 8：算法优化
 
 ```yaml
-version: 1
-workspace: /data/workspace/performance
-
 tasks:
   - id: 1
-    description: "优化斐波那契数列计算"
-    type: loop
-    max_retries: 5
+    name: "优化核心算法性能"
+    type: nested
     completion_criteria: |
-      计算 fib(40) 时间 < 1 秒
+      运行时间 < 1 秒
       结果正确
-    initial_instruction: "使用记忆化优化"
-```
-
-**示例代码**：
-
-```python
-# 优化前：递归版本（慢）
-def fib_recursive(n):
-    if n <= 1:
-        return n
-    return fib_recursive(n-1) + fib_recursive(n-2)
-
-# 优化后：记忆化版本（快）
-from functools import lru_cache
-
-@lru_cache(maxsize=None)
-def fib_memoized(n):
-    if n <= 1:
-        return n
-    return fib_memoized(n-1) + fib_memoized(n-2)
-
-# 优化后：迭代版本（更快）
-def fib_iterative(n):
-    if n <= 1:
-        return n
-    a, b = 0, 1
-    for _ in range(2, n+1):
-        a, b = b, a + b
-    return b
-
-if __name__ == "__main__":
-    import time
-    n = 40
-    
-    start = time.time()
-    result = fib_iterative(n)
-    duration = time.time() - start
-    
-    print(f"fib({n}) = {result}")
-    print(f"耗时: {duration:.6f}s")
-```
-
-### 示例 11：数据库查询优化
-
-优化数据库查询性能。
-
-**配置文件**：
-
-```yaml
-version: 1
-workspace: /data/workspace/performance
-
-tasks:
-  - id: 1
-    description: "优化数据库查询"
-    type: loop
-    max_retries: 5
-    completion_criteria: |
-      查询时间 < 100ms
-      返回正确结果
-    initial_instruction: "添加索引或优化查询语句"
-```
-
-**示例代码**：
-
-```python
-# 优化前
-def slow_query():
-    query = """
-    SELECT * FROM orders o
-    JOIN customers c ON o.customer_id = c.id
-    JOIN products p ON o.product_id = p.id
-    WHERE o.order_date > '2024-01-01'
-    """
-    return execute(query)
-
-# 优化后：添加索引
-def optimized_query():
-    query = """
-    SELECT o.id, o.order_date, c.name, p.name
-    FROM orders o
-    JOIN customers c ON o.customer_id = c.id
-    JOIN products p ON o.product_id = p.id
-    WHERE o.order_date > '2024-01-01'
-      AND c.active = 1
-      AND p.active = 1
-    """
-    return execute(query)
-
-# 索引定义
-indexes = [
-    "CREATE INDEX idx_orders_date ON orders(order_date)",
-    "CREATE INDEX idx_customers_active ON customers(active)",
-    "CREATE INDEX idx_products_active ON products(active)"
-]
-```
-
-### 示例 12：内存优化
-
-减少内存使用。
-
-**配置文件**：
-
-```yaml
-version: 1
-workspace: /data/workspace/performance
-
-tasks:
-  - id: 1
-    description: "减少内存使用 50%"
-    type: loop
-    max_retries: 5
-    completion_criteria: |
       内存使用 < 500MB
-      功能保持不变
-    initial_instruction: "使用生成器代替列表，及时释放内存"
+    subtasks:
+      - id: 1.1
+        name: "优化算法实现"
+        type: ai_action
+        completion_criteria: "使用更高效的算法和数据结构"
+
+      - id: 1.2
+        name: "运行基准测试"
+        type: simple
+        completion_criteria: "基准测试完成，运行时间 < 1s，结果正确"
+        initial_hint: "运行 python benchmark.py"
 ```
 
-**示例代码**：
-
-```python
-# 优化前：使用列表（内存占用大）
-def process_large_file(filename):
-    with open(filename) as f:
-        lines = f.readlines()  # 一次性读取所有行
-    
-    results = []
-    for line in lines:
-        processed = line.strip().upper()
-        results.append(processed)
-    
-    return results
-
-# 优化后：使用生成器（内存占用小）
-def process_large_file(filename):
-    with open(filename) as f:
-        for line in f:  # 逐行读取
-            processed = line.strip().upper()
-            yield processed
-
-# 使用方式
-for result in process_large_file("large_file.txt"):
-    print(result)
-```
-
-## 数据处理场景
-
-### 示例 13：数据清洗
-
-自动清洗数据。
-
-**配置文件**：
+### 示例 9：数据库查询优化
 
 ```yaml
-version: 1
-workspace: /data/workspace/data
-
 tasks:
   - id: 1
-    description: "清洗缺失数据"
-    type: loop
-    max_retries: 3
+    name: "优化慢查询"
+    type: nested
     completion_criteria: |
-      无缺失值
-      数据格式正确
-      无异常值
-    initial_instruction: "删除或填充缺失值"
-```
+      所有查询响应时间 < 100ms
+      返回结果正确
+    subtasks:
+      - id: 1.1
+        name: "分析并优化查询"
+        type: ai_action
+        completion_criteria: "查询优化完成，添加必要索引"
 
-**示例代码**：
-
-```python
-import pandas as pd
-
-def clean_data(df):
-    # 处理缺失值
-    df = df.dropna(subset=['id'])  # 删除 id 为空的行
-    df['age'] = df['age'].fillna(df['age'].mean())  # 填充年龄缺失值
-    
-    # 处理异常值
-    df = df[df['age'] > 0]  # 删除年龄为负数的行
-    df = df[df['age'] < 120]  # 删除年龄过大的行
-    
-    # 数据类型转换
-    df['id'] = df['id'].astype(int)
-    df['age'] = df['age'].astype(int)
-    
-    return df
-
-if __name__ == "__main__":
-    # 读取数据
-    df = pd.read_csv("data.csv")
-    print(f"原始数据: {len(df)} 行")
-    print(f"缺失值: {df.isnull().sum().sum()}")
-    
-    # 清洗数据
-    df = clean_data(df)
-    
-    print(f"清洗后数据: {len(df)} 行")
-    print(f"缺失值: {df.isnull().sum().sum()}")
-    
-    # 保存
-    df.to_csv("data_cleaned.csv", index=False)
-```
-
-### 示例 14：数据转换
-
-转换数据格式。
-
-**配置文件**：
-
-```yaml
-version: 1
-workspace: /data/workspace/data
-
-tasks:
-  - id: 1
-    description: "转换 CSV 到 JSON"
-    type: simple
-    command: "python convert_csv_to_json.py input.csv output.json"
-```
-
-**示例代码**：
-
-```python
-import csv
-import json
-
-def csv_to_json(csv_file, json_file):
-    data = []
-    
-    with open(csv_file) as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            data.append(row)
-    
-    with open(json_file, 'w') as f:
-        json.dump(data, f, indent=2)
-
-if __name__ == "__main__":
-    import sys
-    csv_to_json(sys.argv[1], sys.argv[2])
-    print("转换完成")
-```
-
-### 示例 15：数据聚合
-
-聚合数据统计。
-
-**配置文件**：
-
-```yaml
-version: 1
-workspace: /data/workspace/data
-
-tasks:
-  - id: 1
-    description: "生成月度统计报告"
-    type: simple
-    command: "python generate_report.py"
-```
-
-**示例代码**：
-
-```python
-import pandas as pd
-
-def generate_monthly_report():
-    # 读取数据
-    df = pd.read_csv("sales.csv")
-    
-    # 转换日期
-    df['date'] = pd.to_datetime(df['date'])
-    df['month'] = df['date'].dt.to_period('M')
-    
-    # 按月聚合
-    monthly_stats = df.groupby('month').agg({
-        'amount': ['sum', 'mean', 'count'],
-        'profit': 'sum'
-    })
-    
-    # 保存报告
-    monthly_stats.to_csv("monthly_report.csv")
-    print("报告生成完成")
-
-if __name__ == "__main__":
-    generate_monthly_report()
-```
-
-## 高级用例
-
-### 示例 16：任务依赖
-
-定义任务之间的依赖关系。
-
-**配置文件**：
-
-```yaml
-version: 1
-workspace: /data/workspace/advanced
-
-tasks:
-  - id: 1
-    description: "下载数据"
-    type: simple
-    command: "python download.py"
-    
-  - id: 2
-    description: "预处理数据"
-    type: simple
-    command: "python preprocess.py"
-    depends_on: [1]  # 依赖任务 1
-    
-  - id: 3
-    description: "训练模型"
-    type: loop
-    max_retries: 5
-    completion_criteria: "accuracy >= 0.9"
-    depends_on: [2]  # 依赖任务 2
-```
-
-### 示例 17：条件任务
-
-根据条件执行不同任务。
-
-**配置文件**：
-
-```yaml
-version: 1
-workspace: /data/workspace/advanced
-
-tasks:
-  - id: 1
-    description: "检查 GPU 可用性"
-    type: simple
-    command: "python check_gpu.py"
-    
-  - id: 2
-    description: "使用 GPU 训练"
-    type: loop
-    command: "CUDA_VISIBLE_DEVICES=0 python train.py"
-    completion_criteria: "accuracy >= 0.9"
-    condition: "has_gpu == true"
-    
-  - id: 3
-    description: "使用 CPU 训练"
-    type: loop
-    command: "python train.py"
-    completion_criteria: "accuracy >= 0.9"
-    condition: "has_gpu == false"
-```
-
-### 示例 18：并行任务
-
-并行执行多个独立任务。
-
-**配置文件**：
-
-```yaml
-version: 1
-workspace: /data/workspace/advanced
-
-tasks:
-  - id: 1
-    description: "并行数据处理"
-    type: parallel
-    commands:
-      - "python process_part1.py"
-      - "python process_part2.py"
-      - "python process_part3.py"
-    
-  - id: 2
-    description: "合并结果"
-    type: simple
-    command: "python merge_results.py"
-    depends_on: [1]
-```
-
-### 示例 19：Git 集成
-
-自动提交代码修改。
-
-**配置文件**：
-
-```yaml
-version: 1
-workspace: /data/workspace/advanced
-
-tasks:
-  - id: 1
-    description: "优化代码性能"
-    type: loop
-    max_retries: 5
-    completion_criteria: "性能提升 20%"
-    git:
-      auto_commit: true
-      commit_message: "perf: 优化 ${task.description}"
-      branch: "feature/performance-optimization"
-```
-
-### 示例 20：通知集成
-
-任务完成后发送通知。
-
-**配置文件**：
-
-```yaml
-version: 1
-workspace: /data/workspace/advanced
-
-tasks:
-  - id: 1
-    description: "长时间训练任务"
-    type: loop
-    max_retries: 10
-    completion_criteria: "accuracy >= 0.95"
-    timeout: 7200
-    notifications:
-      on_start:
-        - type: "email"
-          to: "team@example.com"
-          subject: "开始训练任务"
-      on_complete:
-        - type: "email"
-          to: "team@example.com"
-          subject: "训练完成"
-        - type: "slack"
-          channel: "#ml-team"
-          message: "训练完成，accuracy: ${accuracy}"
-      on_failure:
-        - type: "email"
-          to: "team@example.com"
-          subject: "训练失败"
+      - id: 1.2
+        name: "运行查询测试"
+        type: simple
+        completion_criteria: "所有查询响应时间 < 100ms"
+        initial_hint: "运行 python test_queries.py"
 ```
 
 ## 总结
 
-本文档提供了丰富的示例：
+所有示例都遵循统一的设计原则：
 
-- ✅ 基础用法示例
-- ✅ 机器学习场景
-- ✅ 代码质量场景
-- ✅ 性能优化场景
-- ✅ 数据处理场景
-- ✅ 高级用例
-
-每个示例都包含：
-- 完整的配置文件
-- 示例代码
-- 执行流程说明
-
-你可以根据实际需求调整这些示例。
+- ✅ 任务描述清晰明确
+- ✅ 完成标准可量化验证
+- ✅ 合理使用任务类型（simple / nested / ai_action / long_running）
+- ✅ 子任务粒度适中
+- ✅ 充分利用 AI 的决策能力
 
 如有其他问题，请参考：
 - [README.md](README.md) - 项目介绍

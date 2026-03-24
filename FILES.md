@@ -167,7 +167,7 @@ langgraph-todo-orchestrator/
           status: "completed"
           attempts: 3
         - id: 2.2
-          status: "running"
+          status: "in_progress"
           started_at: "2026-03-23 22:30:00"
           log_file: "logs/2.2.log"
   ```
@@ -345,10 +345,9 @@ tasks:
 | 状态 | 说明 |
 |------|------|
 | `pending` | 待执行 |
-| `in_progress` | 执行中 |
+| `in_progress` | 执行中（包括长时间任务正在后台运行） |
 | `completed` | 已完成 |
 | `failed` | 失败 |
-| `running` | 运行中（长时间任务专用） |
 
 ## 🚀 扩展文件
 

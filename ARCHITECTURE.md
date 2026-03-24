@@ -159,11 +159,14 @@ def execute_nested_task(task: dict):
         subtasks = get_pending_subtasks(task_id)
         
         # 2. 遍历并执行子任务
+        all_subtasks_completed = True
         for subtask in subtasks:
             result = execute_subtask(task_id, subtask)
             
             if not result.success:
-                # 3. 子任务失败，调用AI分析
+                all_subtasks_completed = False
+                
+                # 3. 子任务失败，立即停止后续子任务，调用AI分析
                 ai_decision = call_codebuddy(
                     prompt="分析子任务失败原因并决定重试策略",
                     context={
@@ -174,14 +177,18 @@ def execute_nested_task(task: dict):
                 )
                 
                 # 4. 根据AI决策重置状态
-                if ai_decision.retry_from != subtask.id:
-                    reset_subtasks_from(task_id, ai_decision.retry_from)
+                reset_subtasks_from(task_id, ai_decision.retry_from)
                 
                 # 5. 记录AI的决策
                 record_ai_decision(task_id, subtask.id, ai_decision)
                 
-                # 6. 跳出子任务循环，开始新一轮尝试
+                # 6. 跳出子任务循环，回到 while 开始新一轮尝试
                 break
+        
+        # 如果有子任务失败，跳过主任务评估，直接进入下一轮
+        if not all_subtasks_completed:
+            increase_task_attempts(task_id)
+            continue
         
         # 7. 所有子任务都完成了，调用AI判断主任务是否完成
         ai_evaluation = call_codebuddy(
@@ -334,8 +341,9 @@ class TaskOrchestrator:
 **优势**：
 - ✅ 不同主任务之间的实验完全隔离
 - ✅ 避免 context 污染（比如任务1修改了代码，任务2不受影响）
-- ✅ 可以并行执行多个主任务（每个使用独立的 context）
 - ✅ 便于调试和分析（可以追溯特定任务的完整对话历史）
+
+> **注意**：由于 CodeBuddy CLI 的 `--continue` 只能继续最近一次对话，当前主任务必须串行执行。`context_id` 主要用于状态记录和日志追踪。
 
 #### 2. 子任务级别的 Context 共享
 
@@ -453,6 +461,7 @@ for task in state['tasks']:
 1. **Context ID 生成规则**：
    - 使用任务 ID 作为 context ID：`task_{task_id}`
    - 确保唯一性：不同主任务的 context ID 不会冲突
+   - **注意**：`context_id` 是系统内部标识，用于状态记录和日志追踪。CodeBuddy CLI 的 `--continue` 参数只能继续**最近一次**对话，不支持指定某个 context ID 精确恢复。因此同一时刻只能有一个主任务在执行，或者需要额外的机制（如多用户隔离）来管理多 context。
 
 2. **--continue 参数的使用**：
    - 第一次调用：`continue_session=False`
@@ -465,8 +474,9 @@ for task in state['tasks']:
    - 超过最大尝试次数：清理 context 并记录日志
 
 4. **并发控制**：
-   - 每个主任务使用独立的 context，可以并发执行
+   - 由于 `--continue` 只能继续最近一次对话，主任务必须串行执行
    - 同一个主任务的子任务必须串行执行（共享 context）
+   - 如果未来 CodeBuddy 支持指定 context ID，可以扩展为并发执行
 
 ## 任务类型
 
@@ -522,13 +532,19 @@ for task in state['tasks']:
 ```
 1. 执行子任务 2.1（AI 修改代码）
    ↓
-2. 执行子任务 2.2（运行训练，可能很长）
+2. 如果子任务 2.1 失败：立即停止，AI 分析并决定重试策略
+   如果子任务 2.1 成功：继续
    ↓
-3. 所有子任务完成后，AI 判断主任务是否完成
+3. 执行子任务 2.2（运行训练，可能很长）
    ↓
-4. 如果未完成：AI 决定从哪个子任务重新开始
+4. 如果子任务 2.2 失败：立即停止，AI 分析并决定从哪个子任务重试
+   如果子任务 2.2 成功：继续
    ↓
-5. 循环直到满足条件或达到最大尝试次数
+5. 所有子任务完成后，AI 判断主任务是否完成
+   ↓
+6. 如果未完成：AI 决定从哪个子任务重新开始
+   ↓
+7. 循环直到满足条件或达到最大尝试次数
 ```
 
 ### 3. AI 操作任务 (ai_action)
@@ -764,8 +780,10 @@ tasks:
 pending → in_progress → completed/failed
            ↓              ↓
            ←------failed------←
-               (重试)
+               (AI决策重试)
 ```
+
+> `in_progress` 同时覆盖"正在执行"和"长时间任务后台运行"两种场景。
 
 #### 状态重置逻辑
 
@@ -840,13 +858,15 @@ def execute_long_running_task(subtask):
     log_file = f"logs/{subtask_id}.log"
     command = subtask["command"]
     
-    # 1. 构造 nohup 命令
-    full_command = f"nohup {command} > {log_file} 2>&1 &"
+    # 1. 构造 nohup 命令并记录 PID
+    pid_file = f"monitors/{subtask_id}.pid"
+    full_command = f"nohup {command} > {log_file} 2>&1 & echo $! > {pid_file}"
     
     # 2. 启动后台任务
     subprocess.run(full_command, shell=True)
-    mark_task_status(subtask_id, "running", 
+    mark_task_status(subtask_id, "in_progress", 
                     log_file=log_file, 
+                    pid_file=pid_file,
                     started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
     
     # 3. 启动监控
