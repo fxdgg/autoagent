@@ -36,6 +36,10 @@ env/
 .orchestrator_state/
 .orchestrator_state.json
 .codebuddy_cache/
+todos_state.yaml
+logs/
+monitors/
+orchestrator.log
 *.log
 
 # 测试

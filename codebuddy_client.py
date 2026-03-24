@@ -1,0 +1,386 @@
+"""
+CodeBuddy Client - Wraps CodeBuddy CLI interactions with context management.
+
+This module provides the CodeBuddyClient class that handles:
+- Calling CodeBuddy via subprocess
+- Managing conversation context (--continue flag)
+- Parsing JSON responses from AI
+- Timeout handling
+"""
+
+import subprocess
+import json
+import re
+import logging
+import os
+import shutil
+import sys
+import tempfile
+import threading
+import time
+from typing import Union, Optional, List
+
+logger = logging.getLogger(__name__)
+
+
+class AICallError(Exception):
+    """CodeBuddy call error (auth failure, response parse failure, etc.)"""
+    pass
+
+
+class CodeBuddyClient:
+    """
+    CodeBuddy CLI client with context management.
+    
+    Each main task should create its own CodeBuddyClient instance.
+    Subtasks within the same main task share context via --continue.
+    """
+
+    def __init__(
+        self,
+        codebuddy_path: str = "codebuddy",
+        model: str = "glm-5.0-ioa",
+        workspace: str = ".",
+        timeout: int = 3600,
+        context_id: str = None,
+    ):
+        """
+        Initialize CodeBuddyClient.
+        
+        Args:
+            codebuddy_path: Path to CodeBuddy executable
+            model: AI model to use
+            workspace: Working directory
+            timeout: Default timeout in seconds
+            context_id: Context identifier for logging/tracking
+        """
+        self.codebuddy_path = codebuddy_path
+        self.model = model
+        self.workspace = workspace
+        self.timeout = timeout
+        self.context_id = context_id
+        self._session_started = False
+
+    def ask(
+        self,
+        prompt: str,
+        expect_json: bool = False,
+        timeout: int = None,
+        continue_session: bool = False,
+    ) -> Union[str, dict]:
+        """
+        Send a prompt to CodeBuddy and get a response.
+        
+        Args:
+            prompt: The prompt to send
+            expect_json: Whether to parse the response as JSON
+            timeout: Override default timeout
+            continue_session: Whether to use --continue flag
+            
+        Returns:
+            str or dict: The AI response (parsed as JSON if expect_json=True)
+            
+        Raises:
+            AICallError: If the call fails
+        """
+        effective_timeout = timeout or self.timeout
+
+        # Build command args (without prompt - prompt goes via stdin)
+        cmd_args = self._build_command(continue_session)
+        
+        logger.info(
+            f"[{self.context_id}] Calling CodeBuddy "
+            f"(continue={continue_session}, timeout={effective_timeout}s)"
+        )
+        logger.debug(f"[{self.context_id}] Prompt: {prompt[:200]}...")
+        logger.debug(f"[{self.context_id}] Command: {cmd_args}")
+        
+        # Write prompt to a temp file to avoid shell escaping issues
+        prompt_file_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode='w', suffix='.txt', delete=False, encoding='utf-8'
+            ) as pf:
+                pf.write(prompt)
+                prompt_file_path = pf.name
+
+            # Build full command: pipe the temp file content as stdin
+            # codebuddy -y - reads prompt from stdin
+            if os.name == 'nt':
+                full_cmd = f'type "{prompt_file_path}" | {cmd_args}'
+            else:
+                full_cmd = f'cat "{prompt_file_path}" | {cmd_args}'
+
+            logger.debug(f"[{self.context_id}] Full command: {full_cmd}")
+
+            # Use shell=True so Windows can find .cmd/.bat wrappers
+            process = subprocess.Popen(
+                full_cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                cwd=self.workspace,
+                bufsize=1,  # Line-buffered
+            )
+
+            # Collect stderr in a background thread to avoid blocking
+            stderr_chunks = []
+            def _read_stderr():
+                for line in process.stderr:
+                    stderr_chunks.append(line)
+            stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+            stderr_thread.start()
+
+            # Stream stdout in real-time while collecting the full response
+            stdout_chunks = []
+            assistant_text_parts = []
+            deadline = time.monotonic() + effective_timeout
+            try:
+                for line in process.stdout:
+                    if time.monotonic() > deadline:
+                        process.kill()
+                        raise subprocess.TimeoutExpired(
+                            full_cmd, effective_timeout
+                        )
+                    stdout_chunks.append(line)
+                    # Parse stream-json lines for real-time display
+                    self._handle_stream_line(line.rstrip('\n'), assistant_text_parts)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                raise
+
+            process.wait()
+            stderr_thread.join(timeout=5)
+
+            stdout_text = "".join(stdout_chunks)
+            stderr_text = "".join(stderr_chunks)
+
+            if process.returncode != 0:
+                error_msg = stderr_text.strip() or stdout_text.strip()
+                # Check for authentication error
+                if "Authentication" in error_msg or "login" in error_msg.lower():
+                    raise AICallError(
+                        f"CodeBuddy authentication required. "
+                        f"Please run 'codebuddy -p \"login_test\"' first. "
+                        f"Error: {error_msg}"
+                    )
+                raise AICallError(
+                    f"CodeBuddy returned exit code {process.returncode}: {error_msg}"
+                )
+
+            # Combine all assistant text from stream-json events
+            response = "".join(assistant_text_parts).strip()
+            # Fallback: if stream-json parsing yielded nothing, use raw stdout
+            if not response:
+                response = stdout_text.strip()
+            if not response:
+                raise AICallError("CodeBuddy returned empty response")
+
+            self._session_started = True
+            logger.info(f"[{self.context_id}] Got response ({len(response)} chars)")
+            logger.debug(f"[{self.context_id}] Response: {response[:200]}...")
+
+            if expect_json:
+                return self._parse_json_response(response)
+            return response
+
+        except subprocess.TimeoutExpired:
+            raise AICallError(
+                f"CodeBuddy timed out after {effective_timeout}s"
+            )
+        except AICallError:
+            raise
+        except Exception as e:
+            raise AICallError(f"Failed to call CodeBuddy: {e}")
+        finally:
+            # Clean up temp file
+            if prompt_file_path:
+                try:
+                    os.unlink(prompt_file_path)
+                except OSError:
+                    pass
+
+    def _build_command(self, continue_session: bool) -> str:
+        """
+        Build the CodeBuddy CLI command string (without prompt).
+        
+        The prompt is passed separately via stdin pipe to avoid all shell
+        escaping issues. The command uses '-y -' to read prompt from stdin.
+        
+        Args:
+            continue_session: Whether to continue existing session
+            
+        Returns:
+            str: The command string (prompt will be piped via stdin)
+        """
+        parts = [self.codebuddy_path]
+        
+        # Use --print for non-interactive mode with stream-json for real-time output
+        parts.append("--print")
+        parts.extend(["--output-format", "stream-json"])
+        
+        if continue_session and self._session_started:
+            parts.append("--continue")
+        
+        parts.extend(["--model", self.model])
+        # -y - means: accept all, read prompt from stdin
+        parts.extend(["-y", "-"])
+        
+        return " ".join(parts)
+
+    def _handle_stream_line(self, line: str, assistant_text_parts: list):
+        """
+        Parse a single line of stream-json output and display relevant info in real-time.
+        
+        stream-json format produces one JSON object per line. Key event types:
+          - "assistant": AI message with content array (text blocks and/or tool_use)
+          - "user": Contains tool_result from tool executions
+          - "result": Final result summary with "result" text
+          - "system": System/session init messages
+          - "topic": Conversation topic
+        
+        Args:
+            line: A single line of stream-json output
+            assistant_text_parts: List to collect assistant text for final response
+        """
+        if not line.strip():
+            return
+        
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            # Not valid JSON - print raw line as fallback
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+            return
+        
+        event_type = event.get("type", "")
+        
+        if event_type == "assistant":
+            # AI message - content is in message.content[] array
+            message = event.get("message", {})
+            content_blocks = message.get("content", [])
+            for block in content_blocks:
+                block_type = block.get("type", "")
+                if block_type == "text":
+                    text = block.get("text", "")
+                    if text:
+                        assistant_text_parts.append(text)
+                        sys.stdout.write(text)
+                        sys.stdout.flush()
+                elif block_type == "tool_use":
+                    tool_name = block.get("name", "unknown")
+                    tool_input = block.get("input", {})
+                    self._display_tool_use(tool_name, tool_input)
+        
+        elif event_type == "user":
+            # User message containing tool_result
+            message = event.get("message", {})
+            content_blocks = message.get("content", [])
+            if isinstance(content_blocks, list):
+                for block in content_blocks:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        content = block.get("content", "")
+                        if isinstance(content, str) and content:
+                            preview = content[:500]
+                            if len(content) > 500:
+                                preview += f"... ({len(content)} chars total)"
+                            sys.stdout.write(f"   ↳ {preview}\n")
+                            sys.stdout.flush()
+        
+        elif event_type == "result":
+            # Final result
+            result_text = event.get("result", "")
+            if result_text and not assistant_text_parts:
+                assistant_text_parts.append(result_text)
+            # Always print a summary line
+            is_error = event.get("is_error", False)
+            duration_ms = event.get("duration_ms", 0)
+            num_turns = event.get("num_turns", 0)
+            status = "❌ Error" if is_error else "✅ Done"
+            sys.stdout.write(
+                f"\n--- {status} ({num_turns} turns, {duration_ms/1000:.1f}s) ---\n"
+            )
+            sys.stdout.flush()
+
+    def _display_tool_use(self, tool_name: str, tool_input: dict):
+        """Display a tool use event with a readable summary."""
+        if tool_name == "Bash":
+            cmd = tool_input.get("command", "")
+            sys.stdout.write(f"\n🔧 [{tool_name}] {cmd}\n")
+        elif tool_name in ("Edit", "Write", "MultiEdit"):
+            path = tool_input.get("file_path", tool_input.get("filePath", ""))
+            sys.stdout.write(f"\n📝 [{tool_name}] {path}\n")
+        elif tool_name == "Read":
+            path = tool_input.get("file_path", tool_input.get("filePath", ""))
+            sys.stdout.write(f"\n📖 [{tool_name}] {path}\n")
+        elif tool_name in ("Glob", "Grep"):
+            pattern = tool_input.get("pattern", tool_input.get("regex", ""))
+            sys.stdout.write(f"\n🔍 [{tool_name}] {pattern}\n")
+        else:
+            sys.stdout.write(f"\n🔧 [{tool_name}]\n")
+        sys.stdout.flush()
+
+    def _parse_json_response(self, response: str) -> dict:
+        """
+        Extract and parse JSON from AI response.
+        
+        The AI response might contain markdown code blocks or extra text
+        surrounding the JSON. This method tries multiple strategies.
+        
+        Args:
+            response: Raw AI response text
+            
+        Returns:
+            dict: Parsed JSON object
+            
+        Raises:
+            AICallError: If JSON parsing fails
+        """
+        # Strategy 1: Try parsing the entire response as JSON
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            pass
+        
+        # Strategy 2: Extract JSON from markdown code block
+        json_patterns = [
+            r'```json\s*\n(.*?)\n\s*```',
+            r'```\s*\n(.*?)\n\s*```',
+        ]
+        for pattern in json_patterns:
+            match = re.search(pattern, response, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    continue
+        
+        # Strategy 3: Find the first { ... } block
+        brace_depth = 0
+        start_idx = None
+        for i, char in enumerate(response):
+            if char == '{':
+                if brace_depth == 0:
+                    start_idx = i
+                brace_depth += 1
+            elif char == '}':
+                brace_depth -= 1
+                if brace_depth == 0 and start_idx is not None:
+                    try:
+                        return json.loads(response[start_idx:i + 1])
+                    except json.JSONDecodeError:
+                        start_idx = None
+        
+        raise AICallError(
+            f"Failed to parse JSON from CodeBuddy response. "
+            f"Response preview: {response[:500]}"
+        )
+
+    def reset_session(self):
+        """Reset the session state, so next call won't use --continue."""
+        self._session_started = False
+        logger.info(f"[{self.context_id}] Session reset")
