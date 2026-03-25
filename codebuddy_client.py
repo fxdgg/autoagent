@@ -229,7 +229,7 @@ class CodeBuddyClient:
         parts = [self.codebuddy_path]
         
         # Use --print for non-interactive mode with stream-json for real-time output
-        parts.append("--print")
+        parts.append("--debug --verbose --max-turns 500 --print")
         parts.extend(["--output-format", "stream-json"])
         
         if continue_session and self._session_started:
@@ -320,9 +320,11 @@ class CodeBuddyClient:
                             )
         
         elif event_type == "result":
-            # Final result
+            # Final result - always append result_text so that completion
+            # markers (e.g. "✅ COMPLETED") emitted in the result event
+            # are visible to _check_completion().
             result_text = event.get("result", "")
-            if result_text and not assistant_text_parts:
+            if result_text:
                 assistant_text_parts.append(result_text)
             # Always print a summary line
             is_error = event.get("is_error", False)
