@@ -16,6 +16,8 @@ Usage:
 import os
 import sys
 import time
+import string
+import random
 import argparse
 import logging
 import yaml
@@ -48,10 +50,56 @@ class TodoOrchestrator:
     - Create CodeBuddyClient instances per main task for context isolation
     """
 
+    @staticmethod
+    def _resolve_log_session_dir(log_dir: str, workspace: str) -> str:
+        """
+        Resolve the final log session directory by reading or generating
+        a project-specific subdirectory name stored in .autoagent_log.
+
+        The .autoagent_log file lives in the *workspace* (project) directory
+        and contains a single line like ``cufftdx_optimization_ko53bi1b``.
+        The returned path is ``<log_dir>/<that_line>``.
+
+        If the file does not yet exist it is created with a freshly
+        generated name of the form ``<dirname>_<random8chars>``.
+
+        Args:
+            log_dir: Root log directory (absolute path)
+            workspace: Project / workspace directory (absolute path)
+
+        Returns:
+            str: Absolute path to the project-specific session directory.
+        """
+        marker_file = os.path.join(workspace, ".autoagent_log")
+
+        # Try to read an existing marker
+        if os.path.exists(marker_file):
+            try:
+                with open(marker_file, "r", encoding="utf-8") as f:
+                    subdir_name = f.read().strip()
+                if subdir_name:
+                    return os.path.join(log_dir, subdir_name)
+            except Exception:
+                pass  # Fall through to generate a new one
+
+        # Generate a new subdirectory name: <basename>_<random8>
+        basename = os.path.basename(os.path.abspath(workspace))
+        rand_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        subdir_name = f"{basename}_{rand_suffix}"
+
+        # Persist it so that subsequent runs reuse the same directory
+        try:
+            with open(marker_file, "w", encoding="utf-8") as f:
+                f.write(subdir_name + "\n")
+        except Exception as e:
+            logger.warning(f"Failed to write {marker_file}: {e}")
+
+        return os.path.join(log_dir, subdir_name)
+
     def __init__(
         self,
         todos_file: str = "todos.yaml",
-        state_file: str = "todos_state.yaml",
+        state_file: str = None,
         provider: AIProvider = None,
         workspace: str = ".",
         timeout: int = 3600,
@@ -67,18 +115,21 @@ class TodoOrchestrator:
         
         Args:
             todos_file: Path to the task configuration YAML
-            state_file: Path to the state persistence file
+            state_file: (Deprecated, ignored) State file path is now derived
+                        from log_dir automatically.
             provider: AI provider instance (takes precedence over legacy params)
             workspace: Working directory for AI tool
             timeout: Default timeout for AI calls
-            log_dir: Root directory for conversation logs (None to disable)
+            log_dir: Root directory for all output files (conversation logs,
+                     state files, orchestrator.log).  Defaults to ".autoagent"
+                     relative to the current working directory.
             ideas_file: Path to ideas.md file (None to disable ideas watching)
             idle_interval: Seconds between idle checks for new ideas (default: 30)
             codebuddy_path: (Legacy) Path to CodeBuddy executable
             model: (Legacy) AI model to use
         """
         self.todos_file = todos_file
-        self.workspace = workspace
+        self.workspace = os.path.abspath(workspace)
         self.timeout = timeout
         self.idle_interval = idle_interval
         
@@ -95,20 +146,31 @@ class TodoOrchestrator:
             from ai_providers import CodeBuddyProvider
             self.provider = CodeBuddyProvider()
         
-        self.state_manager = StateManager(state_file)
-        self.conv_logger = ConversationLogger(log_dir) if log_dir else None
+        # ── Resolve session log directory ──────────────────────────
+        # log_dir defaults to ".autoagent" relative to CWD.
+        if log_dir is None:
+            log_dir = os.path.abspath(".autoagent")
+        else:
+            log_dir = os.path.abspath(log_dir)
+
+        self.session_dir = self._resolve_log_session_dir(log_dir, self.workspace)
+        os.makedirs(self.session_dir, exist_ok=True)
+
+        # Derived paths inside the session directory
+        resolved_state_file = os.path.join(self.session_dir, "todos_state.yaml")
+        resolved_ideas_processed = os.path.join(self.session_dir, ".ideas_processed.yaml")
+
+        self.state_manager = StateManager(resolved_state_file)
+        self.conv_logger = ConversationLogger(self.session_dir)
         self.simple_executor = SimpleTaskExecutor()
         self.nested_executor = NestedTaskExecutor()
         
         # Ideas watcher (optional)
         if ideas_file:
-            processed_state = os.path.join(
-                os.path.dirname(state_file) or '.', '.ideas_processed.yaml'
-            )
             self.ideas_watcher = IdeasWatcher(
                 ideas_file=ideas_file,
                 todos_file=todos_file,
-                processed_state_file=processed_state,
+                processed_state_file=resolved_ideas_processed,
             )
         else:
             self.ideas_watcher = None
@@ -556,18 +618,25 @@ class TodoOrchestrator:
                 pass
 
 
-def setup_logging(verbose: bool = False):
-    """Configure logging."""
+def setup_logging(verbose: bool = False, log_file: str = None):
+    """Configure logging.
+    
+    Args:
+        verbose: Enable debug-level logging.
+        log_file: Path to orchestrator.log. If None, only logs to stdout.
+    """
     level = logging.DEBUG if verbose else logging.INFO
+    
+    handlers = [logging.StreamHandler(sys.stdout)]
+    if log_file:
+        os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
+        handlers.append(logging.FileHandler(log_file, encoding='utf-8'))
     
     logging.basicConfig(
         level=level,
         format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S',
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler('orchestrator.log', encoding='utf-8'),
-        ],
+        handlers=handlers,
     )
 
 
@@ -630,11 +699,6 @@ Examples:
         '--config', '-c',
         default='todos.yaml',
         help='Path to task configuration file (default: todos.yaml)',
-    )
-    parser.add_argument(
-        '--state', '-s',
-        default='todos_state.yaml',
-        help='Path to state file (default: todos_state.yaml)',
     )
     parser.add_argument(
         '--task', '-t',
@@ -713,7 +777,8 @@ Examples:
     parser.add_argument(
         '--log-dir',
         default=None,
-        help='Root directory for conversation logs (e.g. logs). Disabled if not set.',
+        help='Root directory for all output files: conversation logs, state files, '
+             'and orchestrator.log. Relative to CWD. (default: .autoagent)',
     )
     parser.add_argument(
         '--ideas',
@@ -735,8 +800,23 @@ Examples:
     
     args = parser.parse_args()
     
-    # Setup logging
-    setup_logging(verbose=args.verbose)
+    # Resolve log_dir early so we can point orchestrator.log there too.
+    # The actual session sub-directory is determined later by the
+    # orchestrator (via .autoagent_log), but we need log_dir itself
+    # for the orchestrator.log file handler.
+    _log_dir_raw = args.log_dir  # may be None
+    _log_dir_abs = os.path.abspath(_log_dir_raw) if _log_dir_raw else os.path.abspath(".autoagent")
+
+    # Resolve session dir for orchestrator.log placement
+    _workspace_abs = os.path.abspath(args.workspace)
+    _session_dir = TodoOrchestrator._resolve_log_session_dir(_log_dir_abs, _workspace_abs)
+    os.makedirs(_session_dir, exist_ok=True)
+
+    # Setup logging – orchestrator.log goes into the session directory
+    setup_logging(
+        verbose=args.verbose,
+        log_file=os.path.join(_session_dir, "orchestrator.log"),
+    )
     
     try:
         # Handle --list-providers
@@ -784,11 +864,10 @@ Examples:
         # Create orchestrator
         orchestrator = TodoOrchestrator(
             todos_file=args.config,
-            state_file=args.state,
             provider=provider,
             workspace=args.workspace,
             timeout=args.timeout,
-            log_dir=args.log_dir,
+            log_dir=_log_dir_raw,
             ideas_file=args.ideas,
             idle_interval=args.idle_interval,
         )
@@ -829,7 +908,7 @@ Examples:
             # Finalize conversation logs
             if orchestrator.conv_logger:
                 orchestrator.conv_logger.finalize()
-                print(f"📝 Conversation logs saved to: {orchestrator.conv_logger.get_session_dir()}")
+                print(f"📝 Conversation logs saved to: {orchestrator.session_dir}")
             
             # Exit with error code if any tasks failed
             if results['failed_tasks'] > 0:
@@ -842,7 +921,7 @@ Examples:
         # Finalize conversation logs even on interrupt
         if 'orchestrator' in dir() and orchestrator.conv_logger:
             orchestrator.conv_logger.finalize()
-            print(f"\n📝 Conversation logs saved to: {orchestrator.conv_logger.get_session_dir()}")
+            print(f"\n📝 Conversation logs saved to: {orchestrator.session_dir}")
         print(f"\n\n⚠️  Interrupted by user. State has been saved.")
         print(f"    Run again to resume from where you left off.")
         sys.exit(130)

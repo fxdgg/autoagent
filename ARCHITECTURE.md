@@ -94,7 +94,7 @@ orchestrator.py
 **核心方法**：
 ```python
 class TaskOrchestrator:
-    def __init__(self, todos_file: str = "todos.yaml", state_file: str = "todos_state.yaml")
+    def __init__(self, todos_file: str = "todos.yaml", log_dir: str = None)
     def load_todos(self) -> list
     def load_state(self) -> dict
     def save_state(self, state: dict)
@@ -813,11 +813,13 @@ pending → in_progress → completed/failed
 
 ```python
 class TaskOrchestrator:
-    def __init__(self, todos_file="todos.yaml", state_file="todos_state.yaml"):
+    def __init__(self, todos_file="todos.yaml", log_dir=None):
         self.todos_file = todos_file
-        self.state_file = state_file
+        # log_dir defaults to ".autoagent" (relative to CWD)
+        # Session directory resolved via .autoagent_log in workspace
+        self.session_dir = self._resolve_log_session_dir(log_dir, workspace)
+        self.state = StateManager(os.path.join(self.session_dir, "todos_state.yaml"))
         self.todos = self.load_todos()
-        self.state = self.load_state()
     
     def load_state(self):
         try:
@@ -955,24 +957,38 @@ autoagent/
 ├── monitor.py                # 长时间任务监控
 │
 ├── todos.yaml                # 任务定义
-├── todos_state.yaml          # 任务状态（自动生成）
-├── .ideas_processed.yaml     # Ideas 处理记录（自动生成）
 ├── ideas.md                  # 用户的想法记录（可选）
+├── .autoagent_log            # 项目对应的日志子文件夹名（自动生成）
 │
-├── logs/                     # 对话日志目录
-│   └── 202603241542/         # 按时间戳组织的会话目录
-│       ├── task_1.md          # 简单任务的对话日志
-│       ├── task_2.md          # 嵌套任务的索引文件
-│       └── subtask_2/         # 嵌套任务的子任务目录
-│           ├── task_2.1.md
-│           ├── task_2.2.md
-│           └── _decisions.md  # AI 决策日志
+├── <log_dir>/                # 日志根目录（默认 .autoagent，相对 CWD）
+│   └── <project>_<random>/   # 项目专属会话目录（由 .autoagent_log 指定）
+│       ├── orchestrator.log           # Orchestrator 运行日志
+│       ├── todos_state.yaml           # 任务状态（自动生成）
+│       ├── .ideas_processed.yaml      # Ideas 处理记录（自动生成）
+│       └── conversations/             # 对话日志目录
+│           ├── task_1.md              # 简单任务的对话日志
+│           ├── task_2.md              # 嵌套任务的索引文件
+│           └── subtask_2/             # 嵌套任务的子任务目录
+│               ├── task_2.1.md
+│               ├── task_2.2.md
+│               └── _decisions.md      # AI 决策日志
 │
 ├── monitors/                 # 监控脚本
 │   ├── 2.2.sh
 │   └── 2.2.log
 └── README.md
 ```
+
+### 日志目录管理（.autoagent_log）
+
+为了支持多个项目共用同一个日志根目录，系统在**项目目录**中维护一个 `.autoagent_log` 文件，
+内容为该项目对应的日志子文件夹名称，例如 `cufftdx_optimization_ko53bi1b`。
+
+- 首次运行时自动生成：`<项目目录名>_<随机8位字符>`
+- 后续运行读取该文件，确保同一个项目始终写入同一个日志子文件夹
+- 最终日志路径为 `<log_dir>/<.autoagent_log中的内容>/`
+- 所有运行时状态文件（`todos_state.yaml`、`orchestrator.log`、`.ideas_processed.yaml`、`conversations/`）
+  均位于该目录下，**不会出现在项目目录中**
 
 ## 系统与AI的协作流程图
 
@@ -1373,17 +1389,21 @@ class ConversationLogger:
 
 ### 目录结构
 
-每次 Orchestrator 运行会创建一个按时间戳命名的会话目录：
+每次 Orchestrator 运行会在项目对应的会话目录下使用固定的 `conversations` 子目录：
 
 ```
-logs/
-└── 202603241542/                  # 时间戳（YYYYMMDDHHmm）
-    ├── task_1.md                   # 简单任务：完整对话记录
-    ├── task_2.md                   # 嵌套任务：索引文件（含子任务链接）
-    └── subtask_2/                  # 嵌套任务的子任务目录
-        ├── task_2.1.md             # 子任务 2.1 的对话记录
-        ├── task_2.2.md             # 子任务 2.2 的对话记录
-        └── _decisions.md           # AI 决策日志（失败分析、主任务评估）
+<log_dir>/
+└── cufftdx_optimization_ko53bi1b/   # 项目专属（由 .autoagent_log 指定）
+    ├── orchestrator.log               # Orchestrator 运行日志
+    ├── todos_state.yaml               # 任务状态
+    ├── .ideas_processed.yaml          # Ideas 处理记录
+    └── conversations/                 # 对话日志（固定目录名）
+        ├── task_1.md                   # 简单任务：完整对话记录
+        ├── task_2.md                   # 嵌套任务：索引文件（含子任务链接）
+        └── subtask_2/                  # 嵌套任务的子任务目录
+            ├── task_2.1.md             # 子任务 2.1 的对话记录
+            ├── task_2.2.md             # 子任务 2.2 的对话记录
+            └── _decisions.md           # AI 决策日志（失败分析、主任务评估）
 ```
 
 ### 日志内容格式
@@ -1423,11 +1443,18 @@ AI 的完整响应内容...
 
 ### 使用方式
 
-通过 CLI 的 `--log-dir` 参数启用：
+通过 CLI 的 `--log-dir` 参数指定日志根目录（默认 `.autoagent`，相对于 CWD）：
 
 ```bash
+# 使用默认日志目录 .autoagent（相对于当前工作目录）
+python orchestrator.py
+
+# 指定自定义日志根目录
 python orchestrator.py --log-dir logs
 ```
+
+日志根目录下，会自动创建以项目名+随机后缀命名的子目录。
+子目录名存储在项目目录的 `.autoagent_log` 文件中，确保同一项目多次运行复用同一目录。
 
 日志在 Orchestrator 执行结束时（或 Ctrl+C 中断时）会调用 `finalize()` 生成最终的索引文件。
 
@@ -1476,7 +1503,7 @@ class IdeasWatcher:
 
 ### 去重机制
 
-使用 SHA256 hash 跟踪已处理的想法，存储在 `.ideas_processed.yaml` 中：
+使用 SHA256 hash 跟踪已处理的想法，存储在会话目录的 `.ideas_processed.yaml` 中：
 
 ```yaml
 processed_hashes:

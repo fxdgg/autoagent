@@ -21,8 +21,8 @@ class ConversationLogger:
     Manages conversation log output to Markdown files.
 
     Directory structure example (nested task):
-        logs/
-        └── 202603241542/
+        <session_dir>/
+        └── conversations/
             ├── task_1.md          (index with links to subtasks)
             └── subtask_1/
                 ├── task_1.1.md
@@ -30,22 +30,24 @@ class ConversationLogger:
                 └── ...
 
     Directory structure example (simple task):
-        logs/
-        └── 202603241542/
+        <session_dir>/
+        └── conversations/
             └── task_1.md          (full conversation content)
     """
 
-    def __init__(self, log_root_dir: str):
+    def __init__(self, session_dir: str):
         """
         Initialize ConversationLogger.
 
         Args:
-            log_root_dir: Root directory for logs (e.g. "logs")
+            session_dir: Project-specific session directory
+                         (e.g. logs/cufftdx_optimization_ko53bi1b).
+                         A fixed ``conversations`` subdirectory will be
+                         created inside it.
         """
-        self.log_root_dir = log_root_dir
-        # Create timestamped session directory
-        timestamp = time.strftime("%Y%m%d%H%M")
-        self.session_dir = os.path.join(log_root_dir, timestamp)
+        self.log_root_dir = session_dir
+        # Use a fixed "conversations" subdirectory (no timestamp)
+        self.session_dir = os.path.join(session_dir, "conversations")
         os.makedirs(self.session_dir, exist_ok=True)
         logger.info(f"Conversation log directory: {self.session_dir}")
 

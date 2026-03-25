@@ -24,9 +24,7 @@ class TodoOrchestrator:
     def __init__(
         self,
         todos_file: str = "todos.yaml",
-        state_file: str = "todos_state.yaml",
-        codebuddy_path: str = "codebuddy",
-        model: str = "glm-5.0-ioa",
+        provider: AIProvider = None,
         workspace: str = ".",
         timeout: int = 3600,
         log_dir: str = None,
@@ -40,14 +38,15 @@ class TodoOrchestrator:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
-| `state_file` | str | "todos_state.yaml" | 状态持久化文件路径 |
-| `codebuddy_path` | str | "codebuddy" | CodeBuddy 可执行文件路径 |
-| `model` | str | "glm-5.0-ioa" | AI 模型 |
-| `workspace` | str | "." | 工作目录 |
+| `provider` | AIProvider | None | AI 提供者实例（支持 CodeBuddy/Claude/Gemini） |
+| `workspace` | str | "." | 工作目录（项目根目录） |
 | `timeout` | int | 3600 | AI 调用超时时间（秒） |
-| `log_dir` | str | None | 对话日志根目录（None 则禁用） |
+| `log_dir` | str | None | 日志根目录（相对于 CWD，默认 `.autoagent`）|
 | `ideas_file` | str | None | ideas.md 文件路径（None 则禁用 ideas 监控） |
 | `idle_interval` | int | 30 | idle 模式检查间隔（秒） |
+
+> **注意**：`state_file` 参数已废弃。`todos_state.yaml`、`orchestrator.log`、`.ideas_processed.yaml` 等运行时文件
+> 现在统一放置在由 `log_dir` + `.autoagent_log` 推导出的会话目录下，不再出现在项目目录中。
 
 ### 方法
 
@@ -336,16 +335,16 @@ class SubtaskExecutor:
 
 ```python
 class ConversationLogger:
-    def __init__(self, log_root_dir: str)
+    def __init__(self, session_dir: str)
 ```
 
 ### 构造函数参数
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `log_root_dir` | str | - | 日志根目录（如 "logs"） |
+| `session_dir` | str | - | 项目专属会话目录 |
 
-初始化时会自动创建 `<log_root_dir>/<YYYYMMDDHHmm>/` 时间戳会话目录。
+初始化时会在 `session_dir` 下创建固定的 `conversations/` 子目录。
 
 ### 方法
 
@@ -434,7 +433,7 @@ class IdeasWatcher:
 |------|------|--------|------|
 | `ideas_file` | str | "ideas.md" | Ideas 文件路径 |
 | `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
-| `processed_state_file` | str | ".ideas_processed.yaml" | 已处理状态记录文件 |
+| `processed_state_file` | str | ".ideas_processed.yaml" | 已处理状态记录文件（位于会话目录下） |
 
 ### 方法
 
@@ -486,7 +485,7 @@ def reset(self)
 
 ### TaskState
 
-任务状态结构（持久化在 `todos_state.yaml` 中）。
+任务状态结构（持久化在会话目录的 `todos_state.yaml` 中）。
 
 ```python
 class TaskState(TypedDict, total=False):
@@ -568,15 +567,15 @@ class AICallError(Exception):
 from orchestrator import TodoOrchestrator
 
 # 1. 基本用法：创建 Orchestrator 并运行所有任务
+# log_dir 默认为 ".autoagent"（相对于 CWD）
 orchestrator = TodoOrchestrator(
     todos_file="todos.yaml",
-    state_file="todos_state.yaml",
 )
 
 results = orchestrator.run(skip_completed=True)
 print(f"成功: {results['successful_tasks']} / 失败: {results['failed_tasks']}")
 
-# 2. 带对话日志：记录所有 AI 交互
+# 2. 指定日志目录：所有运行时文件都在该目录下
 orchestrator = TodoOrchestrator(
     todos_file="todos.yaml",
     log_dir="logs",
