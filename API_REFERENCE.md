@@ -7,6 +7,8 @@
 - [TodoOrchestrator](#todoorchestrator)
 - [CodeBuddyClient](#codebuddyclient)
 - [任务执行器](#任务执行器)
+- [ConversationLogger](#conversationlogger)
+- [IdeasWatcher](#ideaswatcher)
 - [状态类型](#状态类型)
 - [配置类型](#配置类型)
 - [异常类](#异常类)
@@ -23,7 +25,13 @@ class TodoOrchestrator:
         self,
         todos_file: str = "todos.yaml",
         state_file: str = "todos_state.yaml",
-        codebuddy_client: CodeBuddyClient = None,
+        codebuddy_path: str = "codebuddy",
+        model: str = "glm-5.0-ioa",
+        workspace: str = ".",
+        timeout: int = 3600,
+        log_dir: str = None,
+        ideas_file: str = None,
+        idle_interval: int = 30,
     )
 ```
 
@@ -33,17 +41,24 @@ class TodoOrchestrator:
 |------|------|--------|------|
 | `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
 | `state_file` | str | "todos_state.yaml" | 状态持久化文件路径 |
-| `codebuddy_client` | CodeBuddyClient | None | CodeBuddy 客户端（默认自动创建） |
+| `codebuddy_path` | str | "codebuddy" | CodeBuddy 可执行文件路径 |
+| `model` | str | "glm-5.0-ioa" | AI 模型 |
+| `workspace` | str | "." | 工作目录 |
+| `timeout` | int | 3600 | AI 调用超时时间（秒） |
+| `log_dir` | str | None | 对话日志根目录（None 则禁用） |
+| `ideas_file` | str | None | ideas.md 文件路径（None 则禁用 ideas 监控） |
+| `idle_interval` | int | 30 | idle 模式检查间隔（秒） |
 
 ### 方法
 
-#### load_todos
+#### load_todos / reload_todos
 
 ```python
-def load_todos(self) -> list
+def _load_todos(self, allow_empty: bool = False) -> list
+def reload_todos(self) -> None
 ```
 
-加载任务配置文件，返回任务列表 `List[dict]`。
+加载任务配置。`_load_todos` 从 YAML 文件加载并验证；`reload_todos` 在新任务追加后重新加载。`allow_empty=True` 时允许空配置（用于 idle 模式）。
 
 #### load_state / save_state
 
@@ -98,7 +113,27 @@ def get_status(self) -> dict
 def reset(self) -> None
 ```
 
-获取当前执行状态 / 重置所有状态。
+获取当前执行状态 / 重置所有状态（包括 ideas 处理记录）。
+
+#### check_and_process_ideas
+
+```python
+def check_and_process_ideas(self) -> int
+```
+
+检查 ideas.md 是否有新内容，如果有则调用 AI 分解为 TODO 任务并追加到 todos.yaml。返回处理的新 idea 数量。
+
+#### run_with_idle
+
+```python
+def run_with_idle(
+    self,
+    task_id: int = None,
+    skip_completed: bool = True,
+) -> None
+```
+
+运行所有待处理任务，然后进入 idle 模式持续等待新 ideas。循环流程：处理新 ideas → 执行任务 → idle 等待 → 检测到变化后循环。通过 Ctrl+C 退出。
 
 ---
 
@@ -293,6 +328,160 @@ class SubtaskExecutor:
 
 ---
 
+## ConversationLogger
+
+对话日志记录器，将 AI 交互的完整内容输出到 Markdown 文件。
+
+### 类定义
+
+```python
+class ConversationLogger:
+    def __init__(self, log_root_dir: str)
+```
+
+### 构造函数参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `log_root_dir` | str | - | 日志根目录（如 "logs"） |
+
+初始化时会自动创建 `<log_root_dir>/<YYYYMMDDHHmm>/` 时间戳会话目录。
+
+### 方法
+
+#### log_conversation
+
+```python
+def log_conversation(
+    self,
+    task_id: str,
+    task_name: str,
+    prompt: str,
+    response: str,
+    attempt: int,
+    parent_task_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
+)
+```
+
+记录一次对话（prompt + response）。对于顶层简单任务，写入 `task_<id>.md`；对于嵌套任务的子任务，写入 `subtask_<parent_id>/task_<id>.md`。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `task_id` | str | 任务 ID |
+| `task_name` | str | 任务名称 |
+| `prompt` | str | 发送给 AI 的提示词 |
+| `response` | str | AI 的响应 |
+| `attempt` | int | 尝试次数 |
+| `parent_task_id` | str | 父任务 ID（子任务时提供） |
+| `metadata` | dict | 额外信息（如 `{"type": "failure_analysis"}`） |
+
+#### log_nested_task_ai_call
+
+```python
+def log_nested_task_ai_call(
+    self,
+    task_id: str,
+    task_name: str,
+    call_type: str,
+    prompt: str,
+    response: str,
+    round_num: int,
+    metadata: Optional[dict] = None,
+)
+```
+
+记录嵌套任务的 AI 决策调用（失败分析、主任务评估），写入 `subtask_<id>/_decisions.md`。
+
+#### register_nested_task
+
+```python
+def register_nested_task(self, task_id: str, task_name: str, subtask_ids: list)
+```
+
+注册嵌套任务及其子任务 ID 列表，创建子任务目录并准备索引文件。
+
+#### build_index_file / finalize
+
+```python
+def build_index_file(self, task_id: str)
+def finalize(self)
+```
+
+构建/重建嵌套任务的索引文件（含子任务和 AI 决策的链接）。`finalize()` 在执行结束时调用，重建所有索引。
+
+---
+
+## IdeasWatcher
+
+Ideas 文件监控器，监控 ideas.md 并通过 AI 将想法分解为结构化 TODO 任务。
+
+### 类定义
+
+```python
+class IdeasWatcher:
+    def __init__(
+        self,
+        ideas_file: str = "ideas.md",
+        todos_file: str = "todos.yaml",
+        processed_state_file: str = None,
+    )
+```
+
+### 构造函数参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `ideas_file` | str | "ideas.md" | Ideas 文件路径 |
+| `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
+| `processed_state_file` | str | ".ideas_processed.yaml" | 已处理状态记录文件 |
+
+### 方法
+
+#### has_new_ideas
+
+```python
+def has_new_ideas(self) -> bool
+```
+
+检查 ideas.md 是否在上次检查后被修改。基于文件修改时间的快速检测。
+
+#### parse_ideas
+
+```python
+def parse_ideas(self) -> List[dict]
+```
+
+解析 ideas.md，提取各个 idea 段落。返回未处理 ideas 的列表，每项包含：
+
+```python
+{
+    'title': str,     # 标题（来自 heading 或首行）
+    'content': str,   # 原始内容
+    'body': str,      # 正文（不含标题）
+    'hash': str,      # SHA256 hash（前 16 位，用于去重）
+}
+```
+
+#### process_new_ideas
+
+```python
+def process_new_ideas(self, client: CodeBuddyClient) -> int
+```
+
+处理所有新 ideas：解析 → 调用 AI 分解 → 追加到 todos.yaml。返回处理的 idea 数量。
+
+#### mark_all_processed / reset
+
+```python
+def mark_all_processed(self)
+def reset(self)
+```
+
+标记所有当前 ideas 为已处理（不生成任务） / 重置所有处理状态。
+
+---
+
 ## 状态类型
 
 ### TaskState
@@ -376,28 +565,41 @@ class AICallError(Exception):
 ## 完整使用示例
 
 ```python
-from todo_orchestrator import TodoOrchestrator, CodeBuddyClient
+from orchestrator import TodoOrchestrator
 
-# 1. 创建 Orchestrator
+# 1. 基本用法：创建 Orchestrator 并运行所有任务
 orchestrator = TodoOrchestrator(
     todos_file="todos.yaml",
     state_file="todos_state.yaml",
 )
 
-# 2. 验证配置
-if not orchestrator.validate_config():
-    print("配置无效")
-    exit(1)
-
-# 3. 运行所有任务
 results = orchestrator.run(skip_completed=True)
+print(f"成功: {results['successful_tasks']} / 失败: {results['failed_tasks']}")
 
-print(f"总任务数: {results['total_tasks']}")
-print(f"成功: {results['successful_tasks']}")
-print(f"失败: {results['failed_tasks']}")
+# 2. 带对话日志：记录所有 AI 交互
+orchestrator = TodoOrchestrator(
+    todos_file="todos.yaml",
+    log_dir="logs",
+)
+results = orchestrator.run()
+if orchestrator.conv_logger:
+    orchestrator.conv_logger.finalize()
 
-for task_id, success in results['results'].items():
-    print(f"  {'✅' if success else '❌'} 任务 {task_id}")
+# 3. 带 Ideas 监控：自动处理 ideas.md
+orchestrator = TodoOrchestrator(
+    todos_file="todos.yaml",
+    ideas_file="ideas.md",
+)
+orchestrator.check_and_process_ideas()  # 处理新 ideas 后运行任务
+results = orchestrator.run()
+
+# 4. Idle 模式：持续运行等待新 ideas
+orchestrator = TodoOrchestrator(
+    todos_file="todos.yaml",
+    ideas_file="ideas.md",
+    idle_interval=30,
+)
+orchestrator.run_with_idle()  # 不会退出，直到 Ctrl+C
 ```
 
 ---
@@ -406,11 +608,13 @@ for task_id, success in results['results'].items():
 
 | 组件 | 职责 |
 |------|------|
-| **TodoOrchestrator** | 任务调度、状态管理、配置解析 |
+| **TodoOrchestrator** | 任务调度、状态管理、配置解析、ideas 处理、idle 模式 |
 | **CodeBuddyClient** | AI 调用、Context 管理、命令构造 |
 | **SimpleTaskExecutor** | 简单任务执行 |
 | **NestedTaskExecutor** | 嵌套任务执行、AI 决策调度 |
 | **SubtaskExecutor** | 子任务分发执行 |
+| **ConversationLogger** | 对话日志记录、索引生成 |
+| **IdeasWatcher** | ideas.md 监控、AI 分解、任务追加 |
 
 如有其他问题，请参考：
 - [ARCHITECTURE.md](ARCHITECTURE.md) - 架构设计

@@ -30,6 +30,7 @@ from task_executor import (
 )
 from state_manager import StateManager
 from conversation_logger import ConversationLogger
+from ideas_watcher import IdeasWatcher
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,8 @@ class TodoOrchestrator:
         workspace: str = ".",
         timeout: int = 3600,
         log_dir: str = None,
+        ideas_file: str = None,
+        idle_interval: int = 30,
     ):
         """
         Initialize the TodoOrchestrator.
@@ -67,23 +70,42 @@ class TodoOrchestrator:
             workspace: Working directory for CodeBuddy
             timeout: Default timeout for AI calls
             log_dir: Root directory for conversation logs (None to disable)
+            ideas_file: Path to ideas.md file (None to disable ideas watching)
+            idle_interval: Seconds between idle checks for new ideas (default: 30)
         """
         self.todos_file = todos_file
         self.codebuddy_path = codebuddy_path
         self.model = model
         self.workspace = workspace
         self.timeout = timeout
+        self.idle_interval = idle_interval
         
         self.state_manager = StateManager(state_file)
         self.conv_logger = ConversationLogger(log_dir) if log_dir else None
         self.simple_executor = SimpleTaskExecutor()
         self.nested_executor = NestedTaskExecutor()
         
-        self.todos = self._load_todos()
+        # Ideas watcher (optional)
+        if ideas_file:
+            processed_state = os.path.join(
+                os.path.dirname(state_file) or '.', '.ideas_processed.yaml'
+            )
+            self.ideas_watcher = IdeasWatcher(
+                ideas_file=ideas_file,
+                todos_file=todos_file,
+                processed_state_file=processed_state,
+            )
+        else:
+            self.ideas_watcher = None
+        
+        self.todos = self._load_todos(allow_empty=self.ideas_watcher is not None)
 
-    def _load_todos(self) -> list:
+    def _load_todos(self, allow_empty: bool = False) -> list:
         """
         Load and validate task configuration from YAML file.
+        
+        Args:
+            allow_empty: If True, allow empty/missing config (for idle mode)
         
         Returns:
             list: List of task configurations
@@ -92,6 +114,9 @@ class TodoOrchestrator:
             ConfigError: If the file is invalid
         """
         if not os.path.exists(self.todos_file):
+            if allow_empty:
+                logger.info(f"Config file {self.todos_file} not found, starting with empty task list")
+                return []
             raise ConfigError(f"Configuration file not found: {self.todos_file}")
         
         try:
@@ -101,10 +126,14 @@ class TodoOrchestrator:
             raise ConfigError(f"YAML syntax error in {self.todos_file}: {e}")
         
         if not config or not isinstance(config, dict):
+            if allow_empty:
+                return []
             raise ConfigError(f"Invalid configuration format in {self.todos_file}")
         
         tasks = config.get('tasks', [])
         if not tasks:
+            if allow_empty:
+                return []
             raise ConfigError(f"No tasks defined in {self.todos_file}")
         
         # Validate each task
@@ -113,6 +142,18 @@ class TodoOrchestrator:
         
         logger.info(f"Loaded {len(tasks)} tasks from {self.todos_file}")
         return tasks
+
+    def reload_todos(self):
+        """
+        Reload task configuration from the YAML file.
+        
+        Used after new tasks have been appended (e.g. from ideas processing).
+        """
+        try:
+            self.todos = self._load_todos(allow_empty=self.ideas_watcher is not None)
+            logger.info(f"Reloaded {len(self.todos)} tasks from {self.todos_file}")
+        except ConfigError as e:
+            logger.error(f"Failed to reload todos: {e}")
 
     def _validate_task(self, task: dict, is_subtask: bool = False):
         """
@@ -363,7 +404,141 @@ class TodoOrchestrator:
     def reset(self):
         """Reset all task states."""
         self.state_manager.reset()
+        if self.ideas_watcher:
+            self.ideas_watcher.reset()
         print("✅ All task states have been reset.")
+
+    def check_and_process_ideas(self) -> int:
+        """
+        Check for new ideas in ideas.md and process them into TODO tasks.
+        
+        Returns:
+            int: Number of new ideas processed (0 if no watcher or no new ideas)
+        """
+        if not self.ideas_watcher:
+            return 0
+        
+        if not self.ideas_watcher.has_new_ideas():
+            return 0
+        
+        print(f"\n{'─' * 60}")
+        print(f"💡 New ideas detected, processing...")
+        print(f"{'─' * 60}")
+        
+        # Create a client for ideas processing
+        client = CodeBuddyClient(
+            codebuddy_path=self.codebuddy_path,
+            model=self.model,
+            workspace=self.workspace,
+            timeout=self.timeout,
+            context_id="ideas_processor",
+        )
+        
+        count = self.ideas_watcher.process_new_ideas(client)
+        
+        if count > 0:
+            print(f"\n   📝 Processed {count} new idea(s), reloading task list...")
+            self.reload_todos()
+        
+        return count
+
+    def run_with_idle(
+        self,
+        task_id: int = None,
+        skip_completed: bool = True,
+    ):
+        """
+        Run tasks, then enter idle mode waiting for new ideas.
+        
+        This method:
+        1. Processes any existing new ideas first
+        2. Runs all pending tasks
+        3. Enters idle loop: periodically checks ideas.md for new content
+        4. When new ideas appear, converts them to tasks and executes them
+        5. Repeats until interrupted by user (Ctrl+C)
+        
+        Args:
+            task_id: Execute only this task (None = all tasks)
+            skip_completed: Whether to skip already completed tasks
+        """
+        print(f"{'=' * 60}")
+        print(f"  CodeBuddy Todo Orchestrator (Idle Mode)")
+        print(f"  Config: {self.todos_file}")
+        print(f"  Ideas: {self.ideas_watcher.ideas_file if self.ideas_watcher else 'disabled'}")
+        print(f"  Model: {self.model}")
+        print(f"  Idle interval: {self.idle_interval}s")
+        print(f"{'=' * 60}")
+        
+        while True:
+            # Step 1: Check and process new ideas
+            new_ideas_count = self.check_and_process_ideas()
+            
+            # Step 2: Run any pending tasks
+            pending = self._get_pending_tasks(task_id, skip_completed)
+            
+            if pending:
+                print(f"\n📋 Found {len(pending)} pending task(s) to execute")
+                results = self.run(task_id=task_id, skip_completed=skip_completed)
+            elif new_ideas_count == 0:
+                # No new ideas and no pending tasks - enter idle
+                pass
+            
+            # Step 3: Enter idle wait
+            print(f"\n😴 Idle - waiting for new ideas in {self.ideas_watcher.ideas_file if self.ideas_watcher else 'N/A'}...")
+            print(f"   (Press Ctrl+C to exit)")
+            
+            try:
+                self._idle_wait()
+            except KeyboardInterrupt:
+                raise
+
+    def _get_pending_tasks(self, task_id: int = None, skip_completed: bool = True) -> list:
+        """
+        Get list of tasks that still need to be executed.
+        
+        Returns:
+            list: Tasks that are pending or in_progress
+        """
+        if task_id is not None:
+            candidates = [t for t in self.todos if str(t['id']) == str(task_id)]
+        else:
+            candidates = self.todos
+        
+        pending = []
+        for task in candidates:
+            tid = str(task['id'])
+            if skip_completed:
+                state = self.state_manager.get_task_state(tid)
+                if state.get('status') == 'completed':
+                    continue
+            pending.append(task)
+        
+        return pending
+
+    def _idle_wait(self):
+        """
+        Wait in idle mode until new ideas are detected.
+        
+        Polls ideas.md at the configured interval.
+        Raises KeyboardInterrupt if user presses Ctrl+C.
+        """
+        while True:
+            time.sleep(self.idle_interval)
+            
+            # Check for new ideas
+            if self.ideas_watcher and self.ideas_watcher.has_new_ideas():
+                print(f"\n🔔 New ideas detected!")
+                return
+            
+            # Also check if todos.yaml was modified externally
+            try:
+                new_todos = self._load_todos(allow_empty=True)
+                if len(new_todos) > len(self.todos):
+                    self.todos = new_todos
+                    print(f"\n🔔 New tasks detected in {self.todos_file}!")
+                    return
+            except Exception:
+                pass
 
 
 def setup_logging(verbose: bool = False):
@@ -428,6 +603,8 @@ Examples:
   python orchestrator.py --status                  # Show current status
   python orchestrator.py --reset                   # Reset all state
   python orchestrator.py --verbose                 # Enable debug logging
+  python orchestrator.py --ideas ideas.md          # Watch ideas.md for new ideas
+  python orchestrator.py --idle --ideas ideas.md   # Run tasks then idle for ideas
         """,
     )
     
@@ -498,6 +675,23 @@ Examples:
         default=None,
         help='Root directory for conversation logs (e.g. logs). Disabled if not set.',
     )
+    parser.add_argument(
+        '--ideas',
+        default=None,
+        help='Path to ideas.md file. When set, new ideas will be processed into TODO tasks.',
+    )
+    parser.add_argument(
+        '--idle',
+        action='store_true',
+        help='Enter idle mode after completing tasks. Waits for new ideas in ideas.md. '
+             'Requires --ideas to be set.',
+    )
+    parser.add_argument(
+        '--idle-interval',
+        type=int,
+        default=30,
+        help='Seconds between idle checks for new ideas (default: 30)',
+    )
     
     args = parser.parse_args()
     
@@ -505,6 +699,11 @@ Examples:
     setup_logging(verbose=args.verbose)
     
     try:
+        # Validate idle mode requires ideas file
+        if args.idle and not args.ideas:
+            print("❌ --idle mode requires --ideas to be set.")
+            sys.exit(1)
+        
         # Create orchestrator
         orchestrator = TodoOrchestrator(
             todos_file=args.config,
@@ -514,6 +713,8 @@ Examples:
             workspace=args.workspace,
             timeout=args.timeout,
             log_dir=args.log_dir,
+            ideas_file=args.ideas,
+            idle_interval=args.idle_interval,
         )
         
         # Handle special commands
@@ -532,20 +733,31 @@ Examples:
             print_status(orchestrator)
             return
         
-        # Run tasks
-        results = orchestrator.run(
-            task_id=args.task,
-            skip_completed=not args.no_skip,
-        )
+        # Process ideas before running tasks (if ideas file is configured)
+        if orchestrator.ideas_watcher:
+            orchestrator.check_and_process_ideas()
         
-        # Finalize conversation logs
-        if orchestrator.conv_logger:
-            orchestrator.conv_logger.finalize()
-            print(f"📝 Conversation logs saved to: {orchestrator.conv_logger.get_session_dir()}")
-        
-        # Exit with error code if any tasks failed
-        if results['failed_tasks'] > 0:
-            sys.exit(1)
+        if args.idle:
+            # Idle mode: run tasks then wait for new ideas
+            orchestrator.run_with_idle(
+                task_id=args.task,
+                skip_completed=not args.no_skip,
+            )
+        else:
+            # Normal mode: run tasks and exit
+            results = orchestrator.run(
+                task_id=args.task,
+                skip_completed=not args.no_skip,
+            )
+            
+            # Finalize conversation logs
+            if orchestrator.conv_logger:
+                orchestrator.conv_logger.finalize()
+                print(f"📝 Conversation logs saved to: {orchestrator.conv_logger.get_session_dir()}")
+            
+            # Exit with error code if any tasks failed
+            if results['failed_tasks'] > 0:
+                sys.exit(1)
             
     except ConfigError as e:
         print(f"❌ Configuration error: {e}")

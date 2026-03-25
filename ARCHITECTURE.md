@@ -10,6 +10,8 @@
 - [数据流](#数据流)
 - [状态管理](#状态管理)
 - [长时间任务处理](#长时间任务处理)
+- [对话日志系统](#对话日志系统)
+- [Ideas 监控与 Idle 模式](#ideas-监控与-idle-模式)
 - [错误处理](#错误处理)
 - [扩展性设计](#扩展性设计)
 
@@ -30,6 +32,8 @@
 │  - 任务调度器                           │
 │  - 配置解析器                           │
 │  - Context 管理器                       │  ← 管理 CodeBuddy context 生命周期
+│  - IdeasWatcher                         │  ← 监控 ideas.md 并转换为 TODO
+│  - Idle 模式                            │  ← 任务完成后等待新 ideas
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
@@ -45,6 +49,13 @@
 │  - 提示词构造器                         │
 │  - 响应解析器                           │
 │  - Context 管理（--continue 参数）       │  ← 保持对话上下文连续性
+└────────────────┬────────────────────────┘
+                 │
+┌────────────────▼────────────────────────┐
+│  可观测性层 (Observability Layer)       │
+│  - ConversationLogger                   │  ← 对话日志记录
+│  - 会话目录管理                         │
+│  - Markdown 格式日志                    │
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
@@ -65,6 +76,11 @@ orchestrator.py
     │   ├── codebuddy_client.py (AI 能力)
     │   │   └── subprocess (调用 CodeBuddy)
     │   └── subprocess (执行命令)
+    ├── state_manager.py (状态持久化)
+    ├── conversation_logger.py (对话日志)
+    ├── ideas_watcher.py (Ideas 监控)
+    │   ├── codebuddy_client.py (AI 分解 Ideas)
+    │   └── yaml (追加任务到 todos.yaml)
     └── monitor.py (长时间任务监控)
         └── subprocess (监控进程)
 ```
@@ -929,13 +945,30 @@ def wait_and_analyze_long_running(self, subtask, client):
 ### 项目结构
 
 ```
-langgraph-todo-orchestrator/
-├── orchestrator.py          # 主程序
-├── todos.yaml              # 任务定义
-├── todos_state.yaml        # 任务状态（自动生成）
-├── logs/                   # 长时间任务日志
-│   └── 2.2.log
-├── monitors/               # 监控脚本
+autoagent/
+├── orchestrator.py           # 主程序、CLI 入口
+├── task_executor.py          # 任务执行器 (Simple/Nested)
+├── codebuddy_client.py       # CodeBuddy AI 客户端
+├── state_manager.py          # 状态持久化管理
+├── conversation_logger.py    # 对话日志记录
+├── ideas_watcher.py          # Ideas 文件监控与任务分解
+├── monitor.py                # 长时间任务监控
+│
+├── todos.yaml                # 任务定义
+├── todos_state.yaml          # 任务状态（自动生成）
+├── .ideas_processed.yaml     # Ideas 处理记录（自动生成）
+├── ideas.md                  # 用户的想法记录（可选）
+│
+├── logs/                     # 对话日志目录
+│   └── 202603241542/         # 按时间戳组织的会话目录
+│       ├── task_1.md          # 简单任务的对话日志
+│       ├── task_2.md          # 嵌套任务的索引文件
+│       └── subtask_2/         # 嵌套任务的子任务目录
+│           ├── task_2.1.md
+│           ├── task_2.2.md
+│           └── _decisions.md  # AI 决策日志
+│
+├── monitors/                 # 监控脚本
 │   ├── 2.2.sh
 │   └── 2.2.log
 └── README.md
@@ -1318,6 +1351,235 @@ context:
    - "AI根据任务描述自主决策"
    - 系统只提供框架和支持
 
+## 对话日志系统
+
+### 设计目标
+
+对话日志系统记录所有 AI 交互的完整内容（prompt + response），用于调试、审计和回顾 AI 的决策过程。
+
+### 核心组件：ConversationLogger
+
+**职责**：管理对话日志的目录结构、文件写入和索引生成。
+
+```python
+class ConversationLogger:
+    def __init__(self, log_root_dir: str)
+    def log_conversation(self, task_id, task_name, prompt, response, attempt, parent_task_id=None, metadata=None)
+    def log_nested_task_ai_call(self, task_id, task_name, call_type, prompt, response, round_num, metadata=None)
+    def register_nested_task(self, task_id, task_name, subtask_ids)
+    def build_index_file(self, task_id)
+    def finalize(self)
+```
+
+### 目录结构
+
+每次 Orchestrator 运行会创建一个按时间戳命名的会话目录：
+
+```
+logs/
+└── 202603241542/                  # 时间戳（YYYYMMDDHHmm）
+    ├── task_1.md                   # 简单任务：完整对话记录
+    ├── task_2.md                   # 嵌套任务：索引文件（含子任务链接）
+    └── subtask_2/                  # 嵌套任务的子任务目录
+        ├── task_2.1.md             # 子任务 2.1 的对话记录
+        ├── task_2.2.md             # 子任务 2.2 的对话记录
+        └── _decisions.md           # AI 决策日志（失败分析、主任务评估）
+```
+
+### 日志内容格式
+
+每个日志文件使用 Markdown 格式，包含：
+
+```markdown
+# Task 1: 下载数据集
+
+## Attempt #1
+
+### Prompt
+
+```
+完整的 prompt 内容...
+```
+
+### Response
+
+AI 的完整响应内容...
+
+---
+
+## Attempt #2 (failure_analysis)
+
+...
+```
+
+### 日志类型
+
+| 日志类型 | 文件位置 | 触发场景 |
+|----------|----------|----------|
+| 任务对话 | `task_<id>.md` | 简单任务的每次 attempt |
+| 子任务对话 | `subtask_<parent_id>/task_<id>.md` | 子任务的每次 attempt |
+| AI 决策 | `subtask_<parent_id>/_decisions.md` | 失败分析、主任务评估 |
+| 索引文件 | `task_<id>.md` | 嵌套任务的导航索引 |
+
+### 使用方式
+
+通过 CLI 的 `--log-dir` 参数启用：
+
+```bash
+python orchestrator.py --log-dir logs
+```
+
+日志在 Orchestrator 执行结束时（或 Ctrl+C 中断时）会调用 `finalize()` 生成最终的索引文件。
+
+## Ideas 监控与 Idle 模式
+
+### 设计目标
+
+实现一个持续运行的工作流：用户在 `ideas.md` 中记录想法 → 系统自动检测 → AI 将想法分解为结构化 TODO → 自动执行。
+
+### 核心组件：IdeasWatcher
+
+**职责**：监控 ideas.md 文件变化，调用 AI 分解想法为 TODO 任务，追加到 todos.yaml。
+
+```python
+class IdeasWatcher:
+    def __init__(self, ideas_file, todos_file, processed_state_file)
+    def has_new_ideas(self) -> bool
+    def parse_ideas(self) -> List[dict]
+    def process_new_ideas(self, client: CodeBuddyClient) -> int
+    def mark_all_processed(self)
+    def reset(self)
+```
+
+### Ideas 文件格式
+
+`ideas.md` 中的想法通过 Markdown 标题（`##`、`###`）或水平分隔线（`---`）分隔：
+
+```markdown
+## 添加单元测试
+
+给 state_manager 添加完整的单元测试覆盖，包括边界情况。
+
+---
+
+## 优化内存访问模式
+
+参考 ncu profiling 结果，针对 AXIS=2 的情况优化全局内存访问的 coalescing。
+可以考虑使用 shared memory 作为转置缓冲区。
+
+---
+
+## 支持多 GPU
+
+探索将 DCT3D 分布到多个 GPU 上的可能性。
+```
+
+### 去重机制
+
+使用 SHA256 hash 跟踪已处理的想法，存储在 `.ideas_processed.yaml` 中：
+
+```yaml
+processed_hashes:
+  - a1b2c3d4e5f6g7h8
+  - i9j0k1l2m3n4o5p6
+```
+
+已处理的想法不会被重复分解为任务。
+
+### Idea → TODO 转换流程
+
+```
+1. 检测 ideas.md 变更（基于文件修改时间）
+   ↓
+2. 解析 ideas.md，提取各个 idea section
+   ↓
+3. 过滤掉已处理的 ideas（hash 去重）
+   ↓
+4. 对每个新 idea：
+   ├─ 加载现有 todos.yaml 确定下一个可用 task ID
+   ├─ 构造 prompt 发送给 AI
+   ├─ AI 返回 YAML 格式的任务定义
+   ├─ 解析 AI 响应（支持纯 YAML、代码块包裹、混合文本提取）
+   ├─ 追加新任务到 todos.yaml
+   └─ 标记该 idea 为已处理
+   ↓
+5. 通知 Orchestrator 重新加载任务列表
+```
+
+### AI 分解 Prompt 模板
+
+系统向 AI 发送以下格式的 prompt：
+
+```
+You are a task planner. Given the following idea, decompose it into one or more
+concrete, actionable TODO tasks in YAML format.
+
+## Idea Title
+{title}
+
+## Idea Content
+{content}
+
+## Instructions
+1. Each task should have: id, name, type, completion_criteria
+2. Task IDs should start from {next_id}
+3. Task types can be: "simple" or "nested"
+4. For nested tasks, include "subtasks" list
+...
+
+## Output Format
+Respond with ONLY valid YAML...
+```
+
+AI 返回的 YAML 被解析后直接追加到 `todos.yaml` 的 `tasks` 列表中。
+
+### Idle 模式
+
+**设计理念**：任务完成后不退出，而是进入 idle 状态持续等待新内容。
+
+**核心方法**：`run_with_idle()`
+
+```
+┌─────────────────────────┐
+│ 检查并处理新 ideas      │←──────────────────────┐
+└──────────┬──────────────┘                       │
+           ↓                                      │
+┌──────────────────────────┐                      │
+│ 执行所有待处理任务        │                      │
+└──────────┬──────────────┘                       │
+           ↓                                      │
+┌──────────────────────────┐                      │
+│ 进入 idle 等待           │                      │
+│ (每 N 秒轮询一次)        │                      │
+└──────────┬──────────────┘                       │
+           ↓                                      │
+    检测到变更？ ─── 是 ──────────────────────────┘
+           │
+          否（继续等待）
+```
+
+**Idle 等待检测**：
+- 检查 `ideas.md` 的文件修改时间
+- 检查 `todos.yaml` 是否被外部修改（任务数量增加）
+- 可通过 `--idle-interval` 配置轮询间隔（默认 30 秒）
+- 用户按 Ctrl+C 退出 idle 模式
+
+### CLI 使用
+
+```bash
+# 启用 ideas 处理（处理完即退出）
+python orchestrator.py --ideas ideas.md
+
+# 启用 idle 模式（持续运行）
+python orchestrator.py --ideas ideas.md --idle
+
+# 自定义轮询间隔
+python orchestrator.py --ideas ideas.md --idle --idle-interval 60
+
+# 同时启用对话日志和 ideas
+python orchestrator.py --ideas ideas.md --idle --log-dir logs
+```
+
 ## 总结
 
 本架构设计实现了：
@@ -1332,3 +1594,6 @@ context:
 - ✅ 完善的状态管理
 - ✅ 可扩展的设计
 - ✅ 系统与AI的清晰职责分工
+- ✅ 对话日志系统（完整记录 AI 交互，支持审计和回顾）
+- ✅ Ideas 监控（自动将 ideas.md 中的想法分解为 TODO 任务）
+- ✅ Idle 模式（任务完成后持续等待新输入，实现持续工作流）
