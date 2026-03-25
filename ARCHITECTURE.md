@@ -41,6 +41,7 @@
 │  - SimpleTaskExecutor                   │
 │  - NestedTaskExecutor                   │
 │  - SubtaskExecutor                      │
+│  - autoagent_exec.py                    │  ← long_running 任务启动器
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
@@ -83,6 +84,8 @@ orchestrator.py
     ├── task_executor.py (任务执行)
     │   ├── codebuddy_client.py → AIClient (AI 能力)
     │   │   └── ai_providers.py → subprocess (调用各 AI CLI)
+    │   ├── autoagent_exec.py (long_running 任务启动器)
+    │   │   └── subprocess (启动后台进程 + 信号文件)
     │   └── subprocess (执行命令)
     ├── state_manager.py (状态持久化)
     ├── conversation_logger.py (对话日志)
@@ -669,37 +672,44 @@ for task in state['tasks']:
 
 ### 3. 长时间任务 (long_running)
 
-**定义**：使用 nohup 后台运行的任务，避免超时
+**定义**：通过 `autoagent-exec` 启动的长时间后台任务，使用 10 秒快速失败检测机制
 
 **配置示例**：
 ```yaml
 - id: 2.2
   name: "运行训练"
   type: long_running
-  command: "python train.py --config modified_config.yaml"
   completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
+> **注意**：`long_running` 类型的子任务不再需要在 YAML 中指定 `command` 字段。AI 会根据任务描述自主决定要运行的命令，并通过 `autoagent-exec` 启动。
+
 **执行流程**：
 ```
-1. 构造 nohup 命令
+1. AutoAgent 构造 prompt，告知 AI 使用 autoagent-exec 执行长时间命令
    ↓
-2. 启动后台训练
+2. AI 通过 Bash 工具调用 autoagent-exec
    ↓
-3. 启动监控进程
+3. autoagent-exec 启动命令并监视 10 秒：
+   ├─ 10 秒内失败（退出码非零）：立即报告错误，AI 可修复并重试
+   ├─ 10 秒内成功（退出码 0）：直接完成
+   └─ 10 秒后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
    ↓
-4. 监控进程持续检查日志
+4. AI 看到 "TASK SUBMITTED" 后输出 LONG_RUNNING_IN_PROGRESS
    ↓
-5. 检测到完成：调用 AI 检查结果
+5. AutoAgent 检测到 LONG_RUNNING_IN_PROGRESS，开始轮询信号文件
    ↓
-6. AI 判断是否满足完成条件
+6. 任务完成后，重新启动 AI 分析结果
+   ↓
+7. AI 读取输出日志，判断是否满足完成条件
 ```
 
 **技术实现**：
-- 使用 `nohup` 在后台运行
-- 启动独立的监控进程
-- 监控进程持续检查日志文件
-- 检测到完成标志后通知 AI
+- 使用 `autoagent_exec.py` 脚本作为 long_running 任务启动器
+- 10 秒快速失败检测，避免 AI 反复启动会话
+- 信号文件（`lr_tasks/lr_<task_id>_signal.json`）用于进程间通信
+- 输出日志（`lr_tasks/lr_<task_id>_output.log`）记录命令完整输出
+- 任务完成后 AutoAgent 重启 AI 会话进行结果分析
 
 ## 数据流
 
@@ -945,97 +955,150 @@ class TaskOrchestrator:
 
 **为什么需要长时间任务处理？**
 
-CodeBuddy 有超时限制（通常 1 小时），但某些任务（如模型训练）可能需要更长时间。
+CodeBuddy 有超时限制（通常 1 小时），但某些任务（如模型训练、Profiling）可能需要更长时间。
 
 ### 解决方案
 
-**使用 nohup 后台运行 + 独立监控进程：**
+**使用 autoagent-exec 启动器 + 10 秒快速失败检测 + 信号文件轮询：**
 
-```python
-def execute_long_running_task(subtask):
-    log_file = f"logs/{subtask_id}.log"
-    command = subtask["command"]
-    
-    # 1. 构造 nohup 命令并记录 PID
-    pid_file = f"monitors/{subtask_id}.pid"
-    full_command = f"nohup {command} > {log_file} 2>&1 & echo $! > {pid_file}"
-    
-    # 2. 启动后台任务
-    subprocess.run(full_command, shell=True)
-    mark_task_status(subtask_id, "in_progress", 
-                    log_file=log_file, 
-                    pid_file=pid_file,
-                    started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
-    
-    # 3. 启动监控
-    start_monitor(subtask_id, log_file, subtask["completion_criteria"])
-    
-    # 4. 等待监控完成
-    wait_for_completion(subtask_id)
+整个 long_running 任务流程涉及三方协作：
+
+```
+┌──────────────┐     prompt      ┌───────────┐     bash call     ┌──────────────────┐
+│  AutoAgent   │ ──────────────→ │    AI     │ ───────────────→ │  autoagent-exec  │
+│ (Orchestrator│                 │ (CodeBuddy│                   │  (独立脚本)       │
+│  轮询信号文件)│ ←── 读取状态 ── │  会话结束) │                   │  10s 快速失败检测 │
+└──────────────┘                 └───────────┘                   │  后台进程管理     │
+                                                                 │  信号文件写入     │
+                                                                 └──────────────────┘
 ```
 
-### 监控进程
+### autoagent_exec.py（long_running 任务启动器）
 
-**设计原则**：监控进程只负责检测任务完成/失败，并写入状态文件。**不直接调用 CodeBuddy**——这样可以保持 Context 的一致性，由 Orchestrator 用正确的 `--continue` context 调用 AI 分析结果。
+**职责**：作为 AI 通过 Bash 调用的独立脚本，负责启动命令、快速失败检测、后台管理和信号文件写入。
 
-```python
-def start_monitor(subtask_id, log_file, completion_criteria):
-    monitor_script = f"""#!/bin/bash
-LOG_FILE="{log_file}"
-SUBTASK_ID="{subtask_id}"
-STATUS_FILE="monitors/${{SUBTASK_ID}}.status"
-
-while true; do
-    if [ -f "$LOG_FILE" ]; then
-        # 检查是否有错误
-        if grep -q "ERROR\\|Exception\\|Traceback\\|CUDA out of memory" "$LOG_FILE"; then
-            echo "error" > "$STATUS_FILE"
-            echo "检测到错误，已写入状态文件"
-            exit 1
-        fi
-        
-        # 检查进程是否仍在运行
-        if ! ps -p $(cat monitors/${{SUBTASK_ID}}.pid 2>/dev/null) > /dev/null 2>&1; then
-            # 进程已结束，检查退出码
-            echo "finished" > "$STATUS_FILE"
-            echo "进程已结束，已写入状态文件"
-            exit 0
-        fi
-    fi
-    sleep 30
-done
-"""
-    
-    monitor_file = f"monitors/{subtask_id}.sh"
-    with open(monitor_file, "w") as f:
-        f.write(monitor_script)
-    
-    subprocess.run(f"chmod +x {monitor_file} && nohup {monitor_file} > monitors/{subtask_id}.log 2>&1 &", shell=True)
+**调用方式**：
+```bash
+python autoagent_exec.py --log-dir <log_session_dir> --task-id <id> -- <command...>
 ```
 
-**Orchestrator 端的处理**：
+**参数说明**：
+
+| 参数 | 说明 |
+|------|------|
+| `--log-dir` | 日志会话目录的绝对路径（由 AutoAgent 传递给 AI prompt） |
+| `--task-id` | 子任务 ID（如 `1.2`） |
+| `-- <command>` | 要执行的命令（`--` 之后的所有内容） |
+
+**10 秒快速失败检测机制**：
+
+```
+启动命令
+  ↓
+等待 10 秒
+  ↓
+┌──────────────────────────────────────┐
+│ 10 秒内退出？                        │
+│ ├─ 退出码 = 0 → ✅ 命令快速完成     │
+│ │   写入 "finished" 信号文件         │
+│ ├─ 退出码 ≠ 0 → ❌ 快速失败         │
+│ │   打印错误输出（供 AI 查看并修复）  │
+│ │   不写信号文件（AI 可直接重试）     │
+│ └─ 仍在运行 → 🚀 转为后台任务       │
+│     写入 "running" 信号文件          │
+│     打印 "TASK SUBMITTED" 消息       │
+│     启动监控线程等待进程结束          │
+└──────────────────────────────────────┘
+```
+
+**信号文件格式**（`lr_tasks/lr_<task_id>_signal.json`）：
+
+```json
+{
+  "task_id": "1.2",
+  "command": "ncu --set full --csv ./build/Release/main.exe",
+  "pid": 12345,
+  "output_log": "/path/to/logs/lr_tasks/lr_1.2_output.log",
+  "status": "running",
+  "submitted_at": "2026-03-25T15:30:00",
+  "finished_at": null,
+  "exit_code": null
+}
+```
+
+`status` 字段变化：`running` → `finished`（退出码 0）或 `error`（退出码非 0）
+
+### SubtaskExecutor 中的 long_running 流程
 
 ```python
-def wait_and_analyze_long_running(self, subtask, client):
-    """等待长时间任务完成，然后用正确的 context 调用 AI 分析"""
-    status_file = f"monitors/{subtask['id']}.status"
-    log_file = f"logs/{subtask['id']}.log"
-    
-    # 轮询等待监控进程写入状态
-    while not os.path.exists(status_file):
-        time.sleep(30)
-    
-    status = open(status_file).read().strip()
-    log_content = open(log_file).read()[-2000:]  # 取最后 2000 字符
-    
-    # 用 --continue 保持 context，调用 AI 分析结果
-    result = client.ask(
-        f"长时间任务已完成，状态：{status}\n"
-        f"日志（最后部分）：\n{log_content}\n"
-        f"完成条件：{subtask['completion_criteria']}\n"
-        f"请判断是否满足完成条件。",
-        continue_session=True
+def _execute_long_running_subtask(self, subtask, client, ...):
+    # 1. 构造 prompt，告知 AI 使用 autoagent-exec
+    #    --log-dir 使用 self.session_dir（从 orchestrator 传入）
+    prompt = self._build_long_running_prompt(
+        subtask, autoagent_exec_path, self.session_dir, ...
     )
+    
+    # 2. AI 调用 autoagent-exec，可能出现以下情况：
+    result = client.ask(prompt)
+    
+    # 3a. AI 报告 LONG_RUNNING_IN_PROGRESS
+    if self._check_long_running_in_progress(result):
+        # 轮询信号文件，等待后台任务完成
+        status = self._poll_signal_file(signal_file)
+        # 重启 AI 分析结果
+        return self._ai_analyze_long_running_result(...)
+    
+    # 3b. AI 直接完成（快速成功或自行处理）
+    if self._check_completion(result):
+        return SubtaskResult(success=True)
+    
+    # 3c. 快速失败，AI 已看到错误，下一轮重试
+```
+
+### session_dir 传递机制
+
+**设计要点**：`session_dir`（日志会话目录）由 orchestrator 在初始化时解析，然后逐级传递给所有需要它的执行器。
+
+```
+TodoOrchestrator
+  │
+  │  self.session_dir = _resolve_log_session_dir(log_dir, workspace)
+  │
+  └─→ NestedTaskExecutor(session_dir=self.session_dir)
+        │
+        │  self.session_dir = session_dir
+        │
+        └─→ SubtaskExecutor(session_dir=session_dir)
+              │
+              │  self.session_dir = session_dir
+              │
+              └─→ 在 _execute_long_running_subtask 中直接使用 self.session_dir
+                  构造 AI prompt 中的 --log-dir 参数
+```
+
+这样确保了 AI prompt 中的 `--log-dir` 路径与 orchestrator 的 `--log-dir` 参数一致，而不是硬编码某个默认路径。
+
+### Orchestrator 端的处理
+
+AutoAgent 通过轮询信号文件等待后台任务完成：
+
+```python
+def _poll_signal_file(self, subtask_id, signal_file, check_interval=15):
+    """每 15 秒检查一次信号文件"""
+    while True:
+        if os.path.exists(signal_file):
+            signal_data = json.load(open(signal_file))
+            if signal_data['status'] in ('finished', 'error'):
+                return signal_data['status']
+        time.sleep(check_interval)
+
+def _ai_analyze_long_running_result(self, subtask, client, status, output_log):
+    """重启 AI 会话，让 AI 读取输出日志并判断完成条件"""
+    # 提供输出日志文件路径（而非嵌入内容），AI 使用 Read 工具读取
+    prompt = f"""Task completed with status: {status}
+    Output log: {output_log}
+    Please read the log and evaluate..."""
+    result = client.ask(prompt, continue_session=True)
     return result
 ```
 
@@ -1045,12 +1108,12 @@ def wait_and_analyze_long_running(self, subtask, client):
 autoagent/
 ├── orchestrator.py           # 主程序、CLI 入口
 ├── ai_providers.py           # AI Provider 抽象层（多 CLI 工具支持）
-├── task_executor.py          # 任务执行器 (Simple/Nested)
+├── task_executor.py          # 任务执行器 (Simple/Nested/SubtaskExecutor)
+├── autoagent_exec.py         # long_running 任务启动器（AI 通过 Bash 调用）
 ├── codebuddy_client.py       # AIClient（统一 AI 客户端）
 ├── state_manager.py          # 状态持久化管理
 ├── conversation_logger.py    # 对话日志记录
 ├── ideas_watcher.py          # Ideas 文件监控与任务分解
-├── monitor.py                # 长时间任务监控
 │
 ├── todos.yaml                # 任务定义
 ├── ideas.md                  # 用户的想法记录（可选）
@@ -1061,6 +1124,9 @@ autoagent/
 │       ├── orchestrator.log           # Orchestrator 运行日志
 │       ├── todos_state.yaml           # 任务状态（自动生成）
 │       ├── .ideas_processed.yaml      # Ideas 处理记录（自动生成）
+│       ├── lr_tasks/                  # long_running 任务文件目录
+│       │   ├── lr_<task_id>_signal.json   # long_running 信号文件（自动生成）
+│       │   └── lr_<task_id>_output.log    # long_running 命令输出日志（自动生成）
 │       └── conversations/             # 对话日志目录
 │           ├── task_1.md              # 简单任务的对话日志
 │           ├── task_2.md              # 嵌套任务的索引文件
@@ -1068,10 +1134,6 @@ autoagent/
 │               ├── task_2.1.md
 │               ├── task_2.2.md
 │               └── _decisions.md      # AI 决策日志
-│
-├── monitors/                 # 监控脚本
-│   ├── 2.2.sh
-│   └── 2.2.log
 └── README.md
 ```
 
@@ -1476,7 +1538,15 @@ context:
 ```python
 class ConversationLogger:
     def __init__(self, log_root_dir: str)
+    # Two-step incremental logging (crash-safe: prompt is persisted before AI call)
+    def log_prompt(self, task_id, task_name, prompt, attempt, parent_task_id=None, metadata=None)
+    def log_response(self, task_id, response, parent_task_id=None)
+    # Convenience wrapper (calls log_prompt + log_response atomically)
     def log_conversation(self, task_id, task_name, prompt, response, attempt, parent_task_id=None, metadata=None)
+    # Two-step incremental logging for nested task decisions
+    def log_nested_prompt(self, task_id, task_name, call_type, prompt, round_num)
+    def log_nested_response(self, task_id, task_name, response)
+    # Convenience wrapper (calls log_nested_prompt + log_nested_response)
     def log_nested_task_ai_call(self, task_id, task_name, call_type, prompt, response, round_num, metadata=None)
     def register_nested_task(self, task_id, task_name, subtask_ids)
     def build_index_file(self, task_id)
@@ -1551,6 +1621,16 @@ python orchestrator.py --log-dir logs
 
 日志根目录下，会自动创建以项目名+随机后缀命名的子目录。
 子目录名存储在项目目录的 `.autoagent_log` 文件中，确保同一项目多次运行复用同一目录。
+
+### 崩溃安全写入
+
+为避免 Ctrl+C 中断时丢失正在进行的对话，日志系统采用**两步写入**策略：
+
+1. **AI 调用前**：立即调用 `log_prompt()` 将 prompt 写入文件
+2. **AI 返回后**：调用 `log_response()` 追加 response 到同一文件
+
+这样即使进程在等待 AI 响应时被中断，prompt 部分也已持久化到磁盘。
+旧的 `log_conversation()` 方法仍然保留作为便捷包装器（内部调用两步方法）。
 
 日志在 Orchestrator 执行结束时（或 Ctrl+C 中断时）会调用 `finalize()` 生成最终的索引文件。
 
@@ -1712,7 +1792,7 @@ python orchestrator.py --ideas ideas.md --idle --log-dir logs
 - ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI）
 - ✅ AI完全自主判断完成条件（三层检测策略）
 - ✅ 支持嵌套任务
-- ✅ 支持长时间任务的nohup处理
+- ✅ 支持长时间任务处理（autoagent-exec 10 秒快速失败 + 信号文件轮询）
 - ✅ AI完全掌控重试策略
 - ✅ 清晰的分层结构
 - ✅ 完善的状态管理（独立 StateManager 模块）

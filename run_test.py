@@ -185,11 +185,12 @@ def clean_log_dirs(project_root, log_dir=None):
     else:
         print(f"  No .autoagent_log found; nothing to clean.")
 
-    # Also clean monitors/ if present (monitors live in project_root)
-    monitors_dir = os.path.join(project_root, "monitors")
-    if os.path.exists(monitors_dir):
-        shutil.rmtree(monitors_dir)
-        print(f"  Removed: monitors/")
+    # Also clean any leftover long-running output files in project root
+    for pattern_dir in ["monitors", "logs"]:
+        target = os.path.join(project_root, pattern_dir)
+        if os.path.exists(target):
+            shutil.rmtree(target)
+            print(f"  Removed: {pattern_dir}/")
 
 
 def run_orchestrator(

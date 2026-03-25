@@ -188,7 +188,7 @@ tasks:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `command` | string | 是 | 要执行的命令 |
+| `command` | string | 否 | （已废弃）旧版配置字段，现在 AI 自主决定命令 |
 | `completion_criteria` | string | 是 | 完成标准 |
 
 ## 任务类型
@@ -270,27 +270,33 @@ tasks:
 
 ### 3. 长时间任务 (long_running)
 
-**适用场景**：可能超过 CodeBuddy 超时限制的任务（如模型训练）
+**适用场景**：可能超过 CodeBuddy 超时限制的任务（如模型训练、Profiling）
 
 **配置示例**：
 ```yaml
 - id: 2.2
   name: "运行训练"
   type: long_running
-  command: "python train.py --config modified_config.yaml"
   completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
+> **注意**：`long_running` 类型不需要在 YAML 中指定 `command` 字段。AI 会根据任务描述和上下文自主决定要运行的命令，并通过 `autoagent-exec` 启动。
+
 **执行流程**：
-1. 使用 nohup 在后台运行命令
-2. 启动监控进程持续检查日志
-3. 检测到完成标志后通知 AI
-4. AI 判断是否满足完成条件
+1. AutoAgent 构造 prompt，告知 AI 使用 `autoagent-exec` 启动长时间命令
+2. AI 通过 Bash 调用 `autoagent-exec --log-dir <session_dir> --task-id <id> -- <command>`
+3. `autoagent-exec` 启动命令并监视 10 秒：
+   - 10 秒内失败：立即报告错误，AI 可修复并重试（避免重启会话）
+   - 10 秒内成功：直接完成
+   - 10 秒后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
+4. AutoAgent 检测到 `LONG_RUNNING_IN_PROGRESS`，开始轮询信号文件
+5. 任务完成后，重新启动 AI 分析输出日志并判断完成条件
 
 **技术细节**：
-- 使用 `nohup` 避免超时
-- 独立的监控进程检查日志
-- 自动检测错误和完成标志
+- 使用 `autoagent_exec.py` 作为启动器，支持 10 秒快速失败检测
+- 信号文件（`lr_tasks/lr_<task_id>_signal.json`）用于进程间通信
+- 输出日志（`lr_tasks/lr_<task_id>_output.log`）记录命令完整输出
+- 信号文件和输出日志均位于 `session_dir/lr_tasks/`（由 orchestrator 的 `--log-dir` 参数决定）
 
 ## 执行方式
 

@@ -163,7 +163,7 @@ class TodoOrchestrator:
         self.state_manager = StateManager(resolved_state_file)
         self.conv_logger = ConversationLogger(self.session_dir)
         self.simple_executor = SimpleTaskExecutor()
-        self.nested_executor = NestedTaskExecutor()
+        self.nested_executor = NestedTaskExecutor(session_dir=self.session_dir)
         
         # Ideas watcher (optional)
         if ideas_file:
@@ -276,11 +276,8 @@ class TodoOrchestrator:
                 self._validate_task(subtask, is_subtask=True)
         
         # Validate long_running tasks
-        if task_type == 'long_running':
-            if 'command' not in task:
-                raise ConfigError(
-                    f"Long-running task {task['id']} must have a 'command' field"
-                )
+        # Note: long_running tasks no longer require a 'command' field.
+        # The AI decides the command at runtime via autoagent-exec.
 
     def validate_config(self) -> bool:
         """
@@ -674,8 +671,18 @@ def print_status(orchestrator: TodoOrchestrator):
     print(f"\n{'=' * 60}")
 
 
+def _ensure_utf8_stdio():
+    """Reconfigure stdout/stderr to UTF-8 to avoid GBK encoding errors on Windows."""
+    if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+        sys.stdout = open(sys.stdout.fileno(), mode="w", encoding="utf-8", errors="replace", closefd=False)
+    if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
+        sys.stderr = open(sys.stderr.fileno(), mode="w", encoding="utf-8", errors="replace", closefd=False)
+
+
 def main():
     """CLI entry point."""
+    _ensure_utf8_stdio()
+
     parser = argparse.ArgumentParser(
         description="AI-driven task execution system (supports CodeBuddy, Claude Code, Gemini CLI)",
         formatter_class=argparse.RawDescriptionHelpFormatter,

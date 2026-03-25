@@ -441,8 +441,15 @@ return False
 
 ```python
 class NestedTaskExecutor:
+    def __init__(self, session_dir: str = None)
     def execute(self, task: dict, client: CodeBuddyClient) -> bool
 ```
+
+**构造函数参数**：
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `session_dir` | str | None | 日志会话目录（从 orchestrator 传入，传递给 SubtaskExecutor） |
 
 **两个 AI 决策点**：
 
@@ -491,15 +498,61 @@ context = {
 
 ```python
 class SubtaskExecutor:
+    def __init__(self, session_dir: str = None)
     def execute(self, subtask: dict, client: CodeBuddyClient) -> SubtaskResult
 ```
+
+**构造函数参数**：
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `session_dir` | str | None | 日志会话目录（long_running 任务必须提供，用于构造 AI prompt 中的 `--log-dir` 参数） |
 
 支持的子任务类型：
 
 | 类型 | 说明 | 执行方式 |
 |------|------|----------|
 | `simple` | AI 自主完成（含代码修改、命令执行等） | 调用 `client.ask()` |
-| `long_running` | 长时间任务 | `nohup` 后台 + 监控 + AI 判断 |
+| `long_running` | 长时间任务 | AI 通过 Bash 调用 `autoagent-exec` 启动，AutoAgent 轮询信号文件 + AI 分析结果 |
+
+**long_running 子任务执行流程**：
+
+1. 构造 prompt，告知 AI 使用 `autoagent-exec` 启动命令（`--log-dir` 使用 `self.session_dir`）
+2. AI 通过 Bash 调用 `autoagent-exec`
+3. 如果 AI 报告 `LONG_RUNNING_IN_PROGRESS`，轮询信号文件等待完成
+4. 完成后重启 AI 会话，让 AI 读取输出日志并评估结果
+
+### autoagent_exec.py
+
+long_running 任务启动器，AI 通过 Bash 调用的独立脚本。
+
+**调用方式**：
+```bash
+python autoagent_exec.py --log-dir <log_session_dir> --task-id <id> -- <command...>
+```
+
+**参数**：
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `--log-dir` | str | 日志会话目录绝对路径（由 SubtaskExecutor 的 `session_dir` 提供） |
+| `--task-id` | str | 子任务 ID（如 `1.2`） |
+| `-- <command>` | str | `--` 之后的所有内容作为要执行的命令 |
+
+**行为**：
+
+| 场景 | 行为 |
+|------|------|
+| 命令在 10s 内失败（退出码≠ 0） | 打印错误输出，不写信号文件，返回非零退出码 |
+| 命令在 10s 内成功（退出码 = 0） | 写入 `finished` 信号文件，返回 0 |
+| 命令 10s 后仍在运行 | 写入 `running` 信号文件，打印 `TASK SUBMITTED`，启动监控线程 |
+
+**生成的文件**：
+
+| 文件 | 说明 |
+|------|------|
+| `<log-dir>/lr_tasks/lr_<task_id>_signal.json` | 信号文件（status: running/finished/error） |
+| `<log-dir>/lr_tasks/lr_<task_id>_output.log` | 命令的完整 stdout+stderr 输出 |
 
 ---
 
@@ -524,7 +577,51 @@ class ConversationLogger:
 
 ### 方法
 
-#### log_conversation
+#### log_prompt（推荐：崩溃安全写入）
+
+```python
+def log_prompt(
+    self,
+    task_id: str,
+    task_name: str,
+    prompt: str,
+    attempt: int,
+    parent_task_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
+)
+```
+
+在 AI 调用**之前**将 prompt 写入日志文件。这确保即使进程在等待 AI 响应时被中断（如 Ctrl+C），prompt 也已持久化。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `task_id` | str | 任务 ID |
+| `task_name` | str | 任务名称 |
+| `prompt` | str | 发送给 AI 的提示词 |
+| `attempt` | int | 尝试次数 |
+| `parent_task_id` | str | 父任务 ID（子任务时提供） |
+| `metadata` | dict | 额外信息（如 `{"type": "failure_analysis"}`） |
+
+#### log_response（推荐：崩溃安全写入）
+
+```python
+def log_response(
+    self,
+    task_id: str,
+    response: str,
+    parent_task_id: Optional[str] = None,
+)
+```
+
+在 AI 返回**之后**将 response 追加到日志文件。必须在 `log_prompt()` 之后调用。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `task_id` | str | 任务 ID |
+| `response` | str | AI 的响应 |
+| `parent_task_id` | str | 父任务 ID（子任务时提供） |
+
+#### log_conversation（便捷包装器）
 
 ```python
 def log_conversation(
@@ -539,7 +636,7 @@ def log_conversation(
 )
 ```
 
-记录一次对话（prompt + response）。对于顶层简单任务，写入 `task_<id>.md`；对于嵌套任务的子任务，写入 `subtask_<parent_id>/task_<id>.md`。
+一次性记录 prompt + response（内部调用 `log_prompt` + `log_response`）。新代码建议使用两步方法以获得崩溃安全性。
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
@@ -551,7 +648,16 @@ def log_conversation(
 | `parent_task_id` | str | 父任务 ID（子任务时提供） |
 | `metadata` | dict | 额外信息（如 `{"type": "failure_analysis"}`） |
 
-#### log_nested_task_ai_call
+#### log_nested_prompt / log_nested_response（推荐）
+
+```python
+def log_nested_prompt(self, task_id: str, task_name: str, call_type: str, prompt: str, round_num: int)
+def log_nested_response(self, task_id: str, task_name: str, response)
+```
+
+嵌套任务 AI 决策调用的两步写入方法。`log_nested_prompt` 在 AI 调用前写入 prompt，`log_nested_response` 在 AI 返回后追加 response，均写入 `subtask_<id>/_decisions.md`。
+
+#### log_nested_task_ai_call（便捷包装器）
 
 ```python
 def log_nested_task_ai_call(
@@ -566,7 +672,7 @@ def log_nested_task_ai_call(
 )
 ```
 
-记录嵌套任务的 AI 决策调用（失败分析、主任务评估），写入 `subtask_<id>/_decisions.md`。
+一次性记录嵌套任务的 AI 决策调用（内部调用 `log_nested_prompt` + `log_nested_response`）。
 
 #### register_nested_task
 
@@ -802,10 +908,11 @@ class SubtaskConfig(TypedDict, total=False):
     name: str                                          # 必填
     type: Literal["simple", "long_running"]            # 必填
     completion_criteria: str                            # 必填
-    command: str                                       # long_running 必填
     initial_hint: str                                  # simple 可选
     max_attempts: int                                  # 可选，默认 5
 ```
+
+> **注意**：`long_running` 类型的子任务不再需要 `command` 字段。AI 会根据任务描述自主决定要运行的命令，并通过 `autoagent-exec` 启动。
 
 ---
 
@@ -959,7 +1066,8 @@ orchestrator.run_with_idle()  # 不会退出，直到 Ctrl+C
 | **AIClient** (别名 CodeBuddyClient) | AI 调用、Context 管理、stream-json 解析 |
 | **SimpleTaskExecutor** | 简单任务执行（三层完成检测） |
 | **NestedTaskExecutor** | 嵌套任务执行、AI 决策调度 |
-| **SubtaskExecutor** | 子任务分发执行 |
+| **SubtaskExecutor** | 子任务分发执行（接收 session_dir） |
+| **autoagent_exec.py** | long_running 任务启动器（10s 快速失败 + 信号文件） |
 | **StateManager** | 任务状态持久化（todos_state.yaml） |
 | **ConversationLogger** | 对话日志记录、索引生成 |
 | **IdeasWatcher** | ideas.md 监控、AI 分解、任务追加 |

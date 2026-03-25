@@ -78,6 +78,91 @@ class ConversationLogger:
         subtask_dir = os.path.join(self.session_dir, f"subtask_{task_id}")
         os.makedirs(subtask_dir, exist_ok=True)
 
+    def _resolve_filepath(self, task_id: str, parent_task_id: Optional[str] = None) -> str:
+        """Resolve the markdown log file path for a given task."""
+        if parent_task_id and parent_task_id in self._nested_subtasks:
+            subtask_dir = os.path.join(self.session_dir, f"subtask_{parent_task_id}")
+            os.makedirs(subtask_dir, exist_ok=True)
+            return os.path.join(subtask_dir, f"task_{task_id}.md")
+        else:
+            return os.path.join(self.session_dir, f"task_{task_id}.md")
+
+    def log_prompt(
+        self,
+        task_id: str,
+        task_name: str,
+        prompt: str,
+        attempt: int,
+        parent_task_id: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ):
+        """
+        Write the prompt section to the log file immediately (before AI call).
+
+        This ensures the prompt is persisted even if the process is interrupted
+        (e.g. Ctrl+C) while waiting for the AI response.
+
+        Args:
+            task_id: Task ID (e.g. "1" or "1.1")
+            task_name: Task name
+            prompt: The prompt sent to AI
+            attempt: Attempt number
+            parent_task_id: Parent task ID if this is a subtask
+            metadata: Optional dict with extra info
+        """
+        filepath = self._resolve_filepath(task_id, parent_task_id)
+
+        content_parts = []
+
+        is_new_file = not os.path.exists(filepath)
+        if is_new_file:
+            content_parts.append(f"# Task {task_id}: {task_name}\n\n")
+
+        meta_label = ""
+        if metadata and metadata.get("type"):
+            meta_label = f" ({metadata['type']})"
+        content_parts.append(f"## Attempt #{attempt}{meta_label}\n\n")
+
+        content_parts.append(f"### Prompt\n\n")
+        content_parts.append(f"```\n{prompt}\n```\n\n")
+
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write("".join(content_parts))
+            logger.debug(f"Logged prompt to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to write prompt log to {filepath}: {e}")
+
+    def log_response(
+        self,
+        task_id: str,
+        response: str,
+        parent_task_id: Optional[str] = None,
+    ):
+        """
+        Append the response section (and separator) to the log file after AI returns.
+
+        Must be called after ``log_prompt`` for the same task/attempt.
+
+        Args:
+            task_id: Task ID
+            response: The AI response
+            parent_task_id: Parent task ID if this is a subtask
+        """
+        filepath = self._resolve_filepath(task_id, parent_task_id)
+
+        content_parts = []
+        content_parts.append(f"### Response\n\n")
+        content_parts.append(f"{response}\n\n")
+        content_parts.append(f"---\n\n")
+
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write("".join(content_parts))
+            logger.debug(f"Logged response to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to write response log to {filepath}: {e}")
+
     def log_conversation(
         self,
         task_id: str,
@@ -89,62 +174,91 @@ class ConversationLogger:
         metadata: Optional[dict] = None,
     ):
         """
-        Log a single conversation turn (prompt + response) to the appropriate markdown file.
+        Log a single conversation turn (prompt + response) atomically.
 
-        For simple/long_running top-level tasks: appends to task_<id>.md
-        For subtasks of nested tasks: appends to subtask_<parent_id>/task_<id>.md
+        This is a convenience wrapper that calls ``log_prompt`` + ``log_response``.
+        Prefer using the two-step approach in new code for crash safety.
+        """
+        self.log_prompt(task_id, task_name, prompt, attempt, parent_task_id, metadata)
+        self.log_response(task_id, response, parent_task_id)
+
+    def _resolve_decisions_filepath(self, task_id: str, task_name: str) -> str:
+        """Resolve the decisions markdown log file path for a nested task."""
+        subtask_dir = os.path.join(self.session_dir, f"subtask_{task_id}")
+        os.makedirs(subtask_dir, exist_ok=True)
+        return os.path.join(subtask_dir, f"_decisions.md")
+
+    def log_nested_prompt(
+        self,
+        task_id: str,
+        task_name: str,
+        call_type: str,
+        prompt: str,
+        round_num: int,
+    ):
+        """
+        Write the prompt section of a nested task AI decision call immediately.
 
         Args:
-            task_id: Task ID (e.g. "1" or "1.1")
-            task_name: Task name
+            task_id: Main task ID (e.g. "1")
+            task_name: Main task name
+            call_type: Type of AI call (e.g. "failure_analysis", "main_task_evaluation")
             prompt: The prompt sent to AI
-            response: The AI response
-            attempt: Attempt number
-            parent_task_id: Parent task ID if this is a subtask (e.g. "1" for subtask "1.1")
-            metadata: Optional dict with extra info (e.g. {"type": "failure_analysis"})
+            round_num: Current round number
         """
-        # Determine file path
-        if parent_task_id and parent_task_id in self._nested_subtasks:
-            # This is a subtask of a nested task
-            subtask_dir = os.path.join(self.session_dir, f"subtask_{parent_task_id}")
-            os.makedirs(subtask_dir, exist_ok=True)
-            filepath = os.path.join(subtask_dir, f"task_{task_id}.md")
-        else:
-            # Top-level simple/long_running task, or nested task's own AI calls
-            filepath = os.path.join(self.session_dir, f"task_{task_id}.md")
+        filepath = self._resolve_decisions_filepath(task_id, task_name)
 
-        # Build markdown content
         content_parts = []
 
-        # Add header only if file doesn't exist yet
         is_new_file = not os.path.exists(filepath)
         if is_new_file:
-            content_parts.append(f"# Task {task_id}: {task_name}\n\n")
+            content_parts.append(f"# Task {task_id}: {task_name} - AI Decisions\n\n")
 
-        # Add attempt section
-        meta_label = ""
-        if metadata and metadata.get("type"):
-            meta_label = f" ({metadata['type']})"
-        content_parts.append(f"## Attempt #{attempt}{meta_label}\n\n")
-
-        # Prompt
+        content_parts.append(f"## Round #{round_num} - {call_type}\n\n")
         content_parts.append(f"### Prompt\n\n")
         content_parts.append(f"```\n{prompt}\n```\n\n")
 
-        # Response
-        content_parts.append(f"### Response\n\n")
-        content_parts.append(f"{response}\n\n")
-
-        # Separator
-        content_parts.append(f"---\n\n")
-
-        # Write to file (append mode)
         try:
             with open(filepath, 'a', encoding='utf-8') as f:
                 f.write("".join(content_parts))
-            logger.debug(f"Logged conversation to {filepath}")
+            logger.debug(f"Logged nested prompt to {filepath}")
         except Exception as e:
-            logger.error(f"Failed to write conversation log to {filepath}: {e}")
+            logger.error(f"Failed to write nested prompt log to {filepath}: {e}")
+
+    def log_nested_response(
+        self,
+        task_id: str,
+        task_name: str,
+        response,
+    ):
+        """
+        Append the response section of a nested task AI decision call.
+
+        Must be called after ``log_nested_prompt`` for the same task/round.
+
+        Args:
+            task_id: Main task ID
+            task_name: Main task name
+            response: The AI response (str or dict)
+        """
+        filepath = self._resolve_decisions_filepath(task_id, task_name)
+
+        content_parts = []
+        content_parts.append(f"### Response\n\n")
+        if isinstance(response, dict):
+            import json
+            response_str = json.dumps(response, indent=2, ensure_ascii=False)
+            content_parts.append(f"```json\n{response_str}\n```\n\n")
+        else:
+            content_parts.append(f"{response}\n\n")
+        content_parts.append(f"---\n\n")
+
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write("".join(content_parts))
+            logger.debug(f"Logged nested response to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to write nested response log to {filepath}: {e}")
 
     def log_nested_task_ai_call(
         self,
@@ -157,49 +271,13 @@ class ConversationLogger:
         metadata: Optional[dict] = None,
     ):
         """
-        Log an AI decision call for a nested task (failure analysis, main task evaluation).
-        These go into a special section of the subtask folder as decision logs.
+        Log an AI decision call atomically (prompt + response).
 
-        Args:
-            task_id: Main task ID (e.g. "1")
-            task_name: Main task name
-            call_type: Type of AI call (e.g. "failure_analysis", "main_task_evaluation")
-            prompt: The prompt sent to AI
-            response: The AI response (may be JSON string)
-            round_num: Current round number
-            metadata: Optional extra info
+        This is a convenience wrapper. Prefer ``log_nested_prompt`` +
+        ``log_nested_response`` in new code for crash safety.
         """
-        subtask_dir = os.path.join(self.session_dir, f"subtask_{task_id}")
-        os.makedirs(subtask_dir, exist_ok=True)
-        filepath = os.path.join(subtask_dir, f"_decisions.md")
-
-        content_parts = []
-
-        is_new_file = not os.path.exists(filepath)
-        if is_new_file:
-            content_parts.append(f"# Task {task_id}: {task_name} - AI Decisions\n\n")
-
-        content_parts.append(f"## Round #{round_num} - {call_type}\n\n")
-
-        content_parts.append(f"### Prompt\n\n")
-        content_parts.append(f"```\n{prompt}\n```\n\n")
-
-        content_parts.append(f"### Response\n\n")
-        if isinstance(response, dict):
-            import json
-            response_str = json.dumps(response, indent=2, ensure_ascii=False)
-            content_parts.append(f"```json\n{response_str}\n```\n\n")
-        else:
-            content_parts.append(f"{response}\n\n")
-
-        content_parts.append(f"---\n\n")
-
-        try:
-            with open(filepath, 'a', encoding='utf-8') as f:
-                f.write("".join(content_parts))
-            logger.debug(f"Logged nested task AI call to {filepath}")
-        except Exception as e:
-            logger.error(f"Failed to write decision log to {filepath}: {e}")
+        self.log_nested_prompt(task_id, task_name, call_type, prompt, round_num)
+        self.log_nested_response(task_id, task_name, response)
 
     def build_index_file(self, task_id: str):
         """
