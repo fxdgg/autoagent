@@ -45,9 +45,12 @@
                  │
 ┌────────────────▼────────────────────────┐
 │  AI 能力层 (AI Capability Layer)        │
-│  - CodeBuddyClient 类                   │
+│  - AIClient 类                           │  ← 统一 AI 客户端（原 CodeBuddyClient）
+│  - AIProvider 抽象基类                   │  ← 多 Provider 支持
+│  - CodeBuddyProvider / ClaudeCodeProvider│
+│  - GeminiCLIProvider                     │
 │  - 提示词构造器                         │
-│  - 响应解析器                           │
+│  - 响应解析器（stream-json）             │  ← 实时解析 stream-json 输出
 │  - Context 管理（--continue 参数）       │  ← 保持对话上下文连续性
 └────────────────┬────────────────────────┘
                  │
@@ -72,14 +75,19 @@
 ```
 orchestrator.py
     ├── yaml (配置解析)
+    ├── ai_providers.py (Provider 抽象层)
+    │   ├── AIProvider (基类)
+    │   ├── CodeBuddyProvider
+    │   ├── ClaudeCodeProvider
+    │   └── GeminiCLIProvider
     ├── task_executor.py (任务执行)
-    │   ├── codebuddy_client.py (AI 能力)
-    │   │   └── subprocess (调用 CodeBuddy)
+    │   ├── codebuddy_client.py → AIClient (AI 能力)
+    │   │   └── ai_providers.py → subprocess (调用各 AI CLI)
     │   └── subprocess (执行命令)
     ├── state_manager.py (状态持久化)
     ├── conversation_logger.py (对话日志)
     ├── ideas_watcher.py (Ideas 监控)
-    │   ├── codebuddy_client.py (AI 分解 Ideas)
+    │   ├── codebuddy_client.py → AIClient (AI 分解 Ideas)
     │   └── yaml (追加任务到 todos.yaml)
     └── monitor.py (长时间任务监控)
         └── subprocess (监控进程)
@@ -111,7 +119,83 @@ class TaskOrchestrator:
 - 状态持久化：支持保存和恢复执行状态
 - 统一接口：所有任务类型通过统一接口调用
 
-### 2. SimpleTaskExecutor
+### 2. AI Provider 层（ai_providers.py）
+
+**职责**：抽象不同 AI CLI 工具之间的差异，提供统一的命令构造接口。
+
+**核心类**：
+
+- `AIProvider` — 抽象基类，定义 `build_command()` 和 `get_stdin_command()` 接口
+- `CodeBuddyProvider` — CodeBuddy CLI（默认 provider，默认模型 `glm-5.0-ioa`）
+- `ClaudeCodeProvider` — Claude Code Internal CLI（默认模型 `claude-sonnet-4-6`）
+- `GeminiCLIProvider` — Gemini CLI Internal（默认模型 `gemini-2.5-pro`）
+
+**工厂函数**：
+
+- `get_provider(name, ...)` — 按名称创建 provider 实例（支持别名，如 `cb` → `codebuddy`）
+- `list_providers()` — 列出所有可用 provider 及其信息
+
+**命令构造示例**：
+
+```bash
+# CodeBuddyProvider
+type prompt.txt | codebuddy --debug --verbose --print --output-format stream-json --model glm-5.0-ioa -y -
+
+# ClaudeCodeProvider
+type prompt.txt | claude-internal --verbose --print --output-format stream-json --model claude-sonnet-4-6 --dangerously-skip-permissions -
+
+# GeminiCLIProvider
+type prompt.txt | gemini-internal --output-format stream-json --model gemini-2.5-pro --yolo -p -
+```
+
+**Provider 注册表与别名**：
+
+```python
+PROVIDERS = {
+    "codebuddy": CodeBuddyProvider,
+    "claude": ClaudeCodeProvider,
+    "gemini": GeminiCLIProvider,
+}
+
+PROVIDER_ALIASES = {
+    "cb": "codebuddy",
+    "claude-code": "claude",
+    "claude-internal": "claude",
+    "gemini-cli": "gemini",
+    "gemini-internal": "gemini",
+}
+```
+
+### 3. AIClient（codebuddy_client.py）
+
+**职责**：统一的 AI CLI 客户端，封装 AI 调用、Context 管理和 stream-json 解析。
+
+> **注意**：`AIClient` 是主类名，`CodeBuddyClient` 是为向后兼容保留的别名。
+
+**核心功能**：
+
+- 通过 `AIProvider` 构造正确的 CLI 命令
+- 将 prompt 写入临时文件并通过 stdin 管道传递（避免 shell 转义问题）
+- 实时解析 stream-json 输出（`_handle_stream_line()`），支持：
+  - `assistant` 事件：文本输出和工具调用
+  - `user` 事件：工具执行结果
+  - `result` 事件：最终结果摘要
+- 维护 `last_full_log` 属性，记录包含工具调用的完整对话日志
+- 通过 `_session_started` 标志管理 `--continue` 参数的使用
+
+**stream-json 解析**：
+
+AI CLI 工具的 `--output-format stream-json` 模式输出逐行 JSON 对象。`_handle_stream_line()` 方法实时解析这些事件，提取 assistant 文本、显示工具调用摘要，并收集完整日志。
+
+```python
+# stream-json 事件类型
+assistant  → AI 消息（文本块 + 工具调用）
+user       → 工具执行结果
+result     → 最终摘要（turns 数、耗时等）
+system     → 系统/会话初始化消息
+```
+
+### 4. SimpleTaskExecutor
 
 **职责**：执行简单任务（一次性命令 + AI 判断）
 
@@ -157,7 +241,7 @@ def execute_simple_task_node(task: dict) -> bool:
 - 持续迭代直到达标
 - 防止无限循环
 
-### 3. NestedTaskExecutor
+### 5. NestedTaskExecutor
 
 **职责**：执行嵌套任务（包含子任务）
 
@@ -390,6 +474,17 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
 - ✅ 子任务之间可以引用前一个子任务的结果
 - ✅ 保持对话的连贯性
 - ✅ 减少重复的上下文信息传递
+
+**完成检测三层策略**：
+
+`SimpleTaskExecutor._check_completion()` 使用三层检测策略判断 AI 是否报告任务完成：
+
+1. **严格否定标记**（最高优先级）：检查 `❌ not completed` 等否定标记，匹配则返回 `False`
+2. **严格肯定标记**：检查 `✅ completed` 等肯定标记，匹配则返回 `True`
+3. **模糊肯定匹配**（兜底）：使用正则表达式匹配 `✅.*completed`、`all criteria met` 等变体，
+   同时排除含有 `not completed`、`fail` 等否定词的情况
+
+默认（无匹配）返回 `False`，即认为未完成。
 
 #### 3. Context 生命周期管理
 
@@ -949,8 +1044,9 @@ def wait_and_analyze_long_running(self, subtask, client):
 ```
 autoagent/
 ├── orchestrator.py           # 主程序、CLI 入口
+├── ai_providers.py           # AI Provider 抽象层（多 CLI 工具支持）
 ├── task_executor.py          # 任务执行器 (Simple/Nested)
-├── codebuddy_client.py       # CodeBuddy AI 客户端
+├── codebuddy_client.py       # AIClient（统一 AI 客户端）
 ├── state_manager.py          # 状态持久化管理
 ├── conversation_logger.py    # 对话日志记录
 ├── ideas_watcher.py          # Ideas 文件监控与任务分解
@@ -1613,14 +1709,16 @@ python orchestrator.py --ideas ideas.md --idle --log-dir logs
 
 - ✅ 统一的任务执行模型（不再区分简单任务和循环任务）
 - ✅ 精简的任务类型体系（simple / nested / long_running）
-- ✅ AI完全自主判断完成条件
+- ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI）
+- ✅ AI完全自主判断完成条件（三层检测策略）
 - ✅ 支持嵌套任务
 - ✅ 支持长时间任务的nohup处理
 - ✅ AI完全掌控重试策略
 - ✅ 清晰的分层结构
-- ✅ 完善的状态管理
+- ✅ 完善的状态管理（独立 StateManager 模块）
 - ✅ 可扩展的设计
 - ✅ 系统与AI的清晰职责分工
-- ✅ 对话日志系统（完整记录 AI 交互，支持审计和回顾）
+- ✅ 对话日志系统（完整记录 AI 交互，含工具调用，支持审计和回顾）
+- ✅ stream-json 实时解析（实时显示 AI 工具调用和执行结果）
 - ✅ Ideas 监控（自动将 ideas.md 中的想法分解为 TODO 任务）
 - ✅ Idle 模式（任务完成后持续等待新输入，实现持续工作流）
