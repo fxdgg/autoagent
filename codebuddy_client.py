@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+import asyncio
 from typing import Union, Optional, List
 
 from ai_providers import AIProvider, CodeBuddyProvider, get_provider
@@ -478,3 +479,395 @@ class AIClient:
 
 # Backward compatibility alias
 CodeBuddyClient = AIClient
+
+
+class AIClientSDK:
+    """
+    AI client using the CodeBuddy Agent SDK (Python package) instead of CLI subprocess.
+    
+    This provides the same ask() interface as AIClient, but calls the SDK's
+    async query() function directly, avoiding shell/process overhead and
+    platform-specific quirks (e.g. stdin piping, encoding issues on Windows).
+    
+    Only works with the CodeBuddy provider. Other providers (Claude, Gemini)
+    are not supported via SDK and should continue using AIClient.
+    
+    Requires: pip install codebuddy-agent-sdk
+    """
+
+    def __init__(
+        self,
+        provider: AIProvider = None,
+        workspace: str = ".",
+        timeout: int = 3600,
+        context_id: str = None,
+        # Legacy parameters for backward compatibility
+        codebuddy_path: str = None,
+        model: str = None,
+    ):
+        """
+        Initialize AIClientSDK.
+        
+        Args:
+            provider: AI provider instance (must be CodeBuddyProvider or None)
+            workspace: Working directory
+            timeout: Default timeout in seconds
+            context_id: Context identifier for logging/tracking
+            codebuddy_path: (Legacy) Path to CodeBuddy executable
+            model: (Legacy) AI model to use
+        """
+        # Support both new provider-based and legacy initialization
+        if provider is not None:
+            self.provider = provider
+        else:
+            self.provider = CodeBuddyProvider(
+                executable=codebuddy_path or "codebuddy",
+                model=model or "glm-5.0-ioa",
+            )
+
+        self.workspace = workspace
+        self.timeout = timeout
+        self.context_id = context_id
+        self._session_id = None  # SDK session ID for conversation continuity
+        self._session_started = False
+        self.last_full_log = ""
+
+    # Legacy property accessors for backward compatibility
+    @property
+    def codebuddy_path(self):
+        return self.provider.executable
+
+    @property
+    def model(self):
+        return self.provider.model
+
+    def ask(
+        self,
+        prompt: str,
+        expect_json: bool = False,
+        timeout: int = None,
+        continue_session: bool = False,
+    ) -> Union[str, dict]:
+        """
+        Send a prompt to CodeBuddy via SDK and get a response.
+        
+        This is a synchronous wrapper around the async SDK query() call.
+        
+        Args:
+            prompt: The prompt to send
+            expect_json: Whether to parse the response as JSON
+            timeout: Override default timeout
+            continue_session: Whether to continue the existing session
+            
+        Returns:
+            str or dict: The AI response (parsed as JSON if expect_json=True)
+            
+        Raises:
+            AICallError: If the call fails
+        """
+        effective_timeout = timeout or self.timeout
+
+        logger.info(
+            f"[{self.context_id}] Calling CodeBuddy SDK "
+            f"(continue={continue_session}, timeout={effective_timeout}s)"
+        )
+        logger.debug(f"[{self.context_id}] Prompt: {prompt[:200]}...")
+
+        try:
+            response, full_log = self._run_query(
+                prompt, continue_session, effective_timeout
+            )
+        except AICallError:
+            raise
+        except Exception as e:
+            raise AICallError(f"Failed to call CodeBuddy SDK: {e}")
+
+        if not response:
+            raise AICallError("CodeBuddy SDK returned empty response")
+
+        self.last_full_log = full_log or response
+        self._session_started = True
+
+        logger.info(f"[{self.context_id}] Got response ({len(response)} chars)")
+        logger.debug(f"[{self.context_id}] Response: {response[:200]}...")
+
+        if expect_json:
+            return self._parse_json_response(response)
+        return response
+
+    def _run_query(
+        self, prompt: str, continue_session: bool, timeout: int
+    ) -> tuple:
+        """
+        Run the SDK query in an asyncio event loop.
+        
+        Returns:
+            tuple: (response_text, full_log_text)
+        """
+        try:
+            from codebuddy_agent_sdk import (
+                query as sdk_query,
+                AssistantMessage,
+                ResultMessage,
+                CodeBuddyAgentOptions,
+            )
+            from codebuddy_agent_sdk.types import (
+                TextBlock,
+                ToolUseBlock,
+                ToolResultBlock,
+                UserMessage,
+                StreamEvent,
+            )
+        except ImportError:
+            raise AICallError(
+                "codebuddy-agent-sdk is not installed. "
+                "Install it with: pip install codebuddy-agent-sdk"
+            )
+
+        assistant_text_parts = []
+        full_log_parts = []
+
+        async def _do_query():
+            # Build options
+            options = CodeBuddyAgentOptions(
+                model=self.provider.model,
+                cwd=self.workspace,
+                permission_mode="bypassPermissions",
+            )
+
+            # Set executable path if custom
+            if self.provider.executable and self.provider.executable != "codebuddy":
+                options.codebuddy_code_path = self.provider.executable
+
+            # Session continuity
+            use_continue = continue_session and self._session_started
+            if use_continue and self._session_id:
+                options.continue_conversation = True
+                options.session_id = self._session_id
+
+            # Extra args from provider
+            if self.provider.extra_args:
+                # Parse space-separated extra args into dict
+                # e.g. "--debug --verbose" -> {"debug": None, "verbose": None}
+                parts = self.provider.extra_args.split()
+                i = 0
+                while i < len(parts):
+                    key = parts[i].lstrip("-")
+                    if i + 1 < len(parts) and not parts[i + 1].startswith("-"):
+                        options.extra_args[key] = parts[i + 1]
+                        i += 2
+                    else:
+                        options.extra_args[key] = None
+                        i += 1
+
+            logger.debug(
+                f"[{self.context_id}] SDK options: model={options.model}, "
+                f"cwd={options.cwd}, continue={options.continue_conversation}, "
+                f"session_id={options.session_id}"
+            )
+
+            async for message in sdk_query(prompt=prompt, options=options):
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            text = block.text
+                            if text:
+                                assistant_text_parts.append(text)
+                                full_log_parts.append(text)
+                                sys.stdout.write(text)
+                                sys.stdout.flush()
+                        elif isinstance(block, ToolUseBlock):
+                            self._display_tool_use(block.name, block.input)
+                            tool_log = self._format_tool_use_for_log(
+                                block.name, block.input
+                            )
+                            full_log_parts.append(tool_log)
+                        elif isinstance(block, ToolResultBlock):
+                            content = block.content or ""
+                            is_error = block.is_error or False
+                            if isinstance(content, str) and content:
+                                preview = content[:500]
+                                if len(content) > 500:
+                                    preview += f"... ({len(content)} chars total)"
+                                sys.stdout.write(f"   ↳ {preview}\n")
+                                sys.stdout.flush()
+                                error_marker = " ❌" if is_error else ""
+                                log_content = content[:2000]
+                                if len(content) > 2000:
+                                    log_content += f"\n... ({len(content)} chars total)"
+                                full_log_parts.append(
+                                    f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
+                                )
+
+                elif isinstance(message, UserMessage):
+                    # User messages may contain tool results
+                    if hasattr(message, 'content') and isinstance(message.content, list):
+                        for block in message.content:
+                            if isinstance(block, ToolResultBlock):
+                                content = block.content or ""
+                                is_error = block.is_error or False
+                                if isinstance(content, str) and content:
+                                    preview = content[:500]
+                                    if len(content) > 500:
+                                        preview += f"... ({len(content)} chars total)"
+                                    sys.stdout.write(f"   ↳ {preview}\n")
+                                    sys.stdout.flush()
+                                    error_marker = " ❌" if is_error else ""
+                                    log_content = content[:2000]
+                                    if len(content) > 2000:
+                                        log_content += f"\n... ({len(content)} chars total)"
+                                    full_log_parts.append(
+                                        f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
+                                    )
+
+                elif isinstance(message, ResultMessage):
+                    # Capture session_id for future --continue
+                    if message.session_id:
+                        self._session_id = message.session_id
+
+                    result_text = message.result or ""
+                    if result_text:
+                        assistant_text_parts.append(result_text)
+
+                    is_error = message.is_error
+                    duration_ms = message.duration_ms or 0
+                    num_turns = message.num_turns or 0
+                    status = "❌ Error" if is_error else "✅ Done"
+                    summary = f"\n--- {status} ({num_turns} turns, {duration_ms / 1000:.1f}s) ---\n"
+                    sys.stdout.write(summary)
+                    sys.stdout.flush()
+                    full_log_parts.append(f"\n{summary}")
+
+                    if is_error:
+                        errors = message.errors or []
+                        if errors:
+                            raise AICallError(
+                                f"CodeBuddy SDK error: {'; '.join(errors)}"
+                            )
+
+                elif isinstance(message, StreamEvent):
+                    # StreamEvent contains partial updates during streaming;
+                    # we can optionally log them but they're already reflected
+                    # in AssistantMessage blocks above.
+                    pass
+
+        # Run the async query with a timeout
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(
+                    asyncio.wait_for(_do_query(), timeout=timeout)
+                )
+            finally:
+                loop.close()
+        except asyncio.TimeoutError:
+            raise AICallError(
+                f"CodeBuddy SDK timed out after {timeout}s"
+            )
+
+        response = "".join(assistant_text_parts).strip()
+        full_log = "\n".join(full_log_parts).strip()
+        return response, full_log
+
+    def _display_tool_use(self, tool_name: str, tool_input: dict):
+        """Display a tool use event with a readable summary."""
+        if tool_name == "Bash":
+            cmd = tool_input.get("command", "")
+            sys.stdout.write(f"\n🔧 [{tool_name}] {cmd}\n")
+        elif tool_name in ("Edit", "Write", "MultiEdit"):
+            path = tool_input.get("file_path", tool_input.get("filePath", ""))
+            sys.stdout.write(f"\n📝 [{tool_name}] {path}\n")
+        elif tool_name == "Read":
+            path = tool_input.get("file_path", tool_input.get("filePath", ""))
+            sys.stdout.write(f"\n📖 [{tool_name}] {path}\n")
+        elif tool_name in ("Glob", "Grep"):
+            pattern = tool_input.get("pattern", tool_input.get("regex", ""))
+            sys.stdout.write(f"\n🔍 [{tool_name}] {pattern}\n")
+        else:
+            sys.stdout.write(f"\n🔧 [{tool_name}]\n")
+        sys.stdout.flush()
+
+    def _format_tool_use_for_log(self, tool_name: str, tool_input: dict) -> str:
+        """Format a tool use event as a Markdown string for the conversation log."""
+        if tool_name == "Bash":
+            cmd = tool_input.get("command", "")
+            return f"\n🔧 **[Bash]**\n```bash\n{cmd}\n```\n"
+        elif tool_name in ("Edit", "Write"):
+            path = tool_input.get("file_path", tool_input.get("filePath", ""))
+            content = tool_input.get("content", tool_input.get("new_string", ""))
+            result = f"\n📝 **[{tool_name}]** `{path}`\n"
+            if content:
+                preview = content[:1000]
+                if len(content) > 1000:
+                    preview += f"\n... ({len(content)} chars total)"
+                result += f"```\n{preview}\n```\n"
+            return result
+        elif tool_name == "MultiEdit":
+            path = tool_input.get("file_path", tool_input.get("filePath", ""))
+            edits = tool_input.get("edits", [])
+            return f"\n📝 **[MultiEdit]** `{path}` ({len(edits)} edits)\n"
+        elif tool_name == "Read":
+            path = tool_input.get("file_path", tool_input.get("filePath", ""))
+            return f"\n📖 **[Read]** `{path}`\n"
+        elif tool_name in ("Glob", "Grep"):
+            pattern = tool_input.get("pattern", tool_input.get("regex", ""))
+            return f"\n🔍 **[{tool_name}]** `{pattern}`\n"
+        elif tool_name == "TodoRead":
+            return f"\n📋 **[TodoRead]**\n"
+        elif tool_name in ("TaskCreate", "TaskUpdate"):
+            task_desc = tool_input.get("description", tool_input.get("task", ""))
+            if isinstance(task_desc, str) and task_desc:
+                return f"\n🔧 **[{tool_name}]** {task_desc[:200]}\n"
+            return f"\n🔧 **[{tool_name}]**\n"
+        else:
+            summary = json.dumps(tool_input, ensure_ascii=False)[:200]
+            return f"\n🔧 **[{tool_name}]** {summary}\n"
+
+    def _parse_json_response(self, response: str) -> dict:
+        """Extract and parse JSON from AI response (same logic as AIClient)."""
+        # Strategy 1: Try parsing the entire response as JSON
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 2: Extract JSON from markdown code block
+        json_patterns = [
+            r'```json\s*\n(.*?)\n\s*```',
+            r'```\s*\n(.*?)\n\s*```',
+        ]
+        for pattern in json_patterns:
+            match = re.search(pattern, response, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    continue
+
+        # Strategy 3: Find the first { ... } block
+        brace_depth = 0
+        start_idx = None
+        for i, char in enumerate(response):
+            if char == '{':
+                if brace_depth == 0:
+                    start_idx = i
+                brace_depth += 1
+            elif char == '}':
+                brace_depth -= 1
+                if brace_depth == 0 and start_idx is not None:
+                    try:
+                        return json.loads(response[start_idx:i + 1])
+                    except json.JSONDecodeError:
+                        start_idx = None
+
+        raise AICallError(
+            f"Failed to parse JSON from CodeBuddy response. "
+            f"Response preview: {response[:500]}"
+        )
+
+    def reset_session(self):
+        """Reset the session state."""
+        self._session_started = False
+        self._session_id = None
+        logger.info(f"[{self.context_id}] Session reset")

@@ -23,7 +23,7 @@ import logging
 import yaml
 from typing import Optional, List
 
-from codebuddy_client import AIClient, CodeBuddyClient, AICallError
+from codebuddy_client import AIClient, AIClientSDK, CodeBuddyClient, AICallError
 from ai_providers import get_provider, list_providers, AIProvider
 from task_executor import (
     SimpleTaskExecutor,
@@ -106,6 +106,7 @@ class TodoOrchestrator:
         log_dir: str = None,
         ideas_file: str = None,
         idle_interval: int = 30,
+        use_cli: bool = False,
         # Legacy parameters for backward compatibility
         codebuddy_path: str = None,
         model: str = None,
@@ -125,6 +126,8 @@ class TodoOrchestrator:
                      relative to the current working directory.
             ideas_file: Path to ideas.md file (None to disable ideas watching)
             idle_interval: Seconds between idle checks for new ideas (default: 30)
+            use_cli: If True, use CLI subprocess instead of CodeBuddy Agent SDK
+                     (only valid when provider is codebuddy)
             codebuddy_path: (Legacy) Path to CodeBuddy executable
             model: (Legacy) AI model to use
         """
@@ -132,6 +135,7 @@ class TodoOrchestrator:
         self.workspace = os.path.abspath(workspace)
         self.timeout = timeout
         self.idle_interval = idle_interval
+        self.use_cli = use_cli
         
         # Store provider (or create from legacy params)
         if provider is not None:
@@ -395,12 +399,20 @@ class TodoOrchestrator:
         
         # Create a new CodeBuddyClient for this main task (context isolation)
         context_id = f"task_{task_id}"
-        client = AIClient(
-            provider=self.provider,
-            workspace=self.workspace,
-            timeout=self.timeout,
-            context_id=context_id,
-        )
+        if self.use_cli:
+            client = AIClient(
+                provider=self.provider,
+                workspace=self.workspace,
+                timeout=self.timeout,
+                context_id=context_id,
+            )
+        else:
+            client = AIClientSDK(
+                provider=self.provider,
+                workspace=self.workspace,
+                timeout=self.timeout,
+                context_id=context_id,
+            )
         
         # Record context info in state
         self.state_manager.mark_task_status(
@@ -500,12 +512,20 @@ class TodoOrchestrator:
         print(f"{'─' * 60}")
         
         # Create a client for ideas processing
-        client = AIClient(
-            provider=self.provider,
-            workspace=self.workspace,
-            timeout=self.timeout,
-            context_id="ideas_processor",
-        )
+        if self.use_cli:
+            client = AIClient(
+                provider=self.provider,
+                workspace=self.workspace,
+                timeout=self.timeout,
+                context_id="ideas_processor",
+            )
+        else:
+            client = AIClientSDK(
+                provider=self.provider,
+                workspace=self.workspace,
+                timeout=self.timeout,
+                context_id="ideas_processor",
+            )
         
         count = self.ideas_watcher.process_new_ideas(client)
         
@@ -804,6 +824,12 @@ Examples:
         default=30,
         help='Seconds between idle checks for new ideas (default: 30)',
     )
+    parser.add_argument(
+        '--use-cli',
+        action='store_true',
+        help='Use CLI subprocess instead of CodeBuddy Agent SDK (default is SDK). '
+             'Only works with --provider codebuddy.',
+    )
     
     args = parser.parse_args()
     
@@ -846,6 +872,16 @@ Examples:
             print("❌ --idle mode requires --ideas to be set.")
             sys.exit(1)
         
+        # Validate non-codebuddy providers always use CLI (SDK is codebuddy-only)
+        if not args.use_cli:
+            resolved_provider = args.provider.lower()
+            # Resolve aliases
+            from ai_providers import PROVIDER_ALIASES
+            resolved_provider = PROVIDER_ALIASES.get(resolved_provider, resolved_provider)
+            if resolved_provider != 'codebuddy':
+                # Non-codebuddy providers don't support SDK, force CLI mode
+                args.use_cli = True
+        
         # Create AI provider
         # Legacy support: --codebuddy-path overrides executable for codebuddy provider
         executable = args.executable
@@ -877,6 +913,7 @@ Examples:
             log_dir=_log_dir_raw,
             ideas_file=args.ideas,
             idle_interval=args.idle_interval,
+            use_cli=args.use_cli,
         )
         
         # Handle special commands

@@ -443,6 +443,12 @@ Examples:
         default=30,
         help="Seconds between idle checks for new ideas (default: 30)",
     )
+    parser.add_argument(
+        "--use-cli",
+        action="store_true",
+        help="Use CLI subprocess instead of CodeBuddy Agent SDK (default is SDK). "
+             "Only works with --provider codebuddy.",
+    )
 
     args = parser.parse_args()
 
@@ -555,6 +561,8 @@ Examples:
             sys.exit(1)
         extra.append("--idle")
         extra.extend(["--idle-interval", str(args.idle_interval)])
+    if args.use_cli:
+        extra.append("--use-cli")
 
     # Run the test
     print(f"\n🏁 Starting AutoAgent test...")
