@@ -1,11 +1,13 @@
 """
-CodeBuddy Client - Wraps CodeBuddy CLI interactions with context management.
+AI Client - Wraps AI CLI tool interactions with context management.
 
-This module provides the CodeBuddyClient class that handles:
-- Calling CodeBuddy via subprocess
+This module provides the AIClient class that handles:
+- Calling AI tools (CodeBuddy, Claude Code, Gemini CLI) via subprocess
 - Managing conversation context (--continue flag)
 - Parsing JSON responses from AI
 - Timeout handling
+
+Backward compatible: CodeBuddyClient is an alias for AIClient.
 """
 
 import subprocess
@@ -20,48 +22,75 @@ import threading
 import time
 from typing import Union, Optional, List
 
+from ai_providers import AIProvider, CodeBuddyProvider, get_provider
+
 logger = logging.getLogger(__name__)
 
 
 class AICallError(Exception):
-    """CodeBuddy call error (auth failure, response parse failure, etc.)"""
+    """AI call error (auth failure, response parse failure, etc.)"""
     pass
 
 
-class CodeBuddyClient:
+class AIClient:
     """
-    CodeBuddy CLI client with context management.
+    AI CLI client with context management.
     
-    Each main task should create its own CodeBuddyClient instance.
+    Supports multiple AI backends through the provider abstraction:
+    - CodeBuddy (codebuddy)
+    - Claude Code Internal (claude-internal)
+    - Gemini CLI Internal (gemini-internal)
+    
+    Each main task should create its own AIClient instance.
     Subtasks within the same main task share context via --continue.
     """
 
     def __init__(
         self,
-        codebuddy_path: str = "codebuddy",
-        model: str = "glm-5.0-ioa",
+        provider: AIProvider = None,
         workspace: str = ".",
         timeout: int = 3600,
         context_id: str = None,
+        # Legacy parameters for backward compatibility
+        codebuddy_path: str = None,
+        model: str = None,
     ):
         """
-        Initialize CodeBuddyClient.
+        Initialize AIClient.
         
         Args:
-            codebuddy_path: Path to CodeBuddy executable
-            model: AI model to use
+            provider: AI provider instance (takes precedence over legacy params)
             workspace: Working directory
             timeout: Default timeout in seconds
             context_id: Context identifier for logging/tracking
+            codebuddy_path: (Legacy) Path to CodeBuddy executable
+            model: (Legacy) AI model to use
         """
-        self.codebuddy_path = codebuddy_path
-        self.model = model
+        # Support both new provider-based and legacy initialization
+        if provider is not None:
+            self.provider = provider
+        else:
+            # Legacy: create a CodeBuddyProvider from old-style params
+            self.provider = CodeBuddyProvider(
+                executable=codebuddy_path or "codebuddy",
+                model=model or "glm-5.0-ioa",
+            )
+        
         self.workspace = workspace
         self.timeout = timeout
         self.context_id = context_id
         self._session_started = False
         # Full conversation log including tool calls (set after each ask() call)
         self.last_full_log = ""
+    
+    # Legacy property accessors for backward compatibility
+    @property
+    def codebuddy_path(self):
+        return self.provider.executable
+    
+    @property
+    def model(self):
+        return self.provider.model
 
     def ask(
         self,
@@ -91,7 +120,7 @@ class CodeBuddyClient:
         cmd_args = self._build_command(continue_session)
         
         logger.info(
-            f"[{self.context_id}] Calling CodeBuddy "
+            f"[{self.context_id}] Calling {self.provider.name} "
             f"(continue={continue_session}, timeout={effective_timeout}s)"
         )
         logger.debug(f"[{self.context_id}] Prompt: {prompt[:200]}...")
@@ -107,11 +136,7 @@ class CodeBuddyClient:
                 prompt_file_path = pf.name
 
             # Build full command: pipe the temp file content as stdin
-            # codebuddy -y - reads prompt from stdin
-            if os.name == 'nt':
-                full_cmd = f'type "{prompt_file_path}" | {cmd_args}'
-            else:
-                full_cmd = f'cat "{prompt_file_path}" | {cmd_args}'
+            full_cmd = self.provider.get_stdin_command(prompt_file_path, cmd_args)
 
             logger.debug(f"[{self.context_id}] Full command: {full_cmd}")
 
@@ -168,12 +193,12 @@ class CodeBuddyClient:
                 # Check for authentication error
                 if "Authentication" in error_msg or "login" in error_msg.lower():
                     raise AICallError(
-                        f"CodeBuddy authentication required. "
-                        f"Please run 'codebuddy -p \"login_test\"' first. "
+                        f"{self.provider.name} authentication required. "
+                        f"Please run '{self.provider.executable} --help' to check. "
                         f"Error: {error_msg}"
                     )
                 raise AICallError(
-                    f"CodeBuddy returned exit code {process.returncode}: {error_msg}"
+                    f"{self.provider.name} returned exit code {process.returncode}: {error_msg}"
                 )
 
             # Combine all assistant text from stream-json events
@@ -182,7 +207,7 @@ class CodeBuddyClient:
             if not response:
                 response = stdout_text.strip()
             if not response:
-                raise AICallError("CodeBuddy returned empty response")
+                raise AICallError(f"{self.provider.name} returned empty response")
 
             # Store full log (with tool calls) for conversation logger
             self.last_full_log = "\n".join(full_log_parts).strip()
@@ -199,12 +224,12 @@ class CodeBuddyClient:
 
         except subprocess.TimeoutExpired:
             raise AICallError(
-                f"CodeBuddy timed out after {effective_timeout}s"
+                f"{self.provider.name} timed out after {effective_timeout}s"
             )
         except AICallError:
             raise
         except Exception as e:
-            raise AICallError(f"Failed to call CodeBuddy: {e}")
+            raise AICallError(f"Failed to call {self.provider.name}: {e}")
         finally:
             # Clean up temp file
             if prompt_file_path:
@@ -215,10 +240,10 @@ class CodeBuddyClient:
 
     def _build_command(self, continue_session: bool) -> str:
         """
-        Build the CodeBuddy CLI command string (without prompt).
+        Build the AI CLI command string (without prompt).
         
-        The prompt is passed separately via stdin pipe to avoid all shell
-        escaping issues. The command uses '-y -' to read prompt from stdin.
+        Delegates to the provider to build the correct command for the
+        specific AI tool being used.
         
         Args:
             continue_session: Whether to continue existing session
@@ -226,20 +251,8 @@ class CodeBuddyClient:
         Returns:
             str: The command string (prompt will be piped via stdin)
         """
-        parts = [self.codebuddy_path]
-        
-        # Use --print for non-interactive mode with stream-json for real-time output
-        parts.append("--debug --verbose --max-turns 500 --print")
-        parts.extend(["--output-format", "stream-json"])
-        
-        if continue_session and self._session_started:
-            parts.append("--continue")
-        
-        parts.extend(["--model", self.model])
-        # -y - means: accept all, read prompt from stdin
-        parts.extend(["-y", "-"])
-        
-        return " ".join(parts)
+        use_continue = continue_session and self._session_started
+        return self.provider.build_command(continue_session=use_continue)
 
     def _handle_stream_line(self, line: str, assistant_text_parts: list, full_log_parts: list = None):
         """
@@ -461,3 +474,7 @@ class CodeBuddyClient:
         """Reset the session state, so next call won't use --continue."""
         self._session_started = False
         logger.info(f"[{self.context_id}] Session reset")
+
+
+# Backward compatibility alias
+CodeBuddyClient = AIClient

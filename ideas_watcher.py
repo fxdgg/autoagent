@@ -14,7 +14,7 @@ import hashlib
 import logging
 from typing import Optional, List
 
-from codebuddy_client import CodeBuddyClient, AICallError
+from codebuddy_client import AIClient, CodeBuddyClient, AICallError
 
 logger = logging.getLogger(__name__)
 

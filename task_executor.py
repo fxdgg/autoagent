@@ -13,7 +13,7 @@ import subprocess
 import logging
 from typing import Optional
 
-from codebuddy_client import CodeBuddyClient, AICallError
+from codebuddy_client import AIClient, CodeBuddyClient, AICallError
 
 logger = logging.getLogger(__name__)
 
@@ -181,9 +181,15 @@ class SimpleTaskExecutor:
         
         parts.append(
             "\nPlease try to complete this task. "
-            "When done, indicate the result:\n"
-            "- ✅ completed: if the completion criteria are met\n"
-            "- ❌ not completed: if not met, explain what you plan to improve"
+            "When you are done, you MUST include a status line in your response.\n\n"
+            "**CRITICAL INSTRUCTION**: Your response MUST end with EXACTLY one of these "
+            "two status lines (copy-paste verbatim, on its own line):\n\n"
+            "  ✅ completed\n\n"
+            "  ❌ not completed: <reason>\n\n"
+            "This status line is MANDATORY. Do NOT omit it. Do NOT rephrase it. "
+            "Do NOT embed it inside a sentence or heading. "
+            "It must appear as the LAST line of your response, standalone, "
+            "exactly as shown above (with the emoji prefix)."
         )
         
         return "\n\n".join(parts)
@@ -191,6 +197,11 @@ class SimpleTaskExecutor:
     def _check_completion(self, response: str) -> bool:
         """
         Check if the AI reports the task as completed.
+        
+        Uses a multi-layer strategy:
+        1. Check for strict markers (✅ COMPLETED / ❌ NOT_COMPLETED)
+        2. Check for common variations the AI might use despite instructions
+        3. Scan for contextual completion phrases as a fallback
         
         Args:
             response: AI response text
@@ -200,39 +211,59 @@ class SimpleTaskExecutor:
         """
         response_lower = response.lower()
         
-        # Positive indicators
-        completion_markers = [
-            "✅ completed",
-            "✅ complete",
-            "✅ 完成",
-            "✅completed",
-            "✅complete",
-            "✅完成",
-        ]
-        
-        # Negative indicators
-        failure_markers = [
+        # --- Layer 1: Strict negative markers (check first, most specific) ---
+        strict_failure_markers = [
             "❌ not_completed",
             "❌ not completed",
             "❌ not_complete",
             "❌ not complete",
-            "❌ 未完成",
             "❌not_completed",
             "❌not completed",
             "❌not_complete",
             "❌not complete",
+            "❌ 未完成",
             "❌未完成",
         ]
-        
-        # Check negative first (more specific)
-        for marker in failure_markers:
+        for marker in strict_failure_markers:
             if marker.lower() in response_lower:
                 return False
         
-        # Then check positive
-        for marker in completion_markers:
+        # --- Layer 2: Strict positive markers ---
+        strict_completion_markers = [
+            "✅ completed",
+            "✅ complete",
+            "✅completed",
+            "✅complete",
+            "✅ 完成",
+            "✅完成",
+        ]
+        for marker in strict_completion_markers:
             if marker.lower() in response_lower:
                 return True
+        
+        # --- Layer 3: Fuzzy positive patterns (AI often rephrases) ---
+        # These catch cases like "✅ Task Completed Successfully",
+        # "✅ All criteria met", "✅ Done", etc.
+        import re
+        fuzzy_positive_patterns = [
+            r'✅.*(?:completed?|done|success|criteria\s+(?:are\s+)?met|finish)',
+            r'(?:task|all)\s+(?:has been\s+)?completed?\s+successfully',
+            r'all\s+completion\s+criteria\s+(?:have been\s+|are\s+)?met',
+            r'(?:completed?|done|success).*✅',
+        ]
+        # Only check the last 1000 chars to focus on the conclusion
+        tail = response_lower[-1000:] if len(response_lower) > 1000 else response_lower
+        for pattern in fuzzy_positive_patterns:
+            if re.search(pattern, tail):
+                # Double-check: make sure there's no "not completed" nearby
+                not_patterns = [
+                    r'not\s+(?:yet\s+)?completed?',
+                    r'criteria\s+(?:are\s+)?not\s+met',
+                    r'fail',
+                ]
+                has_negation = any(re.search(np, tail) for np in not_patterns)
+                if not has_negation:
+                    return True
         
         # Default: not completed
         return False
@@ -839,9 +870,14 @@ Please evaluate:
 1. Did the task complete successfully?
 2. Do the results meet the completion criteria?
 
-Respond with:
-- ✅ COMPLETED: if the criteria are met
-- ❌ NOT_COMPLETED: if not met, explain why
+**CRITICAL INSTRUCTION**: Your response MUST end with EXACTLY one of these two status lines (copy-paste verbatim, on its own line):
+
+  ✅ COMPLETED
+
+  ❌ NOT_COMPLETED: <reason>
+
+This status line is MANDATORY. Do NOT omit it. Do NOT rephrase it.
+It must appear as the LAST line of your response, standalone, exactly as shown above.
 """
         
         try:
@@ -859,16 +895,8 @@ Respond with:
                     metadata={"type": "long_running_analysis"},
                 )
             
-            # Check completion
-            completion_markers = ["✅ completed", "✅ complete", "✅ 完成", "criteria met", "criteria are met"]
-            is_completed = any(m.lower() in result.lower() for m in completion_markers)
-            
-            # Also check for negative
-            failure_markers = ["❌ not_completed", "❌ not completed", "not yet completed", "criteria not met"]
-            is_failed = any(m.lower() in result.lower() for m in failure_markers)
-            
-            if is_failed:
-                is_completed = False
+            # Reuse the same robust check logic from SimpleTaskExecutor
+            is_completed = self.simple_executor._check_completion(result)
             
             if is_completed:
                 state_manager.mark_task_status(

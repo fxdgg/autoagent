@@ -21,7 +21,8 @@ import logging
 import yaml
 from typing import Optional, List
 
-from codebuddy_client import CodeBuddyClient, AICallError
+from codebuddy_client import AIClient, CodeBuddyClient, AICallError
+from ai_providers import get_provider, list_providers, AIProvider
 from task_executor import (
     SimpleTaskExecutor,
     NestedTaskExecutor,
@@ -51,13 +52,15 @@ class TodoOrchestrator:
         self,
         todos_file: str = "todos.yaml",
         state_file: str = "todos_state.yaml",
-        codebuddy_path: str = "codebuddy",
-        model: str = "glm-5.0-ioa",
+        provider: AIProvider = None,
         workspace: str = ".",
         timeout: int = 3600,
         log_dir: str = None,
         ideas_file: str = None,
         idle_interval: int = 30,
+        # Legacy parameters for backward compatibility
+        codebuddy_path: str = None,
+        model: str = None,
     ):
         """
         Initialize the TodoOrchestrator.
@@ -65,20 +68,32 @@ class TodoOrchestrator:
         Args:
             todos_file: Path to the task configuration YAML
             state_file: Path to the state persistence file
-            codebuddy_path: Path to CodeBuddy executable
-            model: AI model to use
-            workspace: Working directory for CodeBuddy
+            provider: AI provider instance (takes precedence over legacy params)
+            workspace: Working directory for AI tool
             timeout: Default timeout for AI calls
             log_dir: Root directory for conversation logs (None to disable)
             ideas_file: Path to ideas.md file (None to disable ideas watching)
             idle_interval: Seconds between idle checks for new ideas (default: 30)
+            codebuddy_path: (Legacy) Path to CodeBuddy executable
+            model: (Legacy) AI model to use
         """
         self.todos_file = todos_file
-        self.codebuddy_path = codebuddy_path
-        self.model = model
         self.workspace = workspace
         self.timeout = timeout
         self.idle_interval = idle_interval
+        
+        # Store provider (or create from legacy params)
+        if provider is not None:
+            self.provider = provider
+        elif codebuddy_path or model:
+            from ai_providers import CodeBuddyProvider
+            self.provider = CodeBuddyProvider(
+                executable=codebuddy_path or "codebuddy",
+                model=model or "glm-5.0-ioa",
+            )
+        else:
+            from ai_providers import CodeBuddyProvider
+            self.provider = CodeBuddyProvider()
         
         self.state_manager = StateManager(state_file)
         self.conv_logger = ConversationLogger(log_dir) if log_dir else None
@@ -251,7 +266,8 @@ class TodoOrchestrator:
         print(f"  CodeBuddy Todo Orchestrator")
         print(f"  Tasks to execute: {len(tasks_to_run)}")
         print(f"  Config: {self.todos_file}")
-        print(f"  Model: {self.model}")
+        print(f"  Provider: {self.provider.name}")
+        print(f"  Model: {self.provider.model}")
         print(f"{'=' * 60}")
         
         for task in tasks_to_run:
@@ -320,9 +336,8 @@ class TodoOrchestrator:
         
         # Create a new CodeBuddyClient for this main task (context isolation)
         context_id = f"task_{task_id}"
-        client = CodeBuddyClient(
-            codebuddy_path=self.codebuddy_path,
-            model=self.model,
+        client = AIClient(
+            provider=self.provider,
             workspace=self.workspace,
             timeout=self.timeout,
             context_id=context_id,
@@ -426,9 +441,8 @@ class TodoOrchestrator:
         print(f"{'─' * 60}")
         
         # Create a client for ideas processing
-        client = CodeBuddyClient(
-            codebuddy_path=self.codebuddy_path,
-            model=self.model,
+        client = AIClient(
+            provider=self.provider,
             workspace=self.workspace,
             timeout=self.timeout,
             context_id="ideas_processor",
@@ -465,7 +479,8 @@ class TodoOrchestrator:
         print(f"  CodeBuddy Todo Orchestrator (Idle Mode)")
         print(f"  Config: {self.todos_file}")
         print(f"  Ideas: {self.ideas_watcher.ideas_file if self.ideas_watcher else 'disabled'}")
-        print(f"  Model: {self.model}")
+        print(f"  Provider: {self.provider.name}")
+        print(f"  Model: {self.provider.model}")
         print(f"  Idle interval: {self.idle_interval}s")
         print(f"{'=' * 60}")
         
@@ -593,18 +608,21 @@ def print_status(orchestrator: TodoOrchestrator):
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="CodeBuddy Todo Orchestrator - AI-driven task execution system",
+        description="AI-driven task execution system (supports CodeBuddy, Claude Code, Gemini CLI)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python orchestrator.py                          # Run all tasks
-  python orchestrator.py --config my_tasks.yaml   # Use custom config
-  python orchestrator.py --task 2                  # Run only task 2
-  python orchestrator.py --status                  # Show current status
-  python orchestrator.py --reset                   # Reset all state
-  python orchestrator.py --verbose                 # Enable debug logging
-  python orchestrator.py --ideas ideas.md          # Watch ideas.md for new ideas
-  python orchestrator.py --idle --ideas ideas.md   # Run tasks then idle for ideas
+  python orchestrator.py                                # Run all tasks (CodeBuddy default)
+  python orchestrator.py --provider claude               # Use Claude Code Internal
+  python orchestrator.py --provider gemini --model gemini-2.5-pro  # Use Gemini CLI
+  python orchestrator.py --config my_tasks.yaml          # Use custom config
+  python orchestrator.py --task 2                        # Run only task 2
+  python orchestrator.py --status                        # Show current status
+  python orchestrator.py --reset                         # Reset all state
+  python orchestrator.py --verbose                       # Enable debug logging
+  python orchestrator.py --ideas ideas.md                # Watch ideas.md for new ideas
+  python orchestrator.py --idle --ideas ideas.md         # Run tasks then idle for ideas
+  python orchestrator.py --list-providers                # List available AI providers
         """,
     )
     
@@ -625,14 +643,36 @@ Examples:
         help='Execute only the specified task ID',
     )
     parser.add_argument(
-        '--codebuddy-path',
+        '--provider', '-P',
         default='codebuddy',
-        help='Path to CodeBuddy executable (default: codebuddy)',
+        help='AI provider to use: codebuddy (default), claude, gemini. '
+             'Use --list-providers to see all available options.',
+    )
+    parser.add_argument(
+        '--executable',
+        default=None,
+        help='Override the default executable path for the AI provider',
+    )
+    parser.add_argument(
+        '--extra-args',
+        default=None,
+        help='Additional CLI arguments to pass to the AI tool',
+    )
+    parser.add_argument(
+        '--list-providers',
+        action='store_true',
+        help='List available AI providers and exit',
+    )
+    parser.add_argument(
+        '--codebuddy-path',
+        default=None,
+        help='(Legacy) Path to CodeBuddy executable. Prefer --provider + --executable.',
     )
     parser.add_argument(
         '--model', '-m',
-        default='glm-5.0-ioa',
-        help='AI model to use (default: glm-5.0-ioa)',
+        default=None,
+        help='AI model to use (default depends on provider: '
+             'codebuddy=glm-5.0-ioa, claude=claude-sonnet-4-6, gemini=gemini-2.5-pro)',
     )
     parser.add_argument(
         '--workspace', '-w',
@@ -699,17 +739,53 @@ Examples:
     setup_logging(verbose=args.verbose)
     
     try:
+        # Handle --list-providers
+        if args.list_providers:
+            providers = list_providers()
+            print(f"\n{'=' * 50}")
+            print(f"  Available AI Providers")
+            print(f"{'=' * 50}")
+            for name, info in providers.items():
+                aliases = ", ".join(info['aliases']) if info['aliases'] else "(none)"
+                print(f"\n  📌 {name}")
+                print(f"     Executable: {info['default_executable']}")
+                print(f"     Default model: {info['default_model']}")
+                print(f"     Aliases: {aliases}")
+            print(f"\n{'=' * 50}")
+            return
+
         # Validate idle mode requires ideas file
         if args.idle and not args.ideas:
             print("❌ --idle mode requires --ideas to be set.")
             sys.exit(1)
         
+        # Create AI provider
+        # Legacy support: --codebuddy-path overrides executable for codebuddy provider
+        executable = args.executable
+        if args.codebuddy_path and not executable:
+            executable = args.codebuddy_path
+            if args.provider == 'codebuddy':
+                pass  # Use codebuddy_path as executable
+            else:
+                logger.warning(
+                    "--codebuddy-path is deprecated when using --provider. "
+                    "Use --executable instead."
+                )
+        
+        provider = get_provider(
+            name=args.provider,
+            executable=executable,
+            model=args.model,
+            extra_args=args.extra_args,
+        )
+        
+        logger.info(f"Using AI provider: {provider}")
+        
         # Create orchestrator
         orchestrator = TodoOrchestrator(
             todos_file=args.config,
             state_file=args.state,
-            codebuddy_path=args.codebuddy_path,
-            model=args.model,
+            provider=provider,
             workspace=args.workspace,
             timeout=args.timeout,
             log_dir=args.log_dir,
