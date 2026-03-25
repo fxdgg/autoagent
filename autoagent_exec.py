@@ -26,7 +26,6 @@ import os
 import subprocess
 import sys
 import time
-import threading
 import signal as signal_mod
 
 
@@ -81,33 +80,6 @@ def write_signal_file(path: str, data: dict):
         os.replace(tmp_path, path)
     else:
         os.rename(tmp_path, path)
-
-
-def monitor_process(proc: subprocess.Popen, signal_file: str, output_log: str):
-    """
-    Monitor the background process and update the signal file when it finishes.
-    
-    This function runs in a daemon-like manner after the main script has
-    printed the "task submitted" message.
-    """
-    # Wait for process to complete
-    proc.wait()
-
-    exit_code = proc.returncode
-    status = "finished" if exit_code == 0 else "error"
-
-    # Update signal file
-    try:
-        with open(signal_file, "r", encoding="utf-8") as f:
-            signal_data = json.load(f)
-    except Exception:
-        signal_data = {}
-
-    signal_data["status"] = status
-    signal_data["exit_code"] = exit_code
-    signal_data["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-
-    write_signal_file(signal_file, signal_data)
 
 
 def main():
@@ -230,30 +202,161 @@ def main():
     }
     write_signal_file(signal_file, signal_data)
 
-    # Start a background monitoring thread that will update the signal file
-    # when the process finishes. This thread is a daemon thread, so if
-    # this script is killed, the background process still runs independently.
-    monitor_thread = threading.Thread(
-        target=monitor_process,
-        args=(proc, signal_file, output_log),
-        daemon=False,  # Non-daemon so it keeps running
-    )
-    monitor_thread.start()
+    # Start a detached monitor process that will update the signal file
+    # when the command finishes. This is a completely independent process
+    # so that this script can exit immediately (allowing the AI's Bash tool
+    # to see our output and end the session).
+    monitor_cmd = [
+        sys.executable, __file__,
+        "--monitor",
+        "--pid", str(pid),
+        "--signal-file", signal_file,
+        "--output-log", output_log,
+    ]
+    monitor_kwargs = {}
+    if os.name == "nt":
+        # DETACHED_PROCESS: don't inherit console, keep running after parent exits
+        monitor_kwargs["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        )
+    else:
+        monitor_kwargs["start_new_session"] = True
+
+    try:
+        subprocess.Popen(
+            monitor_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            **monitor_kwargs,
+        )
+    except Exception as e:
+        print(f"[WARNING] Failed to start monitor process: {e}")
+        print(f"   Signal file may not be updated when the command finishes.")
+        print(f"   The orchestrator will fall back to process-alive checks.")
 
     print(f"\n" + "=" * 60)
     print(f"  LONG-RUNNING TASK SUBMITTED SUCCESSFULLY")
-    print(f"  The task is running in the background.")
+    print(f"  The task is running in the background (PID {pid}).")
     print(f"  You MUST now end your current session immediately.")
     print(f"  Output your final status as: LONG_RUNNING_IN_PROGRESS")
     print(f"  AutoAgent will call you back when the task completes.")
     print(f"=" * 60)
 
-    # Wait for the monitor thread to complete (i.e., wait for the process)
-    # This keeps the script alive to update the signal file.
-    # The AI's Bash tool will see the output above and should end the session.
-    monitor_thread.join()
+    # Exit immediately so the AI's Bash tool sees our output
+    sys.exit(0)
+
+
+def monitor_mode():
+    """
+    Monitor mode: wait for a process (by PID) to exit, then update the signal file.
+
+    This runs as a completely detached process so that the main autoagent_exec
+    script can exit immediately after submitting the long-running task.
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--monitor", action="store_true")
+    parser.add_argument("--pid", type=int, required=True)
+    parser.add_argument("--signal-file", required=True)
+    parser.add_argument("--output-log", required=True)
+    args = parser.parse_args()
+
+    pid = args.pid
+    signal_file = args.signal_file
+
+    # Wait for the process to exit using OS-level APIs (no external dependencies)
+    exit_code = _wait_for_process(pid)
+
+    # Update signal file
+    try:
+        with open(signal_file, "r", encoding="utf-8") as f:
+            signal_data = json.load(f)
+    except Exception:
+        signal_data = {}
+
+    # If we couldn't get exit_code, assume finished (the orchestrator
+    # will check output to determine success/failure)
+    if exit_code is None:
+        signal_data["status"] = "finished"
+        signal_data["exit_code"] = -1
+        signal_data["note"] = "Process exited but exit code unknown"
+    else:
+        signal_data["status"] = "finished" if exit_code == 0 else "error"
+        signal_data["exit_code"] = exit_code
+
+    signal_data["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    write_signal_file(signal_file, signal_data)
+
+
+def _wait_for_process(pid: int) -> 'int | None':
+    """
+    Wait for a process to exit and return its exit code.
+    
+    Uses OS-level APIs without external dependencies:
+    - Windows: OpenProcess + WaitForSingleObject + GetExitCodeProcess
+    - Unix: poll with os.kill(pid, 0)
+    
+    Returns the exit code, or None if it could not be determined.
+    """
+    if os.name == "nt":
+        return _wait_for_process_windows(pid)
+    else:
+        return _wait_for_process_unix(pid)
+
+
+def _wait_for_process_windows(pid: int) -> 'int | None':
+    """Wait for a Windows process using Win32 API."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    PROCESS_SYNCHRONIZE = 0x00100000
+    PROCESS_QUERY_INFORMATION = 0x0400
+    INFINITE = 0xFFFFFFFF
+    WAIT_OBJECT_0 = 0
+
+    handle = kernel32.OpenProcess(
+        PROCESS_SYNCHRONIZE | PROCESS_QUERY_INFORMATION, False, pid
+    )
+    if not handle:
+        # Process may have already exited
+        return None
+
+    try:
+        # Wait indefinitely for the process to exit
+        result = kernel32.WaitForSingleObject(handle, INFINITE)
+        if result != WAIT_OBJECT_0:
+            return None
+
+        # Get exit code
+        exit_code = wintypes.DWORD()
+        if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return exit_code.value
+        return None
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _wait_for_process_unix(pid: int) -> 'int | None':
+    """Wait for a Unix process by polling os.kill."""
+    while True:
+        try:
+            os.kill(pid, 0)  # Check if alive
+            time.sleep(2)
+        except OSError:
+            # Process no longer exists
+            break
+    return None  # Can't determine exit code from another process on Unix
+
+
+def _is_monitor_mode():
+    return "--monitor" in sys.argv
 
 
 if __name__ == "__main__":
     _ensure_utf8_stdio()
-    main()
+    if _is_monitor_mode():
+        monitor_mode()
+    else:
+        main()

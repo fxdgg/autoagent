@@ -973,10 +973,15 @@ AutoAgent will call you back when the task completes with the results.
         """
         Poll the signal file until the long-running task completes.
         
+        Includes a fallback process-alive check: if the signal file
+        still says "running" but the process has exited, we treat it
+        as finished/error (in case the monitor process failed to update).
+        
         Returns:
             str: "finished", "error", or "timeout"
         """
         elapsed = 0
+        pid = None  # Will be read from signal file
         
         while elapsed < max_wait:
             if os.path.exists(signal_file):
@@ -992,7 +997,7 @@ AutoAgent will call you back when the task completes with the results.
                             f"Long-running task {subtask_id} finished "
                             f"(exit code {exit_code})"
                         )
-                        print(f"      ✅ Long-running task finished (exit code {exit_code})")
+                        print(f"      [OK] Long-running task finished (exit code {exit_code})")
                         return "finished"
                     
                     elif status == "error":
@@ -1001,10 +1006,22 @@ AutoAgent will call you back when the task completes with the results.
                             f"Long-running task {subtask_id} failed "
                             f"(exit code {exit_code})"
                         )
-                        print(f"      ❌ Long-running task failed (exit code {exit_code})")
+                        print(f"      [ERROR] Long-running task failed (exit code {exit_code})")
                         return "error"
                     
-                    # status == "running" — keep polling
+                    # status == "running" — check if process is still alive
+                    if pid is None:
+                        pid = signal_data.get("pid")
+                    
+                    if pid and not self._is_process_alive(pid):
+                        logger.warning(
+                            f"Long-running task {subtask_id} (PID {pid}) "
+                            f"is no longer running but signal file was not updated"
+                        )
+                        print(f"      [WARNING] Process {pid} exited but signal not updated (monitor may have failed)")
+                        # Treat as finished — the AI analysis step will
+                        # look at output to determine success/failure
+                        return "finished"
                     
                 except (json.JSONDecodeError, IOError) as e:
                     logger.debug(f"Signal file read error (will retry): {e}")
@@ -1013,10 +1030,38 @@ AutoAgent will call you back when the task completes with the results.
             elapsed += check_interval
             
             if elapsed % 300 == 0:  # Print status every 5 minutes
-                print(f"      ⏳ Still running... ({elapsed // 60} minutes elapsed)")
+                print(f"      [WAITING] Still running... ({elapsed // 60} minutes elapsed)")
         
-        print(f"      ⏰ Long-running task timed out after {max_wait // 3600}h")
+        print(f"      [TIMEOUT] Long-running task timed out after {max_wait // 3600}h")
         return "timeout"
+
+    @staticmethod
+    def _is_process_alive(pid: int) -> bool:
+        """Check if a process with the given PID is still running."""
+        if os.name == "nt":
+            # Windows: try OpenProcess
+            import ctypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return False
+            # Check if process has exited
+            STILL_ACTIVE = 259
+            from ctypes import wintypes
+            exit_code = wintypes.DWORD()
+            alive = False
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                alive = (exit_code.value == STILL_ACTIVE)
+            kernel32.CloseHandle(handle)
+            return alive
+        else:
+            # Unix: os.kill with signal 0
+            try:
+                os.kill(pid, 0)
+                return True
+            except OSError:
+                return False
 
     def _ai_analyze_long_running_result(
         self, subtask, client, state_manager, status, output_log,
