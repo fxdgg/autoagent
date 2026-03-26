@@ -48,7 +48,7 @@ class SimpleTaskExecutor:
     until the criteria are met or max attempts are reached.
     """
 
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, is_subtask: bool = False, conv_logger=None, parent_task_id: str = None) -> bool:
+    def execute(self, task: dict, client: CodeBuddyClient, state_manager, is_subtask: bool = False, conv_logger=None, parent_task_id: str = None, parent_context: dict = None) -> bool:
         """
         Execute a simple task.
         
@@ -59,6 +59,7 @@ class SimpleTaskExecutor:
             is_subtask: Whether this is a subtask within a nested task
             conv_logger: Optional ConversationLogger instance
             parent_task_id: Parent task ID if this is a subtask (for log organization)
+            parent_context: Optional context from parent task for prompt enrichment
             
         Returns:
             bool: True if task completed successfully
@@ -82,7 +83,7 @@ class SimpleTaskExecutor:
             print(f"\n   Attempt #{attempts}")
             
             # Build prompt
-            prompt = self._build_prompt(task, attempts, current_state)
+            prompt = self._build_prompt(task, attempts, current_state, parent_context=parent_context)
             
             try:
                 # First attempt of a main task: don't continue session
@@ -110,20 +111,23 @@ class SimpleTaskExecutor:
                     )
                 
                 # Check if AI reports completion
+                # Extract a meaningful summary from the AI response
+                summary = self._extract_summary(result)
+                
                 if self._check_completion(result):
                     print(f"   ✅ Task {task_id} completed!")
                     state_manager.mark_task_status(
                         task_id, "completed",
                         attempts=attempts,
                         last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
-                        ai_reasoning=result[:500],
+                        ai_reasoning=summary,
                     )
                     # Record history
                     state_manager.add_task_history(task_id, {
                         "attempt": attempts,
                         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "result": "completed",
-                        "ai_response": result[:500],
+                        "summary": summary,
                     })
                     return True
                 else:
@@ -132,7 +136,7 @@ class SimpleTaskExecutor:
                         "attempt": attempts,
                         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "result": "not_completed",
-                        "ai_response": result[:500],
+                        "summary": summary,
                     })
                     
             except AICallError as e:
@@ -161,8 +165,18 @@ class SimpleTaskExecutor:
         )
         return False
 
-    def _build_prompt(self, task: dict, attempt: int, state: dict) -> str:
-        """Build the prompt for AI."""
+    def _build_prompt(self, task: dict, attempt: int, state: dict, parent_context: dict = None) -> str:
+        """Build the prompt for AI.
+        
+        Args:
+            task: Task configuration dict
+            attempt: Current attempt number
+            state: Current task state from state_manager
+            parent_context: Optional context from parent task, containing:
+                - subtasks: list of all sibling subtasks (for orientation)
+                - suggested_fix: AI's suggested fix from failure analysis
+                - ai_decisions: list of past AI decisions
+        """
         parts = [
             f"Task: {task['name']}",
             f"Completion Criteria: {task['completion_criteria']}",
@@ -170,19 +184,44 @@ class SimpleTaskExecutor:
         
         if task.get('initial_hint') and attempt == 1:
             parts.append(f"Initial Hint: {task['initial_hint']}")
+
+        # Show sibling subtasks for orientation (so AI knows where this task fits)
+        if parent_context and parent_context.get('subtasks'):
+            subtask_lines = []
+            current_id = str(task['id'])
+            for st in parent_context['subtasks']:
+                st_id = str(st['id'])
+                marker = "→" if st_id == current_id else " "
+                subtask_lines.append(f"  {marker} {st_id}. {st['name']}")
+            parts.append(f"This task is part of a larger workflow:\n" + "\n".join(subtask_lines))
         
         if attempt > 1:
             history = state.get('history', [])
             if history:
                 recent = history[-3:]  # Last 3 attempts
-                history_text = "\n".join(
-                    f"  - Attempt {h.get('attempt', '?')}: {h.get('result', 'unknown')} - {h.get('ai_response', '')[:200]}"
-                    for h in recent
+                history_lines = []
+                for h in recent:
+                    result_str = h.get('result', 'unknown')
+                    summary = h.get('summary', '')
+                    if not summary:
+                        # Fallback: extract meaningful part from ai_response
+                        summary = self._extract_summary(h.get('ai_response', ''))
+                    history_lines.append(f"  - Attempt {h.get('attempt', '?')}: {result_str}")
+                    if summary:
+                        history_lines.append(f"    Summary: {summary}")
+                parts.append(f"Previous Attempts:\n" + "\n".join(history_lines))
+            
+            # Inject suggested_fix from AI failure analysis if available
+            if parent_context and parent_context.get('suggested_fix'):
+                parts.append(
+                    f"**AI Analysis from previous failure:**\n"
+                    f"{parent_context['suggested_fix']}\n\n"
+                    f"Please take this analysis into account and try a different approach."
                 )
-                parts.append(f"Previous Attempts:\n{history_text}")
-            parts.append(
-                "Please analyze what went wrong and try a different approach."
-            )
+            else:
+                parts.append(
+                    "Please analyze what went wrong and try a different approach."
+                )
         
         parts.append(
             "\nPlease try to complete this task. "
@@ -198,6 +237,39 @@ class SimpleTaskExecutor:
         )
         
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _extract_summary(ai_response: str) -> str:
+        """Extract a meaningful summary from AI response.
+        
+        The AI's raw response is a concatenation of tool calls and text,
+        which is not useful as context. Instead, we look for the final
+        status/conclusion section which typically contains the meaningful summary.
+        """
+        if not ai_response:
+            return ""
+        
+        # Look for the final status line and nearby context
+        # AI responses typically end with a summary before the status marker
+        lines = ai_response.strip().split('\n')
+        
+        # Find the last meaningful paragraph (skip empty lines from the end)
+        meaningful_lines = []
+        for line in reversed(lines):
+            stripped = line.strip()
+            if not stripped:
+                if meaningful_lines:
+                    break  # Stop at first blank line after finding content
+                continue
+            meaningful_lines.insert(0, stripped)
+            if len(meaningful_lines) >= 5:  # Cap at 5 lines
+                break
+        
+        if meaningful_lines:
+            return ' '.join(meaningful_lines)[:300]
+        
+        # Fallback: just take the last 300 chars
+        return ai_response.strip()[-300:]
 
     def _check_completion(self, response: str) -> bool:
         """
@@ -330,6 +402,28 @@ class NestedTaskExecutor:
             
             # Execute subtasks in order
             all_completed = True
+            
+            # Build parent context for subtask prompt enrichment
+            # Get the latest AI decision (suggested_fix) from previous rounds
+            parent_state = state_manager.get_task_state(task_id)
+            ai_decisions = parent_state.get('ai_decisions', [])
+            latest_fix = ai_decisions[-1].get('suggested_fix', '') if ai_decisions else ''
+            # Also check main_task_evaluations for suggested improvements
+            evaluations = parent_state.get('main_task_evaluations', [])
+            if evaluations and not latest_fix:
+                last_eval = evaluations[-1]
+                improvements = last_eval.get('suggested_improvements', [])
+                if improvements:
+                    latest_fix = "Suggested improvements from previous evaluation:\n" + "\n".join(f"  - {imp}" for imp in improvements)
+                elif last_eval.get('next_strategy'):
+                    latest_fix = f"Strategy from previous evaluation: {last_eval['next_strategy']}"
+            
+            parent_context = {
+                'subtasks': subtasks,
+                'suggested_fix': latest_fix,
+                'ai_decisions': ai_decisions,
+            }
+            
             for subtask in subtasks:
                 subtask_id = str(subtask['id'])
                 subtask_state = state_manager.get_task_state(subtask_id)
@@ -345,6 +439,7 @@ class NestedTaskExecutor:
                 result = self.subtask_executor.execute(
                     subtask, client, state_manager,
                     conv_logger=conv_logger, parent_task_id=task_id,
+                    parent_context=parent_context,
                 )
                 
                 if not result.success:
@@ -443,7 +538,7 @@ class NestedTaskExecutor:
         task_id = str(task['id'])
         failed_id = str(failed_subtask['id'])
         
-        # Build context for AI
+        # Build context for AI — include completion_criteria for each subtask
         task_history = []
         for st in all_subtasks:
             st_id = str(st['id'])
@@ -452,10 +547,26 @@ class NestedTaskExecutor:
                 "subtask_id": st_id,
                 "name": st['name'],
                 "type": st['type'],
+                "completion_criteria": st.get('completion_criteria', ''),
                 "status": st_state.get('status', 'pending'),
                 "attempts": st_state.get('attempts', 0),
                 "ai_reasoning": st_state.get('ai_reasoning', ''),
             })
+        
+        # Include previous AI decisions for context
+        parent_state = state_manager.get_task_state(task_id)
+        prev_decisions = parent_state.get('ai_decisions', [])
+        prev_decisions_text = ""
+        if prev_decisions:
+            recent_decisions = prev_decisions[-3:]
+            decision_lines = []
+            for d in recent_decisions:
+                decision_lines.append(
+                    f"  - Round {d.get('attempt', '?')}: failed at {d.get('failed_at', '?')}, "
+                    f"retried from {d.get('retry_from', '?')}\n"
+                    f"    Fix attempted: {d.get('suggested_fix', 'N/A')[:200]}"
+                )
+            prev_decisions_text = f"\nPrevious Failure Analyses:\n" + "\n".join(decision_lines)
         
         prompt = f"""A subtask has failed. Please analyze the failure and decide the retry strategy.
 
@@ -466,26 +577,30 @@ Failed Subtask:
   ID: {failed_id}
   Name: {failed_subtask['name']}
   Type: {failed_subtask['type']}
+  Completion Criteria: {failed_subtask.get('completion_criteria', 'N/A')}
   Error: {result.logs or result.output}
   Error Type: {result.error_type or 'unknown'}
 
 All Subtasks Status:
 {self._format_task_history(task_history)}
+{prev_decisions_text}
 
-Please respond in the following JSON format:
+You MUST respond with a JSON object in the following format:
 ```json
 {{
     "analysis": "Description of why the failure occurred",
     "retry_from": "{failed_id}",
     "reasoning": "Why retry from this subtask",
-    "suggested_fix": "Specific fix to try",
+    "suggested_fix": "Specific fix to try — this will be passed to the AI executing the retried subtask",
     "confidence": "high/medium/low"
 }}
 ```
 
-Important: retry_from should be the ID of the subtask to restart from. 
-It can be the failed subtask itself, or an earlier subtask if the root cause is there.
-Available subtask IDs: {[str(s['id']) for s in all_subtasks]}
+Important: 
+- retry_from should be the ID of the subtask to restart from.
+- It can be the failed subtask itself, or an earlier subtask if the root cause is there.
+- The suggested_fix will be shown to the AI that retries the subtask, so be specific and actionable.
+- Available subtask IDs: {[str(s['id']) for s in all_subtasks]}
 """
         
         print(f"\n   🤖 [AI Decision Point 1: Failure Analysis]")
@@ -548,6 +663,7 @@ Available subtask IDs: {[str(s['id']) for s in all_subtasks]}
                 "subtask_id": st_id,
                 "name": st['name'],
                 "type": st['type'],
+                "completion_criteria": st.get('completion_criteria', ''),
                 "status": st_state.get('status', 'unknown'),
                 "attempts": st_state.get('attempts', 0),
                 "ai_reasoning": st_state.get('ai_reasoning', ''),
@@ -668,15 +784,17 @@ Important:
                 logger.info(f"Reset subtask {st_id} to pending")
 
     def _format_task_history(self, history: list) -> str:
-        """Format task history for prompt."""
+        """Format task history for prompt, including completion criteria."""
         lines = []
         for item in history:
             lines.append(
                 f"  - {item['subtask_id']} ({item['name']}): "
                 f"status={item['status']}, attempts={item['attempts']}"
             )
+            if item.get('completion_criteria'):
+                lines.append(f"    Criteria: {item['completion_criteria'][:200]}")
             if item.get('ai_reasoning'):
-                lines.append(f"    AI reasoning: {item['ai_reasoning'][:200]}")
+                lines.append(f"    Summary: {item['ai_reasoning'][:300]}")
         return "\n".join(lines)
 
     def _format_execution_results(self, results: list) -> str:
@@ -687,6 +805,8 @@ Important:
                 f"  - {r['subtask_id']} ({r['name']}): "
                 f"status={r['status']}, attempts={r['attempts']}"
             )
+            if r.get('completion_criteria'):
+                lines.append(f"    Criteria: {r['completion_criteria'][:200]}")
             if r.get('ai_reasoning'):
                 lines.append(f"    Result: {r['ai_reasoning'][:300]}")
         return "\n".join(lines)
@@ -805,6 +925,18 @@ class LoopingTaskExecutor:
                 print(f"\n   📋 Retry attempt #{attempts} within loop {loop_idx}")
 
             all_completed = True
+            
+            # Build parent context for subtask prompt enrichment
+            parent_state = state_manager.get_task_state(task_id)
+            ai_decisions = parent_state.get('ai_decisions', [])
+            latest_fix = ai_decisions[-1].get('suggested_fix', '') if ai_decisions else ''
+            
+            parent_context = {
+                'subtasks': subtasks,
+                'suggested_fix': latest_fix,
+                'ai_decisions': ai_decisions,
+            }
+            
             for subtask in subtasks:
                 subtask_id = str(subtask['id'])
                 subtask_state = state_manager.get_task_state(subtask_id)
@@ -820,6 +952,7 @@ class LoopingTaskExecutor:
                 result = self.subtask_executor.execute(
                     subtask, client, state_manager,
                     conv_logger=conv_logger, parent_task_id=task_id,
+                    parent_context=parent_context,
                 )
 
                 if not result.success:
@@ -873,15 +1006,37 @@ class LoopingTaskExecutor:
                 "subtask_id": st_id,
                 "name": st['name'],
                 "type": st['type'],
+                "completion_criteria": st.get('completion_criteria', ''),
                 "status": st_state.get('status', 'pending'),
                 "attempts": st_state.get('attempts', 0),
                 "ai_reasoning": st_state.get('ai_reasoning', ''),
             })
 
-        history_text = "\n".join(
-            f"  - {h['subtask_id']} ({h['name']}): status={h['status']}, attempts={h['attempts']}"
-            for h in task_history
-        )
+        history_lines = []
+        for h in task_history:
+            history_lines.append(
+                f"  - {h['subtask_id']} ({h['name']}): status={h['status']}, attempts={h['attempts']}"
+            )
+            if h.get('completion_criteria'):
+                history_lines.append(f"    Criteria: {h['completion_criteria'][:200]}")
+            if h.get('ai_reasoning'):
+                history_lines.append(f"    Summary: {h['ai_reasoning'][:300]}")
+        history_text = "\n".join(history_lines)
+
+        # Include previous AI decisions for context
+        parent_state = state_manager.get_task_state(task_id)
+        prev_decisions = parent_state.get('ai_decisions', [])
+        prev_decisions_text = ""
+        if prev_decisions:
+            recent_decisions = prev_decisions[-3:]
+            decision_lines = []
+            for d in recent_decisions:
+                decision_lines.append(
+                    f"  - Loop {d.get('loop', '?')}: failed at {d.get('failed_at', '?')}, "
+                    f"retried from {d.get('retry_from', '?')}\n"
+                    f"    Fix attempted: {d.get('suggested_fix', 'N/A')[:200]}"
+                )
+            prev_decisions_text = f"\nPrevious Failure Analyses:\n" + "\n".join(decision_lines)
 
         prompt = f"""A subtask has failed during loop iteration {loop_idx}. Please analyze the failure and decide the retry strategy.
 
@@ -892,24 +1047,28 @@ Failed Subtask:
   ID: {failed_id}
   Name: {failed_subtask['name']}
   Type: {failed_subtask['type']}
+  Completion Criteria: {failed_subtask.get('completion_criteria', 'N/A')}
   Error: {result.logs or result.output}
   Error Type: {result.error_type or 'unknown'}
 
 All Subtasks Status:
 {history_text}
+{prev_decisions_text}
 
-Please respond in the following JSON format:
+You MUST respond with a JSON object in the following format:
 ```json
 {{
     "analysis": "Description of why the failure occurred",
     "retry_from": "{failed_id}",
     "reasoning": "Why retry from this subtask",
-    "suggested_fix": "Specific fix to try"
+    "suggested_fix": "Specific fix to try — this will be passed to the AI executing the retried subtask"
 }}
 ```
 
-Important: retry_from should be the ID of the subtask to restart from.
-Available subtask IDs: {[str(s['id']) for s in all_subtasks]}
+Important:
+- retry_from should be the ID of the subtask to restart from.
+- The suggested_fix will be shown to the AI that retries the subtask, so be specific and actionable.
+- Available subtask IDs: {[str(s['id']) for s in all_subtasks]}
 """
 
         print(f"\n   🤖 [AI: Failure Analysis (loop {loop_idx})]")
@@ -970,7 +1129,7 @@ class SubtaskExecutor:
         self.simple_executor = SimpleTaskExecutor()
         self.session_dir = session_dir
 
-    def execute(self, subtask: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None) -> SubtaskResult:
+    def execute(self, subtask: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None) -> SubtaskResult:
         """
         Execute a single subtask.
         
@@ -980,6 +1139,7 @@ class SubtaskExecutor:
             state_manager: State manager
             conv_logger: Optional ConversationLogger instance
             parent_task_id: Parent task ID for log organization
+            parent_context: Optional context from parent task for prompt enrichment
             
         Returns:
             SubtaskResult: Result of execution
@@ -990,23 +1150,26 @@ class SubtaskExecutor:
             return self._execute_simple_subtask(
                 subtask, client, state_manager,
                 conv_logger=conv_logger, parent_task_id=parent_task_id,
+                parent_context=parent_context,
             )
         elif subtask_type == 'long_running':
             return self._execute_long_running_subtask(
                 subtask, client, state_manager,
                 conv_logger=conv_logger, parent_task_id=parent_task_id,
+                parent_context=parent_context,
             )
         else:
             raise ConfigError(f"Unknown subtask type: {subtask_type}")
 
     def _execute_simple_subtask(
         self, subtask: dict, client: CodeBuddyClient, state_manager,
-        conv_logger=None, parent_task_id: str = None,
+        conv_logger=None, parent_task_id: str = None, parent_context: dict = None,
     ) -> SubtaskResult:
         """Execute a simple subtask via AI."""
         success = self.simple_executor.execute(
             subtask, client, state_manager, is_subtask=True,
             conv_logger=conv_logger, parent_task_id=parent_task_id,
+            parent_context=parent_context,
         )
         
         subtask_id = str(subtask['id'])
@@ -1021,7 +1184,7 @@ class SubtaskExecutor:
 
     def _execute_long_running_subtask(
         self, subtask: dict, client: CodeBuddyClient, state_manager,
-        conv_logger=None, parent_task_id: str = None,
+        conv_logger=None, parent_task_id: str = None, parent_context: dict = None,
     ) -> SubtaskResult:
         """
         Execute a long-running subtask via autoagent-exec.
@@ -1069,6 +1232,7 @@ class SubtaskExecutor:
             # Build prompt for AI
             prompt = self._build_long_running_prompt(
                 subtask, autoagent_exec_path, log_session_dir, attempt, state_manager,
+                parent_context=parent_context,
             )
             
             try:
@@ -1113,14 +1277,15 @@ class SubtaskExecutor:
                 
                 # Check for normal completion (AI might have handled it directly)
                 if self.simple_executor._check_completion(result):
+                    summary = SimpleTaskExecutor._extract_summary(result)
                     print(f"      ✅ Long-running task {subtask_id} completed directly!")
                     state_manager.mark_task_status(
                         subtask_id, "completed",
                         attempts=attempt,
                         last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
-                        ai_reasoning=result[:500],
+                        ai_reasoning=summary,
                     )
-                    return SubtaskResult(success=True, output=result[:500])
+                    return SubtaskResult(success=True, output=summary)
                 
                 # AI didn't complete and didn't submit long-running — maybe fast-fail retry
                 print(f"      ⏳ Not completed yet, retrying...")
@@ -1128,7 +1293,7 @@ class SubtaskExecutor:
                     "attempt": attempt,
                     "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "result": "not_completed",
-                    "ai_response": result[:500],
+                    "summary": SimpleTaskExecutor._extract_summary(result),
                 })
                 
             except AICallError as e:
@@ -1156,7 +1321,7 @@ class SubtaskExecutor:
 
     def _build_long_running_prompt(
         self, subtask: dict, exec_path: str, log_session_dir: str,
-        attempt: int, state_manager,
+        attempt: int, state_manager, parent_context: dict = None,
     ) -> str:
         """
         Build the prompt that tells AI to use autoagent-exec for long-running tasks.
@@ -1170,21 +1335,45 @@ class SubtaskExecutor:
         
         if subtask.get('initial_hint') and attempt == 1:
             parts.append(f"Initial Hint: {subtask['initial_hint']}")
+
+        # Show sibling subtasks for orientation
+        if parent_context and parent_context.get('subtasks'):
+            subtask_lines = []
+            current_id = str(subtask['id'])
+            for st in parent_context['subtasks']:
+                st_id = str(st['id'])
+                marker = "→" if st_id == current_id else " "
+                subtask_lines.append(f"  {marker} {st_id}. {st['name']}")
+            parts.append(f"This task is part of a larger workflow:\n" + "\n".join(subtask_lines))
         
         if attempt > 1:
             state = state_manager.get_task_state(subtask_id)
             history = state.get('history', [])
             if history:
                 recent = history[-3:]
-                history_text = "\n".join(
-                    f"  - Attempt {h.get('attempt', '?')}: {h.get('result', 'unknown')} - {h.get('ai_response', '')[:200]}"
-                    for h in recent
+                history_lines = []
+                for h in recent:
+                    result_str = h.get('result', 'unknown')
+                    summary = h.get('summary', '')
+                    if not summary:
+                        summary = SimpleTaskExecutor._extract_summary(h.get('ai_response', ''))
+                    history_lines.append(f"  - Attempt {h.get('attempt', '?')}: {result_str}")
+                    if summary:
+                        history_lines.append(f"    Summary: {summary}")
+                parts.append(f"Previous Attempts:\n" + "\n".join(history_lines))
+            
+            # Inject suggested_fix from AI failure analysis if available
+            if parent_context and parent_context.get('suggested_fix'):
+                parts.append(
+                    f"**AI Analysis from previous failure:**\n"
+                    f"{parent_context['suggested_fix']}\n\n"
+                    f"Please take this analysis into account and adjust your approach."
                 )
-                parts.append(f"Previous Attempts:\n{history_text}")
-            parts.append(
-                "The previous attempt failed. Please analyze what went wrong "
-                "and adjust your command or approach."
-            )
+            else:
+                parts.append(
+                    "The previous attempt failed. Please analyze what went wrong "
+                    "and adjust your command or approach."
+                )
         
         # Escape backslashes in paths for display in prompt
         exec_display = exec_path.replace("\\", "/")
@@ -1195,9 +1384,7 @@ class SubtaskExecutor:
 This task is expected to take a long time (e.g., profiling, training, large data processing).
 You MUST use the `autoagent-exec` launcher to run the command:
 
-```bash
 python "{exec_display}" --log-dir "{log_dir_display}" --task-id {subtask_id} -- <your command here>
-```
 
 **How it works:**
 1. autoagent-exec will start your command and watch it for 10 seconds
@@ -1410,11 +1597,13 @@ exactly as shown above (with the emoji prefix).
                 except Exception:
                     log_content = "(failed to read log file)"
             
+            summary = SimpleTaskExecutor._extract_summary(result)
+            
             if is_completed:
                 state_manager.mark_task_status(
                     subtask_id, "completed",
                     last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
-                    ai_reasoning=result[:500],
+                    ai_reasoning=summary,
                 )
                 print(f"      ✅ Long-running task {subtask_id} completed!")
             else:
@@ -1422,13 +1611,13 @@ exactly as shown above (with the emoji prefix).
                     subtask_id, "failed",
                     error_type="validation_failed",
                     last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
-                    ai_reasoning=result[:500],
+                    ai_reasoning=summary,
                 )
                 print(f"      ❌ Long-running task {subtask_id} did not meet criteria")
             
             return SubtaskResult(
                 success=is_completed,
-                output=result[:500],
+                output=summary,
                 logs=log_content,
                 error_type=None if is_completed else "validation_failed",
             )
