@@ -4,6 +4,7 @@ Task Executors - Handle execution logic for different task types.
 This module provides:
 - SimpleTaskExecutor: Executes simple tasks with AI self-evaluation loop
 - NestedTaskExecutor: Executes nested tasks with subtasks and AI decision points
+- LoopingTaskExecutor: Executes looping tasks that repeat subtasks a fixed number of times
 - SubtaskExecutor: Dispatches subtask execution based on type
 """
 
@@ -689,6 +690,275 @@ Important:
             if r.get('ai_reasoning'):
                 lines.append(f"    Result: {r['ai_reasoning'][:300]}")
         return "\n".join(lines)
+
+
+class LoopingTaskExecutor:
+    """
+    Executes looping tasks that repeat their subtasks a fixed number of times.
+
+    Unlike NestedTaskExecutor which uses AI to evaluate completion and decide
+    retry strategy, LoopingTaskExecutor simply runs all subtasks in order for
+    exactly ``repeat_count`` iterations. Each iteration resets all subtask
+    states before starting.
+
+    If a subtask fails during an iteration, the AI is asked to analyze the
+    failure and decide which subtask to retry from (same as nested tasks).
+    The retry happens within the same iteration and counts against
+    ``max_attempts_per_loop``.
+    """
+
+    def __init__(self, session_dir: str = None):
+        self.subtask_executor = SubtaskExecutor(session_dir=session_dir)
+        self.session_dir = session_dir
+
+    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None) -> bool:
+        """
+        Execute a looping task.
+
+        Args:
+            task: Task configuration with subtasks and repeat_count
+            client: CodeBuddyClient instance
+            state_manager: State manager for persistence
+            conv_logger: Optional ConversationLogger instance
+
+        Returns:
+            bool: True if all iterations completed successfully
+        """
+        task_id = str(task['id'])
+        repeat_count = task.get('repeat_count', 1)
+        max_attempts_per_loop = task.get('max_attempts_per_loop', 20)
+        subtasks = task.get('subtasks', [])
+
+        if not subtasks:
+            raise ConfigError(f"Looping task {task_id} has no subtasks")
+
+        # Register with conversation logger
+        if conv_logger:
+            subtask_ids = [str(st['id']) for st in subtasks]
+            conv_logger.register_nested_task(task_id, task['name'], subtask_ids)
+
+        logger.info(f"Executing looping task {task_id}: {task['name']} (repeat_count={repeat_count})")
+
+        for loop_idx in range(1, repeat_count + 1):
+            print(f"\n   🔁 Loop iteration {loop_idx}/{repeat_count} of task {task_id}")
+
+            # Reset all subtask states at the start of each iteration
+            for subtask in subtasks:
+                st_id = str(subtask['id'])
+                state_manager.mark_task_status(st_id, "pending", attempts=0)
+
+            state_manager.mark_task_status(
+                task_id, "in_progress",
+                current_loop=loop_idx,
+                repeat_count=repeat_count,
+            )
+
+            # Run subtasks with retry logic within this iteration
+            iteration_success = self._run_iteration(
+                task, subtasks, client, state_manager,
+                conv_logger=conv_logger,
+                loop_idx=loop_idx,
+                max_attempts=max_attempts_per_loop,
+            )
+
+            if not iteration_success:
+                print(f"\n   ❌ Loop iteration {loop_idx}/{repeat_count} failed after max attempts")
+                state_manager.mark_task_status(
+                    task_id, "failed",
+                    failed_at_loop=loop_idx,
+                    last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                return False
+
+            print(f"\n   ✅ Loop iteration {loop_idx}/{repeat_count} completed")
+
+        # All iterations completed
+        print(f"\n   ✅ Looping task {task_id} completed all {repeat_count} iterations!")
+        state_manager.mark_task_status(
+            task_id, "completed",
+            total_loops=repeat_count,
+            last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        return True
+
+    def _run_iteration(
+        self, task, subtasks, client, state_manager,
+        conv_logger=None, loop_idx=1, max_attempts=20,
+    ) -> bool:
+        """
+        Run one iteration of the subtask sequence with retry support.
+
+        If a subtask fails, the AI analyzes the failure and decides which
+        subtask to retry from. This repeats until all subtasks complete
+        or max_attempts is reached.
+
+        Returns:
+            bool: True if all subtasks completed in this iteration
+        """
+        task_id = str(task['id'])
+        attempts = 0
+
+        while attempts < max_attempts:
+            attempts += 1
+
+            if attempts > 1:
+                print(f"\n   📋 Retry attempt #{attempts} within loop {loop_idx}")
+
+            all_completed = True
+            for subtask in subtasks:
+                subtask_id = str(subtask['id'])
+                subtask_state = state_manager.get_task_state(subtask_id)
+
+                # Skip already completed subtasks
+                if subtask_state.get('status') == 'completed':
+                    print(f"\n   📌 Subtask {subtask_id}: {subtask['name']} (already completed, skipping)")
+                    continue
+
+                print(f"\n   📌 Executing subtask {subtask_id}: {subtask['name']}")
+                print(f"      Type: {subtask['type']} | Loop: {loop_idx} | Attempt: {attempts}")
+
+                result = self.subtask_executor.execute(
+                    subtask, client, state_manager,
+                    conv_logger=conv_logger, parent_task_id=task_id,
+                )
+
+                if not result.success:
+                    all_completed = False
+                    print(f"\n   ❌ Subtask {subtask_id} failed!")
+
+                    # AI analyzes failure and decides retry_from
+                    ai_decision = self._ai_analyze_failure(
+                        client, task, subtask, subtasks, result, state_manager,
+                        conv_logger=conv_logger, loop_idx=loop_idx,
+                    )
+
+                    retry_from = ai_decision.get('retry_from', subtask_id)
+                    self._reset_subtasks_from(retry_from, subtasks, state_manager)
+
+                    state_manager.add_ai_decision(task_id, {
+                        "loop": loop_idx,
+                        "attempt": attempts,
+                        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "failed_at": subtask_id,
+                        "retry_from": retry_from,
+                        "reasoning": ai_decision.get('reasoning', ''),
+                        "suggested_fix": ai_decision.get('suggested_fix', ''),
+                    })
+
+                    break  # Break subtask loop, retry
+
+            if all_completed:
+                return True
+
+        return False
+
+    def _ai_analyze_failure(
+        self, client, task, failed_subtask, all_subtasks, result, state_manager,
+        conv_logger=None, loop_idx=1,
+    ) -> dict:
+        """
+        AI analyzes subtask failure and decides retry strategy.
+
+        Returns:
+            dict with keys: analysis, retry_from, reasoning, suggested_fix
+        """
+        task_id = str(task['id'])
+        failed_id = str(failed_subtask['id'])
+
+        task_history = []
+        for st in all_subtasks:
+            st_id = str(st['id'])
+            st_state = state_manager.get_task_state(st_id)
+            task_history.append({
+                "subtask_id": st_id,
+                "name": st['name'],
+                "type": st['type'],
+                "status": st_state.get('status', 'pending'),
+                "attempts": st_state.get('attempts', 0),
+                "ai_reasoning": st_state.get('ai_reasoning', ''),
+            })
+
+        history_text = "\n".join(
+            f"  - {h['subtask_id']} ({h['name']}): status={h['status']}, attempts={h['attempts']}"
+            for h in task_history
+        )
+
+        prompt = f"""A subtask has failed during loop iteration {loop_idx}. Please analyze the failure and decide the retry strategy.
+
+Main Task: {task['name']}
+Task Type: looping (iteration {loop_idx}/{task.get('repeat_count', 1)})
+
+Failed Subtask:
+  ID: {failed_id}
+  Name: {failed_subtask['name']}
+  Type: {failed_subtask['type']}
+  Error: {result.logs or result.output}
+  Error Type: {result.error_type or 'unknown'}
+
+All Subtasks Status:
+{history_text}
+
+Please respond in the following JSON format:
+```json
+{{
+    "analysis": "Description of why the failure occurred",
+    "retry_from": "{failed_id}",
+    "reasoning": "Why retry from this subtask",
+    "suggested_fix": "Specific fix to try"
+}}
+```
+
+Important: retry_from should be the ID of the subtask to restart from.
+Available subtask IDs: {[str(s['id']) for s in all_subtasks]}
+"""
+
+        print(f"\n   🤖 [AI: Failure Analysis (loop {loop_idx})]")
+
+        try:
+            if conv_logger:
+                conv_logger.log_nested_prompt(
+                    task_id=task_id,
+                    task_name=task['name'],
+                    call_type="looping_failure_analysis",
+                    prompt=prompt,
+                    round_num=loop_idx,
+                )
+
+            decision = client.ask(prompt, expect_json=True, continue_session=True)
+            print(f"      AI Analysis: {decision.get('analysis', 'N/A')[:200]}")
+            print(f"      AI Decision: retry_from = {decision.get('retry_from', failed_id)}")
+
+            if conv_logger:
+                import json
+                response_for_log = client.last_full_log or json.dumps(decision, indent=2, ensure_ascii=False)
+                conv_logger.log_nested_response(
+                    task_id=task_id,
+                    task_name=task['name'],
+                    response=response_for_log,
+                )
+            return decision
+        except AICallError as e:
+            logger.warning(f"Failed to get AI decision, using default: {e}")
+            print(f"      ⚠️ AI analysis failed, retrying from {failed_id}")
+            return {
+                "analysis": f"AI analysis failed: {e}",
+                "retry_from": failed_id,
+                "reasoning": "Default: retry from failed subtask",
+                "suggested_fix": "Retry the same subtask",
+            }
+
+    def _reset_subtasks_from(self, retry_from: str, subtasks: list, state_manager):
+        """Reset subtask states starting from retry_from onwards."""
+        should_reset = False
+        retry_from = str(retry_from)
+
+        for subtask in subtasks:
+            st_id = str(subtask['id'])
+            if st_id == retry_from:
+                should_reset = True
+            if should_reset:
+                state_manager.mark_task_status(st_id, "pending", attempts=0)
+                logger.info(f"Reset subtask {st_id} to pending")
 
 
 class SubtaskExecutor:

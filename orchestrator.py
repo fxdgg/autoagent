@@ -28,6 +28,7 @@ from ai_providers import get_provider, list_providers, AIProvider
 from task_executor import (
     SimpleTaskExecutor,
     NestedTaskExecutor,
+    LoopingTaskExecutor,
     ConfigError,
     ExecutionError,
 )
@@ -168,6 +169,7 @@ class TodoOrchestrator:
         self.conv_logger = ConversationLogger(self.session_dir)
         self.simple_executor = SimpleTaskExecutor()
         self.nested_executor = NestedTaskExecutor(session_dir=self.session_dir)
+        self.looping_executor = LoopingTaskExecutor(session_dir=self.session_dir)
         
         # Ideas watcher (optional)
         if ideas_file:
@@ -261,7 +263,7 @@ class TodoOrchestrator:
         if is_subtask:
             valid_types = ['simple', 'long_running']
         else:
-            valid_types = ['simple', 'nested']
+            valid_types = ['simple', 'nested', 'looping']
         
         if task_type not in valid_types:
             raise ConfigError(
@@ -275,6 +277,25 @@ class TodoOrchestrator:
             if not subtasks:
                 raise ConfigError(
                     f"Nested task {task['id']} must have subtasks"
+                )
+            for subtask in subtasks:
+                self._validate_task(subtask, is_subtask=True)
+        
+        # Validate looping tasks
+        if task_type == 'looping':
+            subtasks = task.get('subtasks', [])
+            if not subtasks:
+                raise ConfigError(
+                    f"Looping task {task['id']} must have subtasks"
+                )
+            repeat_count = task.get('repeat_count')
+            if repeat_count is None:
+                raise ConfigError(
+                    f"Looping task {task['id']} must have 'repeat_count' field"
+                )
+            if not isinstance(repeat_count, int) or repeat_count < 1:
+                raise ConfigError(
+                    f"Looping task {task['id']}: repeat_count must be a positive integer"
                 )
             for subtask in subtasks:
                 self._validate_task(subtask, is_subtask=True)
@@ -432,6 +453,11 @@ class TodoOrchestrator:
                     task, client, self.state_manager,
                     conv_logger=self.conv_logger,
                 )
+            elif task_type == 'looping':
+                return self.looping_executor.execute(
+                    task, client, self.state_manager,
+                    conv_logger=self.conv_logger,
+                )
             else:
                 raise ConfigError(f"Unknown task type: {task_type}")
                 
@@ -469,8 +495,8 @@ class TodoOrchestrator:
                 "attempts": state.get('attempts', 0),
             }
             
-            # Add subtask info for nested tasks
-            if task['type'] == 'nested' and 'subtasks' in task:
+            # Add subtask info for nested/looping tasks
+            if task['type'] in ('nested', 'looping') and 'subtasks' in task:
                 task_status["subtasks"] = []
                 for st in task['subtasks']:
                     st_id = str(st['id'])

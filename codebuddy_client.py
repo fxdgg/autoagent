@@ -613,6 +613,7 @@ class AIClientSDK:
             )
             from codebuddy_agent_sdk.types import (
                 TextBlock,
+                ThinkingBlock,
                 ToolUseBlock,
                 ToolResultBlock,
                 UserMessage,
@@ -633,6 +634,7 @@ class AIClientSDK:
                 model=self.provider.model,
                 cwd=self.workspace,
                 permission_mode="bypassPermissions",
+                thinking={"type": "adaptive"},
             )
 
             # Set executable path if custom
@@ -669,7 +671,20 @@ class AIClientSDK:
             async for message in sdk_query(prompt=prompt, options=options):
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
-                        if isinstance(block, TextBlock):
+                        if isinstance(block, ThinkingBlock):
+                            thinking_text = block.thinking
+                            if thinking_text:
+                                # Display thinking in a visually distinct way
+                                sys.stdout.write("\n💭 [Thinking]\n")
+                                for line in thinking_text.splitlines():
+                                    sys.stdout.write(f"  │ {line}\n")
+                                sys.stdout.write("  └─\n")
+                                sys.stdout.flush()
+                                # Include thinking in full log
+                                full_log_parts.append(
+                                    f"\n<details><summary>💭 Thinking</summary>\n\n{thinking_text}\n\n</details>\n"
+                                )
+                        elif isinstance(block, TextBlock):
                             text = block.text
                             if text:
                                 assistant_text_parts.append(text)
