@@ -449,6 +449,12 @@ Examples:
         help="Use CLI subprocess instead of CodeBuddy Agent SDK (default is SDK). "
              "Only works with --provider codebuddy.",
     )
+    parser.add_argument(
+        "--test-rules",
+        default=None,
+        help="Path to test rules file for --provider test. "
+             "Each rule is separated by '---RULE---' delimiter.",
+    )
 
     args = parser.parse_args()
 
@@ -563,6 +569,8 @@ Examples:
         extra.extend(["--idle-interval", str(args.idle_interval)])
     if args.use_cli:
         extra.append("--use-cli")
+    if args.test_rules:
+        extra.extend(["--test-rules", os.path.abspath(args.test_rules)])
 
     # Run the test
     print(f"\n🏁 Starting AutoAgent test...")

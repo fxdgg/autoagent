@@ -886,3 +886,270 @@ class AIClientSDK:
         self._session_started = False
         self._session_id = None
         logger.info(f"[{self.context_id}] Session reset")
+
+
+class AIClientTest:
+    """
+    Test client that returns pre-defined responses from a TestProvider.
+    
+    This client does NOT call any real AI tool. Instead, it reads responses
+    sequentially from the TestProvider's rules list. Each call to ask()
+    consumes the next rule.
+    
+    For long_running tasks, if the response contains an autoagent-exec
+    command (e.g. ``autoagent-exec --cmd "sleep 3" --task-id 1.2``),
+    the client will **actually execute** the command via autoagent_exec.py
+    so that signal files are created and the orchestrator's polling logic
+    works correctly.
+    
+    This is useful for testing the orchestration logic (retry, looping,
+    failure analysis, etc.) without incurring AI costs or requiring
+    any AI CLI tool to be installed.
+    
+    Usage:
+        from ai_providers import TestProvider
+        provider = TestProvider(test_rules_file="test_rules.txt")
+        client = AIClientTest(provider=provider, context_id="task_1")
+        response = client.ask("some prompt")  # Returns first rule
+        response = client.ask("another prompt")  # Returns second rule
+    """
+
+    def __init__(
+        self,
+        provider: AIProvider = None,
+        workspace: str = ".",
+        timeout: int = 3600,
+        context_id: str = None,
+        # Legacy parameters (ignored for test client)
+        codebuddy_path: str = None,
+        model: str = None,
+    ):
+        from ai_providers import TestProvider
+        if not isinstance(provider, TestProvider):
+            raise ValueError(
+                f"AIClientTest requires a TestProvider, got {type(provider).__name__}"
+            )
+        self.provider = provider
+        self.workspace = workspace
+        self.timeout = timeout
+        self.context_id = context_id
+        self._session_started = False
+        self.last_full_log = ""
+
+    @property
+    def codebuddy_path(self):
+        return self.provider.executable
+
+    @property
+    def model(self):
+        return self.provider.model
+
+    def ask(
+        self,
+        prompt: str,
+        expect_json: bool = False,
+        timeout: int = None,
+        continue_session: bool = False,
+    ) -> Union[str, dict]:
+        """
+        Return the next pre-defined response from the test rules.
+        
+        The prompt is logged but otherwise ignored — the response is
+        determined entirely by the order of rules in the test file.
+        
+        For long_running tasks: if the response contains an autoagent-exec
+        command pattern, the actual command is extracted and executed via
+        autoagent_exec.py so that signal files are created correctly.
+        
+        Args:
+            prompt: The prompt (used to extract exec_path/log_dir for
+                    long_running tasks, otherwise logged only)
+            expect_json: Whether to parse the response as JSON
+            timeout: Ignored
+            continue_session: Ignored
+            
+        Returns:
+            str or dict: The next test response
+        """
+        # Log the prompt for debugging
+        logger.info(
+            f"[{self.context_id}] TestClient.ask() called "
+            f"(remaining rules: {self.provider.peek_remaining()})"
+        )
+        logger.debug(f"[{self.context_id}] Prompt: {prompt[:200]}...")
+
+        # Get next response from provider
+        response = self.provider.get_next_response()
+
+        # Display the response like a real client would
+        print(f"\n🧪 [TestProvider] Rule #{self.provider._rule_index}/{len(self.provider._rules)}")
+        print(f"   Response: {response[:200]}{'...' if len(response) > 200 else ''}")
+
+        # For long_running tasks: if the response contains an autoagent-exec
+        # command, actually execute it so signal files are created.
+        response = self._maybe_run_autoagent_exec(prompt, response)
+
+        self.last_full_log = response
+        self._session_started = True
+
+        if expect_json:
+            return self._parse_json_response(response)
+        return response
+
+    def _maybe_run_autoagent_exec(self, prompt: str, response: str) -> str:
+        """
+        If the response contains an autoagent-exec command, actually execute it.
+        
+        The test_rules.txt uses a simplified format:
+            autoagent-exec --cmd "<command>" --task-id <id>
+        
+        This method extracts the command and task-id from the response,
+        then extracts exec_path and log_dir from the prompt (which contains
+        the full autoagent-exec usage template), and runs the real
+        autoagent_exec.py script.
+        
+        After execution, the original response text is returned unchanged
+        so that the orchestrator can detect LONG_RUNNING_IN_PROGRESS.
+        
+        Args:
+            prompt: The prompt sent to the AI (contains exec_path and log_dir)
+            response: The test response text
+            
+        Returns:
+            str: The original response (possibly with exec output appended)
+        """
+        # Check if response contains the simplified autoagent-exec pattern
+        # The --cmd value may contain nested quotes (e.g. python -c "..."),
+        # so we match greedily up to the --task-id flag.
+        exec_match = re.search(
+            r'autoagent-exec\s+--cmd\s+"(.+)"\s+--task-id\s+(\S+)',
+            response,
+        )
+        if not exec_match:
+            # Try single-quoted variant
+            exec_match = re.search(
+                r"autoagent-exec\s+--cmd\s+'(.+)'\s+--task-id\s+(\S+)",
+                response,
+            )
+        if not exec_match:
+            return response
+
+        cmd = exec_match.group(1)
+        task_id = exec_match.group(2)
+
+        # Extract exec_path from the prompt
+        # The prompt contains: python "<exec_path>" --log-dir "<log_dir>" --task-id <id> -- <command>
+        exec_path_match = re.search(
+            r'python\s+["\'](.+?autoagent_exec\.py)["\']\s+--log-dir\s+["\'](.+?)["\']',
+            prompt,
+        )
+        if not exec_path_match:
+            logger.warning(
+                f"[{self.context_id}] Response contains autoagent-exec command "
+                f"but could not extract exec_path/log_dir from prompt. "
+                f"Skipping actual execution."
+            )
+            return response
+
+        exec_path = exec_path_match.group(1)
+        log_dir = exec_path_match.group(2)
+
+        print(f"\n🧪 [TestProvider] Detected autoagent-exec command, executing for real:")
+        print(f"   exec_path: {exec_path}")
+        print(f"   log_dir:   {log_dir}")
+        print(f"   task_id:   {task_id}")
+        print(f"   command:   {cmd}")
+
+        # Build the real autoagent_exec.py command
+        full_cmd = (
+            f'{sys.executable} "{exec_path}" '
+            f'--log-dir "{log_dir}" '
+            f'--task-id {task_id} '
+            f'-- {cmd}'
+        )
+
+        try:
+            result = subprocess.run(
+                full_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=30,  # autoagent-exec itself should return within ~10s
+                cwd=self.workspace,
+            )
+            exec_output = result.stdout.strip()
+            if result.stderr.strip():
+                exec_output += "\n" + result.stderr.strip()
+
+            print(f"   exit_code: {result.returncode}")
+            if exec_output:
+                print(f"   output:\n{exec_output}")
+
+            # Append exec output to response so the orchestrator can see it
+            if exec_output:
+                response = response + "\n\n" + exec_output
+
+        except subprocess.TimeoutExpired:
+            logger.error(
+                f"[{self.context_id}] autoagent-exec timed out (30s) "
+                f"for task {task_id}"
+            )
+            print(f"   ❌ autoagent-exec timed out!")
+        except Exception as e:
+            logger.error(
+                f"[{self.context_id}] Failed to run autoagent-exec: {e}"
+            )
+            print(f"   ❌ Failed to run autoagent-exec: {e}")
+
+        return response
+
+    def _parse_json_response(self, response: str) -> dict:
+        """Parse JSON from test response (same logic as AIClient)."""
+        import re as _re
+
+        # Strategy 1: Try parsing the entire response as JSON
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 2: Extract JSON from markdown code block
+        json_patterns = [
+            r'```json\s*\n(.*?)\n\s*```',
+            r'```\s*\n(.*?)\n\s*```',
+        ]
+        for pattern in json_patterns:
+            match = _re.search(pattern, response, _re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    continue
+
+        # Strategy 3: Find the first { ... } block
+        brace_depth = 0
+        start_idx = None
+        for i, char in enumerate(response):
+            if char == '{':
+                if brace_depth == 0:
+                    start_idx = i
+                brace_depth += 1
+            elif char == '}':
+                brace_depth -= 1
+                if brace_depth == 0 and start_idx is not None:
+                    try:
+                        return json.loads(response[start_idx:i + 1])
+                    except json.JSONDecodeError:
+                        start_idx = None
+
+        raise AICallError(
+            f"Failed to parse JSON from test response. "
+            f"Response preview: {response[:500]}"
+        )
+
+    def reset_session(self):
+        """Reset the session state."""
+        self._session_started = False
+        logger.info(f"[{self.context_id}] Test session reset")

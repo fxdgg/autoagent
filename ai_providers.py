@@ -202,11 +202,145 @@ class GeminiCLIProvider(AIProvider):
         return " ".join(parts)
 
 
+class TestProvider(AIProvider):
+    """
+    Test provider that reads pre-defined responses from a rules file.
+    
+    This provider does NOT call any real AI tool. Instead, it reads
+    responses sequentially from a test_rules file. This is useful for
+    testing the orchestration logic without incurring AI costs.
+    
+    The rules file format uses '---RULE---' as a delimiter between
+    consecutive responses. Each section between delimiters is returned
+    verbatim as the AI response for one ask() call.
+    
+    Example test_rules.txt:
+    ```
+    I have completed the task successfully.
+    
+    ✅ completed
+    ---RULE---
+    {"analysis": "Build failed", "retry_from": "1.1", "reasoning": "...", "suggested_fix": "...", "confidence": "high"}
+    ---RULE---
+    ❌ not completed: build error in line 42
+    ```
+    
+    For long_running tasks, the AI response should instruct the system
+    to run a command. You can use 'sleep 15' for testing.
+    """
+
+    name = "test"
+    default_executable = "test"
+    default_model = "test"
+
+    def __init__(
+        self,
+        test_rules_file: str = None,
+        executable: str = None,
+        model: str = None,
+        extra_args: str = None,
+    ):
+        super().__init__(executable=executable, model=model, extra_args=extra_args)
+        self.test_rules_file = test_rules_file
+        self._rules = []
+        self._rule_index = 0
+        if test_rules_file:
+            self._load_rules(test_rules_file)
+
+    def _load_rules(self, filepath: str):
+        """Load test rules from file, split by '---RULE---' delimiter.
+        
+        The delimiter must appear on its own line (leading/trailing whitespace
+        is ignored). Lines starting with '#' at the beginning of a rule
+        section are treated as comments and stripped.
+        """
+        with open(filepath, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        # Split into sections by '---RULE---' lines
+        sections = []
+        current_section = []
+        for line in lines:
+            if line.strip() == '---RULE---':
+                if current_section:
+                    sections.append(''.join(current_section))
+                    current_section = []
+            else:
+                current_section.append(line)
+        # Don't forget the last section
+        if current_section:
+            sections.append(''.join(current_section))
+        
+        # Clean up each section: strip leading/trailing whitespace,
+        # and remove leading comment lines (lines starting with #) and blank lines
+        for section in sections:
+            # Strip the section
+            stripped = section.strip()
+            if not stripped:
+                continue
+            # Remove leading comment lines and blank lines
+            result_lines = []
+            past_leading = False
+            for line in stripped.split('\n'):
+                sline = line.strip()
+                if not past_leading and (sline.startswith('#') or sline == ''):
+                    continue  # Skip leading comments and blank lines
+                past_leading = True
+                result_lines.append(line)
+            cleaned = '\n'.join(result_lines).strip()
+            if cleaned:
+                self._rules.append(cleaned)
+        
+        logger.info(f"Loaded {len(self._rules)} test rules from {filepath}")
+
+    def get_next_response(self) -> str:
+        """
+        Get the next pre-defined response.
+        
+        Returns responses in order. If all rules are exhausted,
+        cycles back to the last rule (to avoid index errors in
+        long-running tests).
+        
+        Returns:
+            str: The next test response
+        """
+        if not self._rules:
+            return "❌ not completed: No test rules loaded"
+        
+        if self._rule_index >= len(self._rules):
+            # Cycle on the last rule to avoid crashes
+            logger.warning(
+                f"Test rules exhausted (used {self._rule_index}/{len(self._rules)}). "
+                f"Repeating last rule."
+            )
+            return self._rules[-1]
+        
+        response = self._rules[self._rule_index]
+        self._rule_index += 1
+        logger.info(f"TestProvider: returning rule {self._rule_index}/{len(self._rules)}")
+        return response
+
+    def peek_remaining(self) -> int:
+        """Return the number of remaining unused rules."""
+        return max(0, len(self._rules) - self._rule_index)
+
+    def build_command(self, continue_session: bool = False) -> str:
+        # Not used for test provider
+        return "echo test-provider"
+
+    def __repr__(self):
+        return (
+            f"TestProvider(rules_file={self.test_rules_file!r}, "
+            f"rules={len(self._rules)}, index={self._rule_index})"
+        )
+
+
 # Registry of available providers
 PROVIDERS = {
     "codebuddy": CodeBuddyProvider,
     "claude": ClaudeCodeProvider,
     "gemini": GeminiCLIProvider,
+    "test": TestProvider,
 }
 
 # Aliases for convenience
@@ -224,15 +358,17 @@ def get_provider(
     executable: str = None,
     model: str = None,
     extra_args: str = None,
+    test_rules_file: str = None,
 ) -> AIProvider:
     """
     Create an AI provider by name.
     
     Args:
-        name: Provider name or alias (e.g. "codebuddy", "claude", "gemini")
+        name: Provider name or alias (e.g. "codebuddy", "claude", "gemini", "test")
         executable: Override the default executable path
         model: Override the default model
         extra_args: Additional CLI arguments
+        test_rules_file: Path to test rules file (only for "test" provider)
         
     Returns:
         AIProvider: Configured provider instance
@@ -249,6 +385,18 @@ def get_provider(
         raise ValueError(
             f"Unknown AI provider: {name!r}. "
             f"Available: {available}"
+        )
+    
+    if resolved == 'test':
+        if not test_rules_file:
+            raise ValueError(
+                "TestProvider requires --test-rules <file> to specify the rules file."
+            )
+        return TestProvider(
+            test_rules_file=test_rules_file,
+            executable=executable,
+            model=model,
+            extra_args=extra_args,
         )
     
     return provider_class(

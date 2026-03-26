@@ -23,8 +23,8 @@ import logging
 import yaml
 from typing import Optional, List
 
-from codebuddy_client import AIClient, AIClientSDK, CodeBuddyClient, AICallError
-from ai_providers import get_provider, list_providers, AIProvider
+from codebuddy_client import AIClient, AIClientSDK, AIClientTest, CodeBuddyClient, AICallError
+from ai_providers import get_provider, list_providers, AIProvider, TestProvider
 from task_executor import (
     SimpleTaskExecutor,
     NestedTaskExecutor,
@@ -420,7 +420,14 @@ class TodoOrchestrator:
         
         # Create a new CodeBuddyClient for this main task (context isolation)
         context_id = f"task_{task_id}"
-        if self.use_cli:
+        if isinstance(self.provider, TestProvider):
+            client = AIClientTest(
+                provider=self.provider,
+                workspace=self.workspace,
+                timeout=self.timeout,
+                context_id=context_id,
+            )
+        elif self.use_cli:
             client = AIClient(
                 provider=self.provider,
                 workspace=self.workspace,
@@ -538,7 +545,14 @@ class TodoOrchestrator:
         print(f"{'─' * 60}")
         
         # Create a client for ideas processing
-        if self.use_cli:
+        if isinstance(self.provider, TestProvider):
+            client = AIClientTest(
+                provider=self.provider,
+                workspace=self.workspace,
+                timeout=self.timeout,
+                context_id="ideas_processor",
+            )
+        elif self.use_cli:
             client = AIClient(
                 provider=self.provider,
                 workspace=self.workspace,
@@ -856,6 +870,13 @@ Examples:
         help='Use CLI subprocess instead of CodeBuddy Agent SDK (default is SDK). '
              'Only works with --provider codebuddy.',
     )
+    parser.add_argument(
+        '--test-rules',
+        default=None,
+        help='Path to test rules file for --provider test. '
+             'Each rule is separated by "---RULE---" delimiter. '
+             'Rules are consumed in order, one per ask() call.',
+    )
     
     args = parser.parse_args()
     
@@ -904,9 +925,14 @@ Examples:
             # Resolve aliases
             from ai_providers import PROVIDER_ALIASES
             resolved_provider = PROVIDER_ALIASES.get(resolved_provider, resolved_provider)
-            if resolved_provider != 'codebuddy':
+            if resolved_provider not in ('codebuddy', 'test'):
                 # Non-codebuddy providers don't support SDK, force CLI mode
                 args.use_cli = True
+        
+        # Validate test provider requires --test-rules
+        if args.provider.lower() == 'test' and not args.test_rules:
+            print("❌ --provider test requires --test-rules <file> to be set.")
+            sys.exit(1)
         
         # Create AI provider
         # Legacy support: --codebuddy-path overrides executable for codebuddy provider
@@ -926,6 +952,7 @@ Examples:
             executable=executable,
             model=args.model,
             extra_args=args.extra_args,
+            test_rules_file=getattr(args, 'test_rules', None),
         )
         
         logger.info(f"Using AI provider: {provider}")
