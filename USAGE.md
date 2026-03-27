@@ -76,8 +76,14 @@ tasks:
 ### 步骤 2：运行 Orchestrator
 
 ```bash
-# 运行所有任务
+# 使用默认 provider（CodeBuddy）运行所有任务
 python orchestrator.py
+
+# 使用 Claude Code Internal
+python orchestrator.py --provider claude
+
+# 使用 Gemini CLI
+python orchestrator.py --provider gemini
 ```
 
 ### 步骤 3：查看输出
@@ -182,7 +188,7 @@ tasks:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `command` | string | 是 | 要执行的命令 |
+| `command` | string | 否 | （已废弃）旧版配置字段，现在 AI 自主决定命令 |
 | `completion_criteria` | string | 是 | 完成标准 |
 
 ## 任务类型
@@ -264,27 +270,33 @@ tasks:
 
 ### 3. 长时间任务 (long_running)
 
-**适用场景**：可能超过 CodeBuddy 超时限制的任务（如模型训练）
+**适用场景**：可能超过 CodeBuddy 超时限制的任务（如模型训练、Profiling）
 
 **配置示例**：
 ```yaml
 - id: 2.2
   name: "运行训练"
   type: long_running
-  command: "python train.py --config modified_config.yaml"
   completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
+> **注意**：`long_running` 类型不需要在 YAML 中指定 `command` 字段。AI 会根据任务描述和上下文自主决定要运行的命令，并通过 `autoagent-exec` 启动。
+
 **执行流程**：
-1. 使用 nohup 在后台运行命令
-2. 启动监控进程持续检查日志
-3. 检测到完成标志后通知 AI
-4. AI 判断是否满足完成条件
+1. AutoAgent 构造 prompt，告知 AI 使用 `autoagent-exec` 启动长时间命令
+2. AI 通过 Bash 调用 `autoagent-exec --log-dir <session_dir> --task-id <id> -- <command>`
+3. `autoagent-exec` 启动命令并监视 10 秒：
+   - 10 秒内失败：立即报告错误，AI 可修复并重试（避免重启会话）
+   - 10 秒内成功：直接完成
+   - 10 秒后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
+4. AutoAgent 检测到 `LONG_RUNNING_IN_PROGRESS`，开始轮询信号文件
+5. 任务完成后，重新启动 AI 分析输出日志并判断完成条件
 
 **技术细节**：
-- 使用 `nohup` 避免超时
-- 独立的监控进程检查日志
-- 自动检测错误和完成标志
+- 使用 `autoagent_exec.py` 作为启动器，支持 10 秒快速失败检测
+- 信号文件（`lr_tasks/lr_<task_id>_signal.json`）用于进程间通信
+- 输出日志（`lr_tasks/lr_<task_id>_output.log`）记录命令完整输出
+- 信号文件和输出日志均位于 `session_dir/lr_tasks/`（由 orchestrator 的 `--log-dir` 参数决定）
 
 ## 执行方式
 
@@ -296,13 +308,41 @@ tasks:
 python orchestrator.py
 ```
 
-### 2. 后台执行
+### 2. 选择 AI Provider
+
+支持三种 AI CLI 工具：
+
+```bash
+# CodeBuddy（默认，默认模型 glm-5.0-ioa）
+python orchestrator.py
+
+# Claude Code Internal（默认模型 claude-sonnet-4-6）
+python orchestrator.py --provider claude
+
+# Gemini CLI Internal（默认模型 gemini-2.5-pro）
+python orchestrator.py --provider gemini
+
+# 指定模型
+python orchestrator.py --provider codebuddy --model glm-5.0-ioa
+python orchestrator.py --provider gemini --model gemini-2.5-pro
+
+# 使用自定义可执行文件路径
+python orchestrator.py --provider claude --executable /usr/local/bin/claude
+
+# 传递额外 CLI 参数给 AI 工具
+python orchestrator.py --extra-args "--max-turns 1000"
+
+# 查看所有可用 provider
+python orchestrator.py --list-providers
+```
+
+### 3. 后台执行
 
 ```bash
 nohup python orchestrator.py > orchestrator.log 2>&1 &
 ```
 
-### 3. 断点续传
+### 4. 断点续传
 
 如果执行中断，可以从断点继续：
 
@@ -313,11 +353,27 @@ python orchestrator.py
 
 状态保存在 `todos_state.yaml` 中，程序会自动读取并继续执行。
 
-### 4. 查看状态
+### 5. 查看状态
 
 ```bash
-# 查看状态文件
-cat todos_state.yaml
+# 查看任务状态
+python orchestrator.py --status
+```
+
+### 6. 其他常用命令
+
+```bash
+# 验证配置文件是否合法
+python orchestrator.py --validate
+
+# 不跳过已完成的任务，全部重新执行
+python orchestrator.py --no-skip
+
+# 重置所有状态
+python orchestrator.py --reset
+
+# 启用详细日志
+python orchestrator.py --verbose
 ```
 
 ## 最佳实践
@@ -599,22 +655,38 @@ python orchestrator.py
 python orchestrator.py
 ```
 
-### Q: 支持哪些模型？
+### Q: 支持哪些 AI 工具和模型？
 
-目前支持的模型包括：
-- glm-4.7
-- Gemini-3-Flash
-- Gemini-3-Pro
-- Gemini-2.5-Pro
-- DeepSeek-V3.1-Terminus
-- DeepSeek-V3.2
+支持三种 AI CLI 工具：
 
-### Q: 如何自定义 CodeBuddy 模型？
+| Provider | 命令 | 默认模型 | 别名 |
+|----------|------|----------|------|
+| CodeBuddy | `codebuddy` | `glm-5.0-ioa` | `cb` |
+| Claude Code | `claude-internal` | `claude-sonnet-4-6` | `claude-code`, `claude-internal` |
+| Gemini CLI | `gemini-internal` | `gemini-2.5-pro` | `gemini-cli`, `gemini-internal` |
 
-可以在代码中指定：
+使用 `--list-providers` 查看所有可用 provider和别名。
+
+### Q: 如何自定义模型？
+
+通过命令行 `--model` 参数指定：
+
+```bash
+# 指定 CodeBuddy 模型
+python orchestrator.py --model glm-5.0-ioa
+
+# 指定 Gemini 模型
+python orchestrator.py --provider gemini --model gemini-2.5-pro
+```
+
+或在代码中指定：
 
 ```python
-codebuddy = CodeBuddyClient(model="glm-4.7")
+from ai_providers import get_provider
+from orchestrator import TodoOrchestrator
+
+provider = get_provider("codebuddy", model="glm-5.0-ioa")
+orchestrator = TodoOrchestrator(provider=provider)
 ```
 
 ## 总结
@@ -623,6 +695,7 @@ codebuddy = CodeBuddyClient(model="glm-4.7")
 
 - ✅ 完整的安装和配置流程
 - ✅ 详细的任务类型说明
+- ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI）
 - ✅ 完整的使用指南
 - ✅ 最佳实践建议
 - ✅ 常见问题和解决方案

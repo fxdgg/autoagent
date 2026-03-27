@@ -10,6 +10,8 @@
 - [数据流](#数据流)
 - [状态管理](#状态管理)
 - [长时间任务处理](#长时间任务处理)
+- [对话日志系统](#对话日志系统)
+- [Ideas 监控与 Idle 模式](#ideas-监控与-idle-模式)
 - [错误处理](#错误处理)
 - [扩展性设计](#扩展性设计)
 
@@ -30,6 +32,9 @@
 │  - 任务调度器                           │
 │  - 配置解析器                           │
 │  - Context 管理器                       │  ← 管理 CodeBuddy context 生命周期
+│  - IdeasWatcher                         │  ← 监控 ideas.md 并转换为 TODO
+│  - AI 审查 + 人工审核                   │  ← Ideas 拆解质量保障
+│  - Idle 模式                            │  ← 任务完成后等待新 ideas
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
@@ -37,14 +42,25 @@
 │  - SimpleTaskExecutor                   │
 │  - NestedTaskExecutor                   │
 │  - SubtaskExecutor                      │
+│  - autoagent_exec.py                    │  ← long_running 任务启动器
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
 │  AI 能力层 (AI Capability Layer)        │
-│  - CodeBuddyClient 类                   │
+│  - AIClient 类                           │  ← 统一 AI 客户端（原 CodeBuddyClient）
+│  - AIProvider 抽象基类                   │  ← 多 Provider 支持
+│  - CodeBuddyProvider / ClaudeCodeProvider│
+│  - GeminiCLIProvider                     │
 │  - 提示词构造器                         │
-│  - 响应解析器                           │
+│  - 响应解析器（stream-json）             │  ← 实时解析 stream-json 输出
 │  - Context 管理（--continue 参数）       │  ← 保持对话上下文连续性
+└────────────────┬────────────────────────┘
+                 │
+┌────────────────▼────────────────────────┐
+│  可观测性层 (Observability Layer)       │
+│  - ConversationLogger                   │  ← 对话日志记录
+│  - 会话目录管理                         │
+│  - Markdown 格式日志                    │
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
@@ -61,11 +77,23 @@
 ```
 orchestrator.py
     ├── yaml (配置解析)
+    ├── ai_providers.py (Provider 抽象层)
+    │   ├── AIProvider (基类)
+    │   ├── CodeBuddyProvider
+    │   ├── ClaudeCodeProvider
+    │   └── GeminiCLIProvider
     ├── task_executor.py (任务执行)
-    │   ├── codebuddy_client.py (AI 能力)
-    │   │   └── subprocess (调用 CodeBuddy)
+    │   ├── codebuddy_client.py → AIClient (AI 能力)
+    │   │   └── ai_providers.py → subprocess (调用各 AI CLI)
+    │   ├── autoagent_exec.py (long_running 任务启动器)
+    │   │   └── subprocess (启动后台进程 + 信号文件)
     │   └── subprocess (执行命令)
-    └── monitor.py (长时间任务监控)
+    ├── state_manager.py (状态持久化)
+    ├── conversation_logger.py (对话日志)
+    ├── ideas_watcher.py          # Ideas 文件监控与任务分解
+    │   ├── codebuddy_client.py → AIClient (AI 分解 Ideas)
+    │   ├── codebuddy_client.py → AIClient (AI 审查 + 修订)
+    │   └── yaml (追加任务到 todos.yaml)    └── monitor.py (长时间任务监控)
         └── subprocess (监控进程)
 ```
 
@@ -78,7 +106,7 @@ orchestrator.py
 **核心方法**：
 ```python
 class TaskOrchestrator:
-    def __init__(self, todos_file: str = "todos.yaml", state_file: str = "todos_state.yaml")
+    def __init__(self, todos_file: str = "todos.yaml", log_dir: str = None)
     def load_todos(self) -> list
     def load_state(self) -> dict
     def save_state(self, state: dict)
@@ -95,7 +123,83 @@ class TaskOrchestrator:
 - 状态持久化：支持保存和恢复执行状态
 - 统一接口：所有任务类型通过统一接口调用
 
-### 2. SimpleTaskExecutor
+### 2. AI Provider 层（ai_providers.py）
+
+**职责**：抽象不同 AI CLI 工具之间的差异，提供统一的命令构造接口。
+
+**核心类**：
+
+- `AIProvider` — 抽象基类，定义 `build_command()` 和 `get_stdin_command()` 接口
+- `CodeBuddyProvider` — CodeBuddy CLI（默认 provider，默认模型 `glm-5.0-ioa`）
+- `ClaudeCodeProvider` — Claude Code Internal CLI（默认模型 `claude-sonnet-4-6`）
+- `GeminiCLIProvider` — Gemini CLI Internal（默认模型 `gemini-2.5-pro`）
+
+**工厂函数**：
+
+- `get_provider(name, ...)` — 按名称创建 provider 实例（支持别名，如 `cb` → `codebuddy`）
+- `list_providers()` — 列出所有可用 provider 及其信息
+
+**命令构造示例**：
+
+```bash
+# CodeBuddyProvider
+type prompt.txt | codebuddy --debug --verbose --print --output-format stream-json --model glm-5.0-ioa -y -
+
+# ClaudeCodeProvider
+type prompt.txt | claude-internal --verbose --print --output-format stream-json --model claude-sonnet-4-6 --dangerously-skip-permissions -
+
+# GeminiCLIProvider
+type prompt.txt | gemini-internal --output-format stream-json --model gemini-2.5-pro --yolo -p -
+```
+
+**Provider 注册表与别名**：
+
+```python
+PROVIDERS = {
+    "codebuddy": CodeBuddyProvider,
+    "claude": ClaudeCodeProvider,
+    "gemini": GeminiCLIProvider,
+}
+
+PROVIDER_ALIASES = {
+    "cb": "codebuddy",
+    "claude-code": "claude",
+    "claude-internal": "claude",
+    "gemini-cli": "gemini",
+    "gemini-internal": "gemini",
+}
+```
+
+### 3. AIClient（codebuddy_client.py）
+
+**职责**：统一的 AI CLI 客户端，封装 AI 调用、Context 管理和 stream-json 解析。
+
+> **注意**：`AIClient` 是主类名，`CodeBuddyClient` 是为向后兼容保留的别名。
+
+**核心功能**：
+
+- 通过 `AIProvider` 构造正确的 CLI 命令
+- 将 prompt 写入临时文件并通过 stdin 管道传递（避免 shell 转义问题）
+- 实时解析 stream-json 输出（`_handle_stream_line()`），支持：
+  - `assistant` 事件：文本输出和工具调用
+  - `user` 事件：工具执行结果
+  - `result` 事件：最终结果摘要
+- 维护 `last_full_log` 属性，记录包含工具调用的完整对话日志
+- 通过 `_session_started` 标志管理 `--continue` 参数的使用
+
+**stream-json 解析**：
+
+AI CLI 工具的 `--output-format stream-json` 模式输出逐行 JSON 对象。`_handle_stream_line()` 方法实时解析这些事件，提取 assistant 文本、显示工具调用摘要，并收集完整日志。
+
+```python
+# stream-json 事件类型
+assistant  → AI 消息（文本块 + 工具调用）
+user       → 工具执行结果
+result     → 最终摘要（turns 数、耗时等）
+system     → 系统/会话初始化消息
+```
+
+### 4. SimpleTaskExecutor
 
 **职责**：执行简单任务（一次性命令 + AI 判断）
 
@@ -141,7 +245,7 @@ def execute_simple_task_node(task: dict) -> bool:
 - 持续迭代直到达标
 - 防止无限循环
 
-### 3. NestedTaskExecutor
+### 5. NestedTaskExecutor
 
 **职责**：执行嵌套任务（包含子任务）
 
@@ -375,6 +479,17 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
 - ✅ 保持对话的连贯性
 - ✅ 减少重复的上下文信息传递
 
+**完成检测三层策略**：
+
+`SimpleTaskExecutor._check_completion()` 使用三层检测策略判断 AI 是否报告任务完成：
+
+1. **严格否定标记**（最高优先级）：检查 `❌ not completed` 等否定标记，匹配则返回 `False`
+2. **严格肯定标记**：检查 `✅ completed` 等肯定标记，匹配则返回 `True`
+3. **模糊肯定匹配**（兜底）：使用正则表达式匹配 `✅.*completed`、`all criteria met` 等变体，
+   同时排除含有 `not completed`、`fail` 等否定词的情况
+
+默认（无匹配）返回 `False`，即认为未完成。
+
 #### 3. Context 生命周期管理
 
 ```
@@ -558,37 +673,44 @@ for task in state['tasks']:
 
 ### 3. 长时间任务 (long_running)
 
-**定义**：使用 nohup 后台运行的任务，避免超时
+**定义**：通过 `autoagent-exec` 启动的长时间后台任务，使用 10 秒快速失败检测机制
 
 **配置示例**：
 ```yaml
 - id: 2.2
   name: "运行训练"
   type: long_running
-  command: "python train.py --config modified_config.yaml"
   completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
+> **注意**：`long_running` 类型的子任务不再需要在 YAML 中指定 `command` 字段。AI 会根据任务描述自主决定要运行的命令，并通过 `autoagent-exec` 启动。
+
 **执行流程**：
 ```
-1. 构造 nohup 命令
+1. AutoAgent 构造 prompt，告知 AI 使用 autoagent-exec 执行长时间命令
    ↓
-2. 启动后台训练
+2. AI 通过 Bash 工具调用 autoagent-exec
    ↓
-3. 启动监控进程
+3. autoagent-exec 启动命令并监视 10 秒：
+   ├─ 10 秒内失败（退出码非零）：立即报告错误，AI 可修复并重试
+   ├─ 10 秒内成功（退出码 0）：直接完成
+   └─ 10 秒后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
    ↓
-4. 监控进程持续检查日志
+4. AI 看到 "TASK SUBMITTED" 后输出 LONG_RUNNING_IN_PROGRESS
    ↓
-5. 检测到完成：调用 AI 检查结果
+5. AutoAgent 检测到 LONG_RUNNING_IN_PROGRESS，开始轮询信号文件
    ↓
-6. AI 判断是否满足完成条件
+6. 任务完成后，重新启动 AI 分析结果
+   ↓
+7. AI 读取输出日志，判断是否满足完成条件
 ```
 
 **技术实现**：
-- 使用 `nohup` 在后台运行
-- 启动独立的监控进程
-- 监控进程持续检查日志文件
-- 检测到完成标志后通知 AI
+- 使用 `autoagent_exec.py` 脚本作为 long_running 任务启动器
+- 10 秒快速失败检测，避免 AI 反复启动会话
+- 信号文件（`lr_tasks/lr_<task_id>_signal.json`）用于进程间通信
+- 输出日志（`lr_tasks/lr_<task_id>_output.log`）记录命令完整输出
+- 任务完成后 AutoAgent 重启 AI 会话进行结果分析
 
 ## 数据流
 
@@ -797,11 +919,13 @@ pending → in_progress → completed/failed
 
 ```python
 class TaskOrchestrator:
-    def __init__(self, todos_file="todos.yaml", state_file="todos_state.yaml"):
+    def __init__(self, todos_file="todos.yaml", log_dir=None):
         self.todos_file = todos_file
-        self.state_file = state_file
+        # log_dir defaults to ".autoagent" (relative to CWD)
+        # Session directory resolved via .autoagent_log in workspace
+        self.session_dir = self._resolve_log_session_dir(log_dir, workspace)
+        self.state = StateManager(os.path.join(self.session_dir, "todos_state.yaml"))
         self.todos = self.load_todos()
-        self.state = self.load_state()
     
     def load_state(self):
         try:
@@ -832,114 +956,199 @@ class TaskOrchestrator:
 
 **为什么需要长时间任务处理？**
 
-CodeBuddy 有超时限制（通常 1 小时），但某些任务（如模型训练）可能需要更长时间。
+CodeBuddy 有超时限制（通常 1 小时），但某些任务（如模型训练、Profiling）可能需要更长时间。
 
 ### 解决方案
 
-**使用 nohup 后台运行 + 独立监控进程：**
+**使用 autoagent-exec 启动器 + 10 秒快速失败检测 + 信号文件轮询：**
 
-```python
-def execute_long_running_task(subtask):
-    log_file = f"logs/{subtask_id}.log"
-    command = subtask["command"]
-    
-    # 1. 构造 nohup 命令并记录 PID
-    pid_file = f"monitors/{subtask_id}.pid"
-    full_command = f"nohup {command} > {log_file} 2>&1 & echo $! > {pid_file}"
-    
-    # 2. 启动后台任务
-    subprocess.run(full_command, shell=True)
-    mark_task_status(subtask_id, "in_progress", 
-                    log_file=log_file, 
-                    pid_file=pid_file,
-                    started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
-    
-    # 3. 启动监控
-    start_monitor(subtask_id, log_file, subtask["completion_criteria"])
-    
-    # 4. 等待监控完成
-    wait_for_completion(subtask_id)
+整个 long_running 任务流程涉及三方协作：
+
+```
+┌──────────────┐     prompt      ┌───────────┐     bash call     ┌──────────────────┐
+│  AutoAgent   │ ──────────────→ │    AI     │ ───────────────→ │  autoagent-exec  │
+│ (Orchestrator│                 │ (CodeBuddy│                   │  (独立脚本)       │
+│  轮询信号文件)│ ←── 读取状态 ── │  会话结束) │                   │  10s 快速失败检测 │
+└──────────────┘                 └───────────┘                   │  后台进程管理     │
+                                                                 │  信号文件写入     │
+                                                                 └──────────────────┘
 ```
 
-### 监控进程
+### autoagent_exec.py（long_running 任务启动器）
 
-**设计原则**：监控进程只负责检测任务完成/失败，并写入状态文件。**不直接调用 CodeBuddy**——这样可以保持 Context 的一致性，由 Orchestrator 用正确的 `--continue` context 调用 AI 分析结果。
+**职责**：作为 AI 通过 Bash 调用的独立脚本，负责启动命令、快速失败检测、后台管理和信号文件写入。
 
-```python
-def start_monitor(subtask_id, log_file, completion_criteria):
-    monitor_script = f"""#!/bin/bash
-LOG_FILE="{log_file}"
-SUBTASK_ID="{subtask_id}"
-STATUS_FILE="monitors/${{SUBTASK_ID}}.status"
-
-while true; do
-    if [ -f "$LOG_FILE" ]; then
-        # 检查是否有错误
-        if grep -q "ERROR\\|Exception\\|Traceback\\|CUDA out of memory" "$LOG_FILE"; then
-            echo "error" > "$STATUS_FILE"
-            echo "检测到错误，已写入状态文件"
-            exit 1
-        fi
-        
-        # 检查进程是否仍在运行
-        if ! ps -p $(cat monitors/${{SUBTASK_ID}}.pid 2>/dev/null) > /dev/null 2>&1; then
-            # 进程已结束，检查退出码
-            echo "finished" > "$STATUS_FILE"
-            echo "进程已结束，已写入状态文件"
-            exit 0
-        fi
-    fi
-    sleep 30
-done
-"""
-    
-    monitor_file = f"monitors/{subtask_id}.sh"
-    with open(monitor_file, "w") as f:
-        f.write(monitor_script)
-    
-    subprocess.run(f"chmod +x {monitor_file} && nohup {monitor_file} > monitors/{subtask_id}.log 2>&1 &", shell=True)
+**调用方式**：
+```bash
+python autoagent_exec.py --log-dir <log_session_dir> --task-id <id> -- <command...>
 ```
 
-**Orchestrator 端的处理**：
+**参数说明**：
+
+| 参数 | 说明 |
+|------|------|
+| `--log-dir` | 日志会话目录的绝对路径（由 AutoAgent 传递给 AI prompt） |
+| `--task-id` | 子任务 ID（如 `1.2`） |
+| `-- <command>` | 要执行的命令（`--` 之后的所有内容） |
+
+**10 秒快速失败检测机制**：
+
+```
+启动命令
+  ↓
+等待 10 秒
+  ↓
+┌──────────────────────────────────────┐
+│ 10 秒内退出？                        │
+│ ├─ 退出码 = 0 → ✅ 命令快速完成     │
+│ │   写入 "finished" 信号文件         │
+│ ├─ 退出码 ≠ 0 → ❌ 快速失败         │
+│ │   打印错误输出（供 AI 查看并修复）  │
+│ │   不写信号文件（AI 可直接重试）     │
+│ └─ 仍在运行 → 🚀 转为后台任务       │
+│     写入 "running" 信号文件          │
+│     打印 "TASK SUBMITTED" 消息       │
+│     启动监控线程等待进程结束          │
+└──────────────────────────────────────┘
+```
+
+**信号文件格式**（`lr_tasks/lr_<task_id>_signal.json`）：
+
+```json
+{
+  "task_id": "1.2",
+  "command": "ncu --set full --csv ./build/Release/main.exe",
+  "pid": 12345,
+  "output_log": "/path/to/logs/lr_tasks/lr_1.2_output.log",
+  "status": "running",
+  "submitted_at": "2026-03-25T15:30:00",
+  "finished_at": null,
+  "exit_code": null
+}
+```
+
+`status` 字段变化：`running` → `finished`（退出码 0）或 `error`（退出码非 0）
+
+### SubtaskExecutor 中的 long_running 流程
 
 ```python
-def wait_and_analyze_long_running(self, subtask, client):
-    """等待长时间任务完成，然后用正确的 context 调用 AI 分析"""
-    status_file = f"monitors/{subtask['id']}.status"
-    log_file = f"logs/{subtask['id']}.log"
-    
-    # 轮询等待监控进程写入状态
-    while not os.path.exists(status_file):
-        time.sleep(30)
-    
-    status = open(status_file).read().strip()
-    log_content = open(log_file).read()[-2000:]  # 取最后 2000 字符
-    
-    # 用 --continue 保持 context，调用 AI 分析结果
-    result = client.ask(
-        f"长时间任务已完成，状态：{status}\n"
-        f"日志（最后部分）：\n{log_content}\n"
-        f"完成条件：{subtask['completion_criteria']}\n"
-        f"请判断是否满足完成条件。",
-        continue_session=True
+def _execute_long_running_subtask(self, subtask, client, ...):
+    # 1. 构造 prompt，告知 AI 使用 autoagent-exec
+    #    --log-dir 使用 self.session_dir（从 orchestrator 传入）
+    prompt = self._build_long_running_prompt(
+        subtask, autoagent_exec_path, self.session_dir, ...
     )
+    
+    # 2. AI 调用 autoagent-exec，可能出现以下情况：
+    result = client.ask(prompt)
+    
+    # 3a. AI 报告 LONG_RUNNING_IN_PROGRESS
+    if self._check_long_running_in_progress(result):
+        # 轮询信号文件，等待后台任务完成
+        status = self._poll_signal_file(signal_file)
+        # 重启 AI 分析结果
+        return self._ai_analyze_long_running_result(...)
+    
+    # 3b. AI 直接完成（快速成功或自行处理）
+    if self._check_completion(result):
+        return SubtaskResult(success=True)
+    
+    # 3c. 快速失败，AI 已看到错误，下一轮重试
+```
+
+### session_dir 传递机制
+
+**设计要点**：`session_dir`（日志会话目录）由 orchestrator 在初始化时解析，然后逐级传递给所有需要它的执行器。
+
+```
+TodoOrchestrator
+  │
+  │  self.session_dir = _resolve_log_session_dir(log_dir, workspace)
+  │
+  └─→ NestedTaskExecutor(session_dir=self.session_dir)
+        │
+        │  self.session_dir = session_dir
+        │
+        └─→ SubtaskExecutor(session_dir=session_dir)
+              │
+              │  self.session_dir = session_dir
+              │
+              └─→ 在 _execute_long_running_subtask 中直接使用 self.session_dir
+                  构造 AI prompt 中的 --log-dir 参数
+```
+
+这样确保了 AI prompt 中的 `--log-dir` 路径与 orchestrator 的 `--log-dir` 参数一致，而不是硬编码某个默认路径。
+
+### Orchestrator 端的处理
+
+AutoAgent 通过轮询信号文件等待后台任务完成：
+
+```python
+def _poll_signal_file(self, subtask_id, signal_file, check_interval=15):
+    """每 15 秒检查一次信号文件"""
+    while True:
+        if os.path.exists(signal_file):
+            signal_data = json.load(open(signal_file))
+            if signal_data['status'] in ('finished', 'error'):
+                return signal_data['status']
+        time.sleep(check_interval)
+
+def _ai_analyze_long_running_result(self, subtask, client, status, output_log):
+    """重启 AI 会话，让 AI 读取输出日志并判断完成条件"""
+    # 提供输出日志文件路径（而非嵌入内容），AI 使用 Read 工具读取
+    prompt = f"""Task completed with status: {status}
+    Output log: {output_log}
+    Please read the log and evaluate..."""
+    result = client.ask(prompt, continue_session=True)
     return result
 ```
 
 ### 项目结构
 
 ```
-langgraph-todo-orchestrator/
-├── orchestrator.py          # 主程序
-├── todos.yaml              # 任务定义
-├── todos_state.yaml        # 任务状态（自动生成）
-├── logs/                   # 长时间任务日志
-│   └── 2.2.log
-├── monitors/               # 监控脚本
-│   ├── 2.2.sh
-│   └── 2.2.log
+autoagent/
+├── orchestrator.py           # 主程序、CLI 入口
+├── ai_providers.py           # AI Provider 抽象层（多 CLI 工具支持）
+├── task_executor.py          # 任务执行器 (Simple/Nested/SubtaskExecutor)
+├── autoagent_exec.py         # long_running 任务启动器（AI 通过 Bash 调用）
+├── codebuddy_client.py       # AIClient（统一 AI 客户端）
+├── state_manager.py          # 状态持久化管理
+├── conversation_logger.py    # 对话日志记录
+├── ideas_watcher.py          # Ideas 文件监控与任务分解
+│
+├── todos.yaml                # 任务定义
+├── ideas.md                  # 用户的想法记录（可选）
+├── .autoagent_log            # 项目对应的日志子文件夹名（自动生成）
+│
+├── <log_dir>/                # 日志根目录（默认 .autoagent，相对 CWD）
+│   └── <project>_<random>/   # 项目专属会话目录（由 .autoagent_log 指定）
+│       ├── orchestrator.log           # Orchestrator 运行日志
+│       ├── todos_state.yaml           # 任务状态（自动生成）
+│       ├── .ideas_processed.md         # Ideas 归档（已处理的 idea 原文）
+│       ├── lr_tasks/                  # long_running 任务文件目录
+│       │   ├── lr_<task_id>_signal.json   # long_running 信号文件（自动生成）
+│       │   └── lr_<task_id>_output.log    # long_running 命令输出日志（自动生成）
+│       └── conversations/             # 对话日志目录
+│           ├── ideas.md               # Ideas 拆解日志（prompt + response）
+│           ├── task_1.md              # 简单任务的对话日志
+│           ├── task_2.md              # 嵌套任务的索引文件
+│           └── subtask_2/             # 嵌套任务的子任务目录
+│               ├── task_2.1.md
+│               ├── task_2.2.md
+│               └── _decisions.md      # AI 决策日志
 └── README.md
 ```
+
+### 日志目录管理（.autoagent_log）
+
+为了支持多个项目共用同一个日志根目录，系统在**项目目录**中维护一个 `.autoagent_log` 文件，
+内容为该项目对应的日志子文件夹名称，例如 `cufftdx_optimization_ko53bi1b`。
+
+- 首次运行时自动生成：`<项目目录名>_<随机8位字符>`
+- 后续运行读取该文件，确保同一个项目始终写入同一个日志子文件夹
+- 最终日志路径为 `<log_dir>/<.autoagent_log中的内容>/`
+- 所有运行时状态文件（`todos_state.yaml`、`orchestrator.log`、`.ideas_processed.md`、`conversations/`）
+  均位于该目录下，**不会出现在项目目录中**
 
 ## 系统与AI的协作流程图
 
@@ -1318,17 +1527,485 @@ context:
    - "AI根据任务描述自主决策"
    - 系统只提供框架和支持
 
+## 对话日志系统
+
+### 设计目标
+
+对话日志系统记录所有 AI 交互的完整内容（prompt + response），用于调试、审计和回顾 AI 的决策过程。
+
+### 核心组件：ConversationLogger
+
+**职责**：管理对话日志的目录结构、文件写入和索引生成。
+
+```python
+class ConversationLogger:
+    def __init__(self, log_root_dir: str)
+    # Two-step incremental logging (crash-safe: prompt is persisted before AI call)
+    def log_prompt(self, task_id, task_name, prompt, attempt, parent_task_id=None, metadata=None)
+    def log_response(self, task_id, response, parent_task_id=None)
+    # Convenience wrapper (calls log_prompt + log_response atomically)
+    def log_conversation(self, task_id, task_name, prompt, response, attempt, parent_task_id=None, metadata=None)
+    # Two-step incremental logging for nested task decisions
+    def log_nested_prompt(self, task_id, task_name, call_type, prompt, round_num)
+    def log_nested_response(self, task_id, task_name, response)
+    # Convenience wrapper (calls log_nested_prompt + log_nested_response)
+    def log_nested_task_ai_call(self, task_id, task_name, call_type, prompt, response, round_num, metadata=None)
+    # Ideas decomposition logging (written to conversations/ideas.md)
+    def log_ideas_prompt(self, idea_title, idea_index, prompt)
+    def log_ideas_response(self, response)
+    # Two-step incremental logging for ideas review
+    def log_ideas_review_prompt(self, review_round, prompt)
+    def log_ideas_review_response(self, response)
+    # Two-step incremental logging for ideas revision
+    def log_ideas_revision_prompt(self, revision_round, prompt)
+    def log_ideas_revision_response(self, response)
+    # Section separator
+    def log_ideas_section_end(self)
+    def register_nested_task(self, task_id, task_name, subtask_ids)
+    def build_index_file(self, task_id)
+    def finalize(self)
+```
+
+### 目录结构
+
+每次 Orchestrator 运行会在项目对应的会话目录下使用固定的 `conversations` 子目录：
+
+```
+<log_dir>/
+└── cufftdx_optimization_ko53bi1b/   # 项目专属（由 .autoagent_log 指定）
+    ├── orchestrator.log               # Orchestrator 运行日志
+    ├── todos_state.yaml               # 任务状态
+    ├── .ideas_processed.md            # Ideas 归档（已处理的 idea 原文）
+    └── conversations/                 # 对话日志（固定目录名）
+        ├── ideas.md                    # Ideas 拆解日志（prompt + AI 返回的 YAML）
+        ├── task_1.md                   # 简单任务：完整对话记录
+        ├── task_2.md                   # 嵌套任务：索引文件（含子任务链接）
+        └── subtask_2/                  # 嵌套任务的子任务目录
+            ├── task_2.1.md             # 子任务 2.1 的对话记录
+            ├── task_2.2.md             # 子任务 2.2 的对话记录
+            └── _decisions.md           # AI 决策日志（失败分析、主任务评估）
+```
+
+### 日志内容格式
+
+每个日志文件使用 Markdown 格式，包含：
+
+```markdown
+# Task 1: 下载数据集
+
+## Attempt #1
+
+### Prompt
+
+```
+完整的 prompt 内容...
+```
+
+### Response
+
+AI 的完整响应内容...
+
+---
+
+## Attempt #2 (failure_analysis)
+
+...
+```
+
+Ideas 拆解日志（`ideas.md`）格式：
+
+```markdown
+# Ideas Decomposition Log
+
+## Idea #1: 想法标题
+
+### Prompt
+
+```
+AI 分解 prompt...
+```
+
+### Response
+
+```yaml
+AI 返回的 YAML 任务定义...
+```
+
+### Review #1 Prompt
+
+```
+AI 审查 prompt...
+```
+
+### Review Response
+
+✅ completed
+
+---
+
+## Idea #2: 另一个想法
+
+### Prompt
+
+```
+AI 分解 prompt...
+```
+
+### Response
+
+```yaml
+AI 返回的 YAML...
+```
+
+### Review #1 Prompt
+
+```
+AI 审查 prompt...
+```
+
+### Review Response
+
+❌ not completed
+任务 ID 不连续，缺少 completion_criteria...
+
+### Revision #1 Prompt
+
+```
+AI 修订 prompt（含审查反馈）...
+```
+
+### Revision Response
+
+```yaml
+修订后的 YAML...
+```
+
+### Review #2 Prompt
+
+```
+AI 再次审查...
+```
+
+### Review Response
+
+✅ completed
+
+---
+```
+
+### 日志类型
+
+| 日志类型 | 文件位置 | 触发场景 |
+|----------|----------|----------|
+| 任务对话 | `task_<id>.md` | 简单任务的每次 attempt |
+| 子任务对话 | `subtask_<parent_id>/task_<id>.md` | 子任务的每次 attempt |
+| AI 决策 | `subtask_<parent_id>/_decisions.md` | 失败分析、主任务评估 |
+| Ideas 拆解 | `ideas.md` | Ideas 分解为 TODO 时的 AI 调用 |
+| Ideas 审查 | `ideas.md` | AI 审查生成的任务（Review Prompt/Response） |
+| Ideas 修订 | `ideas.md` | AI 根据审查反馈修订任务（Revision Prompt/Response） |
+| Ideas 人工反馈 | `ideas.md` | 人工审核反馈（以 `[Human Feedback]` 标记） |
+| 索引文件 | `task_<id>.md` | 嵌套任务的导航索引 |
+
+### 使用方式
+
+通过 CLI 的 `--log-dir` 参数指定日志根目录（默认 `.autoagent`，相对于 CWD）：
+
+```bash
+# 使用默认日志目录 .autoagent（相对于当前工作目录）
+python orchestrator.py
+
+# 指定自定义日志根目录
+python orchestrator.py --log-dir logs
+```
+
+日志根目录下，会自动创建以项目名+随机后缀命名的子目录。
+子目录名存储在项目目录的 `.autoagent_log` 文件中，确保同一项目多次运行复用同一目录。
+
+### 崩溃安全写入
+
+为避免 Ctrl+C 中断时丢失正在进行的对话，日志系统采用**两步写入**策略：
+
+1. **AI 调用前**：立即调用 `log_prompt()` 将 prompt 写入文件
+2. **AI 返回后**：调用 `log_response()` 追加 response 到同一文件
+
+这样即使进程在等待 AI 响应时被中断，prompt 部分也已持久化到磁盘。
+旧的 `log_conversation()` 方法仍然保留作为便捷包装器（内部调用两步方法）。
+
+日志在 Orchestrator 执行结束时（或 Ctrl+C 中断时）会调用 `finalize()` 生成最终的索引文件。
+
+## Ideas 监控与 Idle 模式
+
+### 设计目标
+
+实现一个持续运行的工作流：用户在 `ideas.md` 中记录想法 → 系统自动检测 → AI 将想法分解为结构化 TODO → 自动执行。
+
+### 核心组件：IdeasWatcher
+
+**职责**：监控 ideas.md 文件变化，调用 AI 分解想法为 TODO 任务，追加到 todos.yaml。
+
+```python
+class IdeasWatcher:
+    MAX_REVIEW_ROUNDS = 3  # Maximum AI review rounds before accepting
+
+    def __init__(self, ideas_file, todos_file, processed_state_file)
+    def has_new_ideas(self) -> bool
+    def parse_ideas(self) -> List[dict]
+    def process_new_ideas(
+        self, client: CodeBuddyClient,
+        review_client: CodeBuddyClient = None,
+        conv_logger: ConversationLogger = None,
+        human_review: bool = False,
+    ) -> int
+    def mark_all_processed(self)
+    def reset(self)
+```
+
+### Ideas 文件格式
+
+`ideas.md` 中的想法通过 Markdown 标题（`##`、`###`）或水平分隔线（`---`）分隔：
+
+```markdown
+## 添加单元测试
+
+给 state_manager 添加完整的单元测试覆盖，包括边界情况。
+
+---
+
+## 优化内存访问模式
+
+参考 ncu profiling 结果，针对 AXIS=2 的情况优化全局内存访问的 coalescing。
+可以考虑使用 shared memory 作为转置缓冲区。
+
+---
+
+## 支持多 GPU
+
+探索将 DCT3D 分布到多个 GPU 上的可能性。
+```
+
+### 去重与归档机制
+
+已处理的想法会被归档到会话目录的 `.ideas_processed.md` 中（保留原文），同时从 `ideas.md` 中删除对应条目：
+
+```markdown
+# Processed Ideas Archive
+
+## 添加单元测试
+
+给 state_manager 添加完整的单元测试覆盖，包括边界情况。
+
+---
+
+## 优化内存访问模式
+
+参考 ncu profiling 结果...
+
+---
+```
+
+每次处理一个 idea 后，该 idea 的原文被追加到归档文件，并从 `ideas.md` 中移除。
+
+### Idea → TODO 转换流程
+
+```
+1. 检测 ideas.md 变更（基于文件修改时间）
+   ↓
+2. 解析 ideas.md，提取各个 idea section（以 --- 分隔）
+   ↓
+3. 对每个新 idea：
+   ├─ 加载现有 todos.yaml 确定下一个可用 task ID
+   ├─ 构造 prompt 发送给 AI（decompose）
+   ├─ 记录 prompt 到 conversations/ideas.md
+   ├─ AI 返回 YAML 格式的任务定义
+   ├─ 记录 response 到 conversations/ideas.md
+   ├─ 解析 AI 响应（支持纯 YAML、代码块包裹、混合文本提取）
+   │
+   ├─ 【AI 审查循环】（如果提供了 review_client）
+   │   ├─ 将生成的任务发送给全新上下文的 AI 审查
+   │   ├─ 审查通过（✅ completed）→ 跳出循环
+   │   └─ 审查拒绝（❌ not completed）→ 反馈给原 AI 修订 → 重新审查
+   │       （最多 MAX_REVIEW_ROUNDS=3 轮）
+   │
+   ├─ 【人工审核循环】（如果 human_review=True）
+   │   ├─ 显示生成的任务 YAML，等待人工输入
+   │   ├─ 输入 y → 接受任务
+   │   └─ 输入 n → 人工输入反馈 → AI 修订 → AI 重新审查 → 再次人工审核
+   │
+   ├─ 追加新任务到 todos.yaml
+   ├─ 归档 idea 到 .ideas_processed.md
+   └─ 从 ideas.md 中删除该 idea
+   ↓
+4. 通知 Orchestrator 重新加载任务列表
+```
+
+### AI 审查机制
+
+**设计理念**：每次 AI 生成待添加的 TODO 后，将生成内容交给一个**具有全新上下文的 AI** 进行独立审查，确保任务分解的质量。
+
+**审查流程**：
+
+```mermaid
+graph TD
+    A[AI 拆解 idea 为 tasks] --> B[AI 审查<br/>全新上下文]
+    B -->|❌ 拒绝| C[AI 修订<br/>原上下文]
+    C --> B
+    B -->|✅ 通过| D{human_review?}
+    D -->|否| E[添加到 todos.yaml]
+    D -->|是| F["👤 显示任务, 等待人工输入"]
+    F -->|输入 y| E
+    F -->|输入 n| G[人工输入反馈]
+    G --> H[AI 根据反馈修订]
+    H --> B
+```
+
+**审查标准**（由 reviewer AI 判断）：
+1. 任务 ID 是否正确且一致（包括子任务点号表示法）
+2. 任务类型是否合适（simple vs nested，simple vs long_running）
+3. 完成标准是否清晰、具体、可衡量
+4. 分解是否完整覆盖了原始想法
+5. 是否有遗漏或冗余的任务
+6. YAML 结构是否有效且格式良好
+
+**完成检测**：使用与 `SimpleTaskExecutor._check_completion()` 相同的三层检测策略：
+1. 严格否定标记：`❌ not completed` → 拒绝
+2. 严格肯定标记：`✅ completed` → 通过
+3. 模糊肯定匹配（兜底）
+
+### 人工审核模式（--ideas-only）
+
+**设计理念**：在 AI 审查通过后，增加一个人工审核环节，让用户最终确认任务分解的质量。
+
+**使用方式**：
+```bash
+python orchestrator.py --ideas ideas.md --ideas-only
+```
+
+**交互流程**：
+```
+────────────────────────────────────────────────────────────
+   👤 Human Review Required
+────────────────────────────────────────────────────────────
+   Idea: 添加单元测试
+
+   Generated Tasks:
+────────────────────────────────
+   - id: 2
+     name: "添加 state_manager 单元测试"
+     type: simple
+     completion_criteria: |
+       1. 测试覆盖率 > 90%
+       2. 所有边界情况已覆盖
+────────────────────────────────
+
+   Accept these tasks? (y/n): n
+   Please provide your feedback (end with an empty line):
+   > 需要拆分为多个子任务，分别测试不同模块
+   > 
+   🔄 Sending human feedback to AI for revision...
+```
+
+**`--ideas-only` 模式特点**：
+- 只处理 ideas.md，不运行 todo list
+- AI 审查通过后挂起等待人工审核
+- 人工输入 `y` → 接受任务，程序退出
+- 人工输入 `n` → 输入反馈 → AI 修订 → AI 重新审查 → 再次人工审核
+- 所有对话（包括人工反馈）都记录到 `conversations/ideas.md`
+
+### AI 分解 Prompt 模板
+
+系统向 AI 发送以下格式的 prompt：
+
+```
+You are a task planner. Given the following idea, decompose it into one or more
+concrete, actionable TODO tasks in YAML format.
+
+## Idea Title
+{title}
+
+## Idea Content
+{content}
+
+## Instructions
+1. Each task should have: id, name, type, completion_criteria
+2. Task IDs should start from {next_id}
+3. Task types can be: "simple" or "nested"
+4. For nested tasks, include "subtasks" list
+...
+
+## Output Format
+Respond with ONLY valid YAML...
+```
+
+AI 返回的 YAML 被解析后直接追加到 `todos.yaml` 的 `tasks` 列表中。
+
+### Idle 模式
+
+**设计理念**：任务完成后不退出，而是进入 idle 状态持续等待新内容。
+
+**核心方法**：`run_with_idle()`
+
+```
+┌─────────────────────────┐
+│ 检查并处理新 ideas      │←──────────────────────┐
+└──────────┬──────────────┘                       │
+           ↓                                      │
+┌──────────────────────────┐                      │
+│ 执行所有待处理任务        │                      │
+└──────────┬──────────────┘                       │
+           ↓                                      │
+┌──────────────────────────┐                      │
+│ 进入 idle 等待           │                      │
+│ (每 N 秒轮询一次)        │                      │
+└──────────┬──────────────┘                       │
+           ↓                                      │
+    检测到变更？ ─── 是 ──────────────────────────┘
+           │
+          否（继续等待）
+```
+
+**Idle 等待检测**：
+- 检查 `ideas.md` 的文件修改时间
+- 检查 `todos.yaml` 是否被外部修改（任务数量增加）
+- 可通过 `--idle-interval` 配置轮询间隔（默认 30 秒）
+- 用户按 Ctrl+C 退出 idle 模式
+
+### CLI 使用
+
+```bash
+# 启用 ideas 处理（默认自动进入 idle 模式持续运行）
+python orchestrator.py --ideas ideas.md
+
+# 只处理 ideas（带人工审核），不运行 todo list
+python orchestrator.py --ideas ideas.md --ideas-only
+
+# 禁用 idle 模式（处理完即退出）
+python orchestrator.py --ideas ideas.md --no-idle
+
+# 自定义轮询间隔
+python orchestrator.py --ideas ideas.md --idle-interval 60
+
+# 同时启用对话日志和 ideas
+python orchestrator.py --ideas ideas.md --log-dir logs
+```
+
 ## 总结
 
 本架构设计实现了：
 
 - ✅ 统一的任务执行模型（不再区分简单任务和循环任务）
 - ✅ 精简的任务类型体系（simple / nested / long_running）
-- ✅ AI完全自主判断完成条件
+- ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI）
+- ✅ AI完全自主判断完成条件（三层检测策略）
 - ✅ 支持嵌套任务
-- ✅ 支持长时间任务的nohup处理
+- ✅ 支持长时间任务处理（autoagent-exec 10 秒快速失败 + 信号文件轮询）
 - ✅ AI完全掌控重试策略
 - ✅ 清晰的分层结构
-- ✅ 完善的状态管理
+- ✅ 完善的状态管理（独立 StateManager 模块）
 - ✅ 可扩展的设计
 - ✅ 系统与AI的清晰职责分工
+- ✅ 对话日志系统（完整记录 AI 交互，含工具调用，支持审计和回顾）
+- ✅ stream-json 实时解析（实时显示 AI 工具调用和执行结果）
+- ✅ Ideas 监控（自动将 ideas.md 中的想法分解为 TODO 任务）
+- ✅ Ideas AI 审查（独立上下文的 AI 审查生成的任务质量，支持多轮修订）
+- ✅ Ideas 人工审核（`--ideas-only` 模式，AI 审查通过后挂起等待人工确认）
+- ✅ Idle 模式（任务完成后持续等待新输入，实现持续工作流）
