@@ -250,9 +250,74 @@ tasks:
         initial_hint: "运行 pytest --cov=src --cov-report=term"
 ```
 
+## 迭代优化场景
+
+### 示例 8：循环任务（looping）
+
+使用 `looping` 类型进行固定次数的迭代优化，每轮循环重新执行所有子任务。
+
+```yaml
+tasks:
+  - id: 1
+    name: "迭代优化 CUDA 内核性能"
+    type: looping
+    repeat_count: 5
+    max_attempts_per_loop: 10
+    completion_criteria: |
+      完成 5 轮优化迭代
+      每轮包含：性能分析、代码优化、基准测试
+    subtasks:
+      - id: 1.1
+        name: "使用 ncu 分析性能瓶颈"
+        type: long_running
+        completion_criteria: "ncu 分析完成，生成性能报告"
+
+      - id: 1.2
+        name: "根据分析结果优化代码"
+        type: simple
+        completion_criteria: "代码优化完成，编译通过"
+
+      - id: 1.3
+        name: "运行基准测试验证优化效果"
+        type: simple
+        completion_criteria: "基准测试完成，记录性能数据"
+```
+
+**执行流程**：
+
+```
+📋 执行任务 1: 迭代优化 CUDA 内核性能
+   类型: looping (5 轮)
+
+   🔄 第 1 轮 / 共 5 轮
+      📌 子任务 1.1: 使用 ncu 分析性能瓶颈 (long_running)
+         AI 通过 autoagent-exec 启动 ncu...
+         ✅ 子任务 1.1 完成
+      📌 子任务 1.2: 根据分析结果优化代码 (simple)
+         AI 修改代码...
+         ✅ 子任务 1.2 完成
+      📌 子任务 1.3: 运行基准测试 (simple)
+         ✅ 子任务 1.3 完成
+   ✅ 第 1 轮完成
+
+   🔄 第 2 轮 / 共 5 轮
+      （重置所有子任务状态，重新执行）
+      ...
+
+   🔄 第 5 轮 / 共 5 轮
+      ...
+   ✅ 第 5 轮完成
+
+   ✅ 主任务 1 完成！（5 轮循环全部完成）
+```
+
+**与 nested 的区别**：
+- `nested`：AI 每轮评估是否完成，可能提前结束或继续重试
+- `looping`：固定循环 N 次，不做完成度评估，每轮重置所有子任务状态重新执行
+
 ## 性能优化场景
 
-### 示例 8：算法优化
+### 示例 9：算法优化
 
 ```yaml
 tasks:
@@ -276,7 +341,7 @@ tasks:
         initial_hint: "运行 python benchmark.py"
 ```
 
-### 示例 9：数据库查询优化
+### 示例 10：数据库查询优化
 
 ```yaml
 tasks:
@@ -305,7 +370,7 @@ tasks:
 
 - ✅ 任务描述清晰明确
 - ✅ 完成标准可量化验证
-- ✅ 合理使用任务类型（simple / nested / long_running）
+- ✅ 合理使用任务类型（simple / nested / looping / long_running）
 - ✅ 子任务粒度适中
 - ✅ 充分利用 AI 的决策能力
 

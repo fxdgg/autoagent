@@ -21,17 +21,26 @@
 - AI 完全自主判断是否满足完成条件
 - 持续迭代直到达成目标或达到最大尝试次数
 
-### 2. 嵌套任务支持
+### 2. 嵌套任务与循环任务支持
 支持任务包含子任务，每个子任务可以是：
 - **简单任务**：AI 自主完成（含代码修改、命令执行等）
-- **长时间任务**：使用 nohup 后台运行（避免超时）
+- **长时间任务**：使用 autoagent-exec 后台运行（避免超时）
+
+**嵌套任务（nested）**：AI 每轮评估是否完成，可能提前结束或继续重试
+**循环任务（looping）**：固定循环 N 次，每轮重置所有子任务状态重新执行
 
 **示例场景：**
 ```
-主任务：优化模型性能
+嵌套任务：优化模型性能
 ├── 子任务1：修改训练代码（AI 操作）
 ├── 子任务2：运行训练（长时间任务）
 └── 根据子任务2的结果判断主任务是否完成
+
+循环任务：迭代优化 CUDA 内核（5 轮）
+├── 子任务1：ncu 性能分析（长时间任务）
+├── 子任务2：优化代码（AI 操作）
+└── 子任务3：基准测试（AI 操作）
+    → 每轮重置，固定执行 5 次
 ```
 
 ### 3. AI 驱动的智能执行
@@ -116,19 +125,20 @@ tasks:
 │  - 管理任务队列                         │
 └────────────────┬────────────────────────┘
                  │
-         ┌───────┴───────┐
-         ▼               ▼
-┌────────────────┐  ┌────────────────┐
-│  Simple Task   │  │  Nested Task   │
-│  - 直接执行命令│  │  - 执行子任务  │
-│  - AI 判断完成│  │  - AI 判断主任务│
-└────────────────┘  └────────┬───────┘
-                             │
-                    ┌────────┴────────┐
-                    │  子任务执行流程  │
-                    │  - simple       │
-                    │  - long_running │
-                    └────────┬────────┘
+         ┌───────┼───────┐
+         ▼       ▼       ▼
+┌──────────┐ ┌──────────┐ ┌──────────┐
+│  Simple  │ │  Nested  │ │ Looping  │
+│  Task    │ │  Task    │ │  Task    │
+│ -AI 判断 │ │ -AI 决策 │ │ -固定N轮 │
+└──────────┘ └────┬─────┘ └────┬─────┘
+                  │            │
+                  └──────┬─────┘
+                  ┌──────┴────────┐
+                  │  子任务执行流程 │
+                  │  - simple      │
+                  │  - long_running│
+                  └──────┬────────┘
                              │
                     ┌────────▼────────┐
                     │  CodeBuddy      │
@@ -143,10 +153,12 @@ tasks:
 | 文档 | 说明 |
 |------|------|
 | **[README.md](README.md)** | 项目介绍和快速开始（本文档） |
-| **[ARCHITECTURE.md](ARCHITECTURE.md)** | 架构设计和核心概念 |
-| **[USAGE.md](USAGE.md)** | 使用指南和最佳实践 |
-| **[API_REFERENCE.md](API_REFERENCE.md)** | API 参考文档 |
-| **[FILES.md](FILES.md)** | 项目文件说明 |
+| **[ARCHITECTURE.md](doc/ARCHITECTURE.md)** | 架构设计和核心概念 |
+| **[USAGE.md](doc/USAGE.md)** | 使用指南和最佳实践 |
+| **[API_REFERENCE.md](doc/API_REFERENCE.md)** | API 参考文档 |
+| **[EXAMPLES.md](doc/EXAMPLES.md)** | 实际使用示例 |
+| **[FILES.md](doc/FILES.md)** | 项目文件说明 |
+| **[INDEX.md](doc/INDEX.md)** | 文档索引 |
 
 ## 🚀 快速开始
 
@@ -200,9 +212,60 @@ tasks:
 
 ### 4. 运行 Orchestrator
 
+**基本运行**（使用默认配置 `todos.yaml`）：
 ```bash
 python orchestrator.py
 ```
+
+**常见命令行参数**：
+
+```bash
+# 全自动运行：指定 ideas 文件、配置文件、工作目录和模型
+python orchestrator.py --ideas ideas.md --config todos.yaml --workspace ./my_project --model glm-5.0-ioa
+
+# 先人工审核 ideas 拆解结果，再手动运行任务
+python orchestrator.py --ideas ideas.md --config todos.yaml --workspace ./my_project --ideas-only
+python orchestrator.py --config todos.yaml --workspace ./my_project
+
+# 使用不同的 AI Provider
+python orchestrator.py --provider claude --model claude-sonnet-4-6
+python orchestrator.py --provider gemini --model gemini-2.5-pro
+
+# 只运行指定任务
+python orchestrator.py --task 2
+
+# 查看当前任务状态 / 重置所有状态
+python orchestrator.py --status
+python orchestrator.py --reset
+
+# 禁用 idle 模式（默认 --ideas 时自动开启 idle，任务完成后持续等待新 ideas）
+python orchestrator.py --ideas ideas.md --config todos.yaml --no-idle
+
+# 指定日志目录和超时时间
+python orchestrator.py --log-dir ./logs --timeout 600
+```
+
+**完整参数列表**：
+
+| 参数 | 简写 | 说明 |
+|------|------|------|
+| `--config` | `-c` | 任务配置文件路径（默认 `todos.yaml`） |
+| `--task` | `-t` | 只执行指定的任务 ID |
+| `--provider` | `-P` | AI Provider（`codebuddy`/`claude`/`gemini`，默认 `codebuddy`） |
+| `--model` | `-m` | AI 模型名称（默认取决于 provider） |
+| `--workspace` | `-w` | 工作目录（默认当前目录） |
+| `--ideas` | - | ideas.md 文件路径，启用 ideas 自动拆解 |
+| `--ideas-only` | - | 仅处理 ideas（含人工审核），不运行任务 |
+| `--no-idle` | - | 禁用 idle 模式（默认 `--ideas` 时自动开启） |
+| `--idle-interval` | - | idle 模式检查间隔秒数（默认 30） |
+| `--timeout` | - | AI 调用超时秒数（默认从 `config.yaml` 读取） |
+| `--log-dir` | - | 日志根目录（默认 `.autoagent`） |
+| `--status` | - | 显示当前任务状态并退出 |
+| `--reset` | - | 重置所有任务状态并退出 |
+| `--verbose` | `-v` | 启用详细日志 |
+| `--list-providers` | - | 列出所有可用 AI Provider 并退出 |
+
+> 💡 更多参数详情请参考 [USAGE.md](doc/USAGE.md) 和 [API_REFERENCE.md](doc/API_REFERENCE.md)。
 
 ## 💡 核心概念
 
@@ -397,17 +460,21 @@ Orchestrator: "更新任务状态"
 
 - [x] 基础架构设计
 - [x] 完整文档编写
-- [ ] 实现 TaskOrchestrator 核心类
-- [ ] 实现简单任务执行器
-- [ ] 实现嵌套任务支持
-- [ ] 实现长时间任务的 nohup 处理
-- [ ] 实现监控进程
-- [ ] 实现 CodeBuddy 调用封装
-- [ ] 添加配置验证
-- [ ] 添加错误处理
-- [ ] 添加日志系统
+- [x] 实现 TodoOrchestrator 核心类
+- [x] 实现简单任务执行器 (SimpleTaskExecutor)
+- [x] 实现嵌套任务支持 (NestedTaskExecutor)
+- [x] 实现循环任务支持 (LoopingTaskExecutor)
+- [x] 实现长时间任务处理 (autoagent-exec + 信号文件轮询)
+- [x] 实现 AI 调用封装 (AIClient / AIClientSDK)
+- [x] 实现多 AI Provider 支持 (CodeBuddy / Claude / Gemini / Test)
+- [x] 添加配置验证
+- [x] 添加错误处理
+- [x] 添加日志系统 (ConversationLogger)
+- [x] 实现 Ideas 文件监控与任务分解 (IdeasWatcher)
+- [x] 实现状态持久化 (StateManager)
+- [x] 实现 Idle 模式（自动等待新 ideas）
+- [x] 编写示例 (sample/)
 - [ ] 编写单元测试
-- [ ] 编写示例
 
 ## 🤝 贡献指南
 

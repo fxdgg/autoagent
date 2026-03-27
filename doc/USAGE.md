@@ -169,7 +169,7 @@ tasks:
 |------|------|------|------|
 | `id` | int/string | 是 | 任务 ID（唯一标识） |
 | `name` | string | 是 | 任务名称 |
-| `type` | string | 是 | 任务类型：`simple`、`nested`、`long_running` |
+| `type` | string | 是 | 任务类型：`simple`、`nested`、`looping`、`long_running` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
 
 #### 简单任务 (type: simple)
@@ -183,6 +183,15 @@ tasks:
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `subtasks` | list | 是 | 子任务列表 |
+
+#### 循环任务 (type: looping)
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `subtasks` | list | 是 | 子任务列表 |
+| `repeat_count` | int | 是 | 循环次数（正整数） |
+| `max_attempts_per_loop` | int | 否 | 每轮循环内最大重试次数（默认 20） |
+| `completion_criteria` | string | 是 | 完成标准 |
 
 #### 长时间任务 (type: long_running)
 
@@ -268,7 +277,48 @@ tasks:
    - 如果未完成，AI提出下一轮的优化方向和具体建议
    - 系统根据AI的评估决定是标记完成还是开始新一轮尝试
 
-### 3. 长时间任务 (long_running)
+### 3. 循环任务 (looping)
+
+**适用场景**：需要固定循环 N 次执行所有子任务的迭代优化场景（如 profile → optimize → benchmark → commit）
+
+**配置示例**：
+```yaml
+- id: 15
+  name: "迭代优化 CUDA 内核性能"
+  type: looping
+  repeat_count: 5
+  max_attempts_per_loop: 10
+  completion_criteria: |
+    完成 5 轮优化迭代
+    每轮包含：性能分析、代码优化、基准测试、提交
+  subtasks:
+    - id: 15.1
+      name: "使用 ncu 分析性能瓶颈"
+      type: long_running
+      completion_criteria: "ncu 分析完成，生成性能报告"
+      
+    - id: 15.2
+      name: "根据分析结果优化代码"
+      type: simple
+      completion_criteria: "代码优化完成，编译通过"
+      
+    - id: 15.3
+      name: "运行基准测试验证优化效果"
+      type: simple
+      completion_criteria: "基准测试完成，记录性能数据"
+```
+
+**与 nested 的区别**：
+- `nested`：AI 每轮评估是否完成，可能提前结束或继续重试
+- `looping`：固定循环 N 次，不做完成度评估，每轮重置所有子任务状态重新执行
+
+**执行流程**：
+1. 每轮循环重置所有子任务状态
+2. 按顺序执行所有子任务
+3. 子任务失败时 AI 分析原因并决定重试策略（在当前轮内重试）
+4. 循环完指定次数即完成
+
+### 4. 长时间任务 (long_running)
 
 **适用场景**：可能超过 CodeBuddy 超时限制的任务（如模型训练、Profiling）
 
@@ -657,13 +707,16 @@ python orchestrator.py
 
 ### Q: 支持哪些 AI 工具和模型？
 
-支持三种 AI CLI 工具：
+支持四种 AI CLI 工具：
 
 | Provider | 命令 | 默认模型 | 别名 |
 |----------|------|----------|------|
 | CodeBuddy | `codebuddy` | `glm-5.0-ioa` | `cb` |
 | Claude Code | `claude-internal` | `claude-sonnet-4-6` | `claude-code`, `claude-internal` |
 | Gemini CLI | `gemini-internal` | `gemini-2.5-pro` | `gemini-cli`, `gemini-internal` |
+| Test | `test` | `test` | - |
+
+> **Test Provider** 不调用真实 AI，而是从 `--test-rules` 指定的规则文件中按顺序读取预定义响应，用于测试编排逻辑。
 
 使用 `--list-providers` 查看所有可用 provider和别名。
 
