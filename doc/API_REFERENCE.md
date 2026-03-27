@@ -233,6 +233,16 @@ type prompt.txt | gemini-internal --output-format stream-json [--resume latest] 
 
 与 CodeBuddy 的关键差异：使用 `-p` 指定非交互模式，使用 `--resume latest` 替代 `--continue`，使用 `--yolo` 替代 `-y`。
 
+#### TestProvider
+
+| 属性 | 值 |
+|------|----|
+| `name` | `"test"` |
+| `default_executable` | `"test"` |
+| `default_model` | `"test"` |
+
+**说明**：测试用 Provider，不调用真实 AI CLI 工具。从 `--test-rules` 指定的规则文件中按顺序读取预定义响应，用于测试编排逻辑。配合 `AIClientTest` 使用。
+
 ### 工厂函数
 
 #### get_provider
@@ -253,6 +263,7 @@ def get_provider(
 | `codebuddy` | `cb` |
 | `claude` | `claude-code`, `claude-internal` |
 | `gemini` | `gemini-cli`, `gemini-internal` |
+| `test` | - |
 
 #### list_providers
 
@@ -438,6 +449,44 @@ while attempts < max_attempts:
 
 return False
 ```
+
+### LoopingTaskExecutor
+
+执行循环任务（looping 类型），固定循环 N 次执行所有子任务。
+
+```python
+class LoopingTaskExecutor:
+    def __init__(self, session_dir: str = None)
+    def execute(self, task: dict, client: CodeBuddyClient) -> bool
+```
+
+**构造函数参数**：
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `session_dir` | str | None | 日志会话目录（从 orchestrator 传入） |
+
+**执行逻辑**：
+
+```python
+for loop in range(task['repeat_count']):
+    # 每轮重置所有子任务状态
+    reset_subtask_states(task)
+    
+    for subtask in task['subtasks']:
+        result = subtask_executor.execute(subtask, client)
+        if not result.success:
+            # AI 分析失败原因并决定重试策略（在当前轮内重试）
+            handle_failure(subtask, result)
+    
+    # 本轮完成，进入下一轮
+```
+
+**与 NestedTaskExecutor 的区别**：
+- 不做主任务完成度评估
+- 固定循环 N 次，不会提前结束
+- 每轮重置所有子任务状态重新执行
+- 使用 `max_attempts_per_loop` 控制每轮内的重试次数
 
 ### NestedTaskExecutor
 
@@ -1016,11 +1065,13 @@ class SubtaskState(TypedDict, total=False):
 class TaskConfig(TypedDict, total=False):
     id: Union[int, str]                               # 必填，唯一标识
     name: str                                          # 必填，任务名称
-    type: Literal["simple", "nested"]                  # 必填，任务类型
+    type: Literal["simple", "nested", "looping", "long_running"]  # 必填，任务类型
     completion_criteria: str                            # 必填，完成标准
     initial_hint: str                                  # simple 可选
     max_attempts: int                                  # 可选，默认 20
-    subtasks: List['SubtaskConfig']                    # nested 必填
+    subtasks: List['SubtaskConfig']                    # nested/looping 必填
+    repeat_count: int                                  # looping 必填，循环次数
+    max_attempts_per_loop: int                         # looping 可选，每轮最大重试次数（默认 20）
 ```
 
 ### SubtaskConfig
@@ -1065,6 +1116,8 @@ class AICallError(Exception):
 | `--provider` | `-P` | `codebuddy` | AI provider：`codebuddy`、`claude`、`gemini` |
 | `--executable` | - | None | 覆盖 provider 默认可执行文件路径 |
 | `--extra-args` | - | None | 传递给 AI 工具的额外 CLI 参数 |
+| `--use-cli` | - | - | 强制使用 CLI 模式（而非 SDK 模式） |
+| `--test-rules` | - | None | 测试规则文件路径（使用 `test` provider 时必须指定） |
 | `--list-providers` | - | - | 列出所有可用 AI provider 并退出 |
 | `--codebuddy-path` | - | None | （Legacy）CodeBuddy 可执行文件路径，建议用 `--provider` + `--executable` |
 | `--model` | `-m` | 取决于 provider | AI 模型（codebuddy=glm-5.0-ioa, claude=claude-sonnet-4-6, gemini=gemini-2.5-pro） |
@@ -1196,6 +1249,7 @@ orchestrator.run_with_idle()  # 不会退出，直到 Ctrl+C
 | **AIClient** (别名 CodeBuddyClient) | AI 调用、Context 管理、stream-json 解析 |
 | **SimpleTaskExecutor** | 简单任务执行（三层完成检测） |
 | **NestedTaskExecutor** | 嵌套任务执行、AI 决策调度 |
+| **LoopingTaskExecutor** | 循环任务执行（固定 N 次迭代） |
 | **SubtaskExecutor** | 子任务分发执行（接收 session_dir） |
 | **autoagent_exec.py** | long_running 任务启动器（10s 快速失败 + 信号文件） |
 | **StateManager** | 任务状态持久化（todos_state.yaml） |

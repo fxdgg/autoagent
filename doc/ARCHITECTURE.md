@@ -28,7 +28,7 @@
                  │
 ┌────────────────▼────────────────────────┐
 │  业务逻辑层 (Business Logic Layer)      │
-│  - TaskOrchestrator 类                  │
+│  - TodoOrchestrator 类                  │
 │  - 任务调度器                           │
 │  - 配置解析器                           │
 │  - Context 管理器                       │  ← 管理 CodeBuddy context 生命周期
@@ -41,6 +41,7 @@
 │  任务执行层 (Task Execution Layer)      │
 │  - SimpleTaskExecutor                   │
 │  - NestedTaskExecutor                   │
+│  - LoopingTaskExecutor                  │
 │  - SubtaskExecutor                      │
 │  - autoagent_exec.py                    │  ← long_running 任务启动器
 └────────────────┬────────────────────────┘
@@ -50,7 +51,7 @@
 │  - AIClient 类                           │  ← 统一 AI 客户端（原 CodeBuddyClient）
 │  - AIProvider 抽象基类                   │  ← 多 Provider 支持
 │  - CodeBuddyProvider / ClaudeCodeProvider│
-│  - GeminiCLIProvider                     │
+│  - GeminiCLIProvider / TestProvider      │
 │  - 提示词构造器                         │
 │  - 响应解析器（stream-json）             │  ← 实时解析 stream-json 输出
 │  - Context 管理（--continue 参数）       │  ← 保持对话上下文连续性
@@ -81,7 +82,8 @@ orchestrator.py
     │   ├── AIProvider (基类)
     │   ├── CodeBuddyProvider
     │   ├── ClaudeCodeProvider
-    │   └── GeminiCLIProvider
+    │   ├── GeminiCLIProvider
+    │   └── TestProvider
     ├── task_executor.py (任务执行)
     │   ├── codebuddy_client.py → AIClient (AI 能力)
     │   │   └── ai_providers.py → subprocess (调用各 AI CLI)
@@ -93,19 +95,18 @@ orchestrator.py
     ├── ideas_watcher.py          # Ideas 文件监控与任务分解
     │   ├── codebuddy_client.py → AIClient (AI 分解 Ideas)
     │   ├── codebuddy_client.py → AIClient (AI 审查 + 修订)
-    │   └── yaml (追加任务到 todos.yaml)    └── monitor.py (长时间任务监控)
-        └── subprocess (监控进程)
+    │   └── yaml (追加任务到 todos.yaml)
 ```
 
 ## 核心组件
 
-### 1. TaskOrchestrator
+### 1. TodoOrchestrator
 
 **职责**：任务编排和执行管理
 
 **核心方法**：
 ```python
-class TaskOrchestrator:
+class TodoOrchestrator:
     def __init__(self, todos_file: str = "todos.yaml", log_dir: str = None)
     def load_todos(self) -> list
     def load_state(self) -> dict
@@ -426,7 +427,7 @@ execution_results:
 #### 1. 主任务级别的 Context 隔离
 
 ```python
-class TaskOrchestrator:
+class TodoOrchestrator:
     def execute_main_task(self, task: dict):
         # 每个主任务创建独立的 CodeBuddyClient
         context_id = f"task_{task['id']}"
@@ -671,7 +672,50 @@ for task in state['tasks']:
 7. 循环直到满足条件或达到最大尝试次数
 ```
 
-### 3. 长时间任务 (long_running)
+### 3. 循环任务 (looping)
+
+**定义**：固定循环 N 次执行所有子任务的迭代优化任务
+
+**配置示例**：
+```yaml
+- id: 3
+  name: "迭代优化 CUDA 内核性能"
+  type: looping
+  repeat_count: 5
+  max_attempts_per_loop: 10
+  completion_criteria: |
+    完成 5 轮优化迭代
+  subtasks:
+    - id: 3.1
+      name: "使用 ncu 分析性能瓶颈"
+      type: long_running
+      completion_criteria: "ncu 分析完成"
+    - id: 3.2
+      name: "根据分析结果优化代码"
+      type: simple
+      completion_criteria: "代码优化完成，编译通过"
+```
+
+**与 nested 的区别**：
+- `nested`：AI 每轮评估是否完成，可能提前结束或继续重试
+- `looping`：固定循环 N 次，不做完成度评估，每轮重置所有子任务状态重新执行
+
+**执行流程**：
+```
+1. 开始第 1 轮循环
+   ↓
+2. 重置所有子任务状态
+   ↓
+3. 按顺序执行所有子任务
+   ↓
+4. 子任务失败时 AI 分析原因并决定重试策略（在当前轮内重试）
+   ↓
+5. 本轮完成，进入下一轮
+   ↓
+6. 循环完指定次数即完成
+```
+
+### 4. 长时间任务 (long_running)
 
 **定义**：通过 `autoagent-exec` 启动的长时间后台任务，使用 10 秒快速失败检测机制
 
@@ -918,7 +962,7 @@ pending → in_progress → completed/failed
 ### 状态持久化
 
 ```python
-class TaskOrchestrator:
+class TodoOrchestrator:
     def __init__(self, todos_file="todos.yaml", log_dir=None):
         self.todos_file = todos_file
         # log_dir defaults to ".autoagent" (relative to CWD)
@@ -1860,7 +1904,7 @@ graph TD
 
 **审查标准**（由 reviewer AI 判断）：
 1. 任务 ID 是否正确且一致（包括子任务点号表示法）
-2. 任务类型是否合适（simple vs nested，simple vs long_running）
+2. 任务类型是否合适（simple vs nested vs looping，simple vs long_running）
 3. 完成标准是否清晰、具体、可衡量
 4. 分解是否完整覆盖了原始想法
 5. 是否有遗漏或冗余的任务
@@ -1993,8 +2037,8 @@ python orchestrator.py --ideas ideas.md --log-dir logs
 本架构设计实现了：
 
 - ✅ 统一的任务执行模型（不再区分简单任务和循环任务）
-- ✅ 精简的任务类型体系（simple / nested / long_running）
-- ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI）
+- ✅ 精简的任务类型体系（simple / nested / looping / long_running）
+- ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI / Test）
 - ✅ AI完全自主判断完成条件（三层检测策略）
 - ✅ 支持嵌套任务
 - ✅ 支持长时间任务处理（autoagent-exec 10 秒快速失败 + 信号文件轮询）

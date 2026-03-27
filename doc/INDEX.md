@@ -8,7 +8,7 @@
 
 | 文档 | 说明 | 适合谁 |
 |------|------|--------|
-| **[README.md](README.md)** ⭐ | 项目介绍、核心特性、快速开始 | 所有人 |
+| **[README.md](../README.md)** ⭐ | 项目介绍、核心特性、快速开始 | 所有人 |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** 🏗️ | 系统架构、核心组件、AI 决策机制、状态管理 | 开发者 |
 | **[USAGE.md](USAGE.md)** 📖 | 使用指南、配置详解、最佳实践、故障排除 | 使用者 |
 | **[API_REFERENCE.md](API_REFERENCE.md)** 🔧 | 完整 API 参考、类定义、状态类型 | 开发者 |
@@ -19,7 +19,7 @@
 
 | 我想... | 去哪里 |
 |---------|--------|
-| 快速上手 | [README.md](README.md) → 快速开始 |
+| 快速上手 | [README.md](../README.md) → 快速开始 |
 | 了解系统架构 | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | 配置任务 | [USAGE.md](USAGE.md) → 配置文件 |
 | 看使用示例 | [EXAMPLES.md](EXAMPLES.md) |
@@ -42,4 +42,4 @@
 
 ---
 
-💡 **提示**: 如果你是第一次使用，建议从 [README.md](README.md) 开始阅读。
+💡 **提示**: 如果你是第一次使用，建议从 [README.md](../README.md) 开始阅读。
