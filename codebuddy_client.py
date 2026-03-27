@@ -935,6 +935,12 @@ class AIClientTest:
         self.context_id = context_id
         self._session_started = False
         self.last_full_log = ""
+        # Fallback exec_path and log_dir for autoagent-exec commands
+        # when the prompt doesn't contain them (e.g. simple tasks where
+        # AI remembers the paths from context).
+        # These are set by the orchestrator (run_test.py) after client creation.
+        self._fallback_exec_path = None
+        self._fallback_log_dir = None
 
     @property
     def codebuddy_path(self):
@@ -1043,16 +1049,25 @@ class AIClientTest:
             r'python\s+["\'](.+?autoagent_exec\.py)["\']\s+--log-dir\s+["\'](.+?)["\']',
             prompt,
         )
-        if not exec_path_match:
+        if exec_path_match:
+            exec_path = exec_path_match.group(1)
+            log_dir = exec_path_match.group(2)
+        elif self._fallback_exec_path and self._fallback_log_dir:
+            # AI remembered exec_path/log_dir from context (e.g. simple task
+            # where the prompt doesn't include autoagent-exec instructions)
+            exec_path = self._fallback_exec_path
+            log_dir = self._fallback_log_dir
+            logger.info(
+                f"[{self.context_id}] Using fallback exec_path/log_dir "
+                f"for autoagent-exec in non-long_running task"
+            )
+        else:
             logger.warning(
                 f"[{self.context_id}] Response contains autoagent-exec command "
-                f"but could not extract exec_path/log_dir from prompt. "
-                f"Skipping actual execution."
+                f"but could not extract exec_path/log_dir from prompt "
+                f"and no fallback is configured. Skipping actual execution."
             )
             return response
-
-        exec_path = exec_path_match.group(1)
-        log_dir = exec_path_match.group(2)
 
         print(f"\n🧪 [TestProvider] Detected autoagent-exec command, executing for real:")
         print(f"   exec_path: {exec_path}")

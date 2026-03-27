@@ -427,6 +427,13 @@ class TodoOrchestrator:
                 timeout=self.timeout,
                 context_id=context_id,
             )
+            # Set fallback paths so TestClient can execute autoagent-exec
+            # even when the prompt doesn't contain them (e.g. simple tasks
+            # where AI remembers the paths from context)
+            client._fallback_exec_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "autoagent_exec.py"
+            )
+            client._fallback_log_dir = self.session_dir
         elif self.use_cli:
             client = AIClient(
                 provider=self.provider,

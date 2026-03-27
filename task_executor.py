@@ -113,6 +113,15 @@ class SimpleTaskExecutor:
                         parent_task_id=parent_task_id,
                     )
                 
+                # Check if AI reports LONG_RUNNING_IN_PROGRESS
+                # (AI has context and may use autoagent-exec even in a simple task)
+                if self._handle_long_running_in_simple_task(
+                    result, task, task_id, attempts, client, state_manager,
+                    conv_logger=conv_logger, parent_task_id=parent_task_id,
+                ):
+                    # Successfully handled as long-running — treat as completed
+                    return True
+                
                 # Check if AI reports completion
                 # Extract a meaningful summary from the AI response
                 completion_status = self._check_completion(result)
@@ -363,8 +372,77 @@ class SimpleTaskExecutor:
         return None
 
     # Marker names used in "Cannot find ... in previous response" messages
-    _SIMPLE_TASK_MARKERS = "'✅ completed' or '❌ not completed'"
+    _SIMPLE_TASK_MARKERS = "'✅ completed', '❌ not completed', or '⏳ LONG_RUNNING_IN_PROGRESS'"
     _LONG_RUNNING_MARKERS = "'✅ completed', '❌ not completed', or '⏳ LONG_RUNNING_IN_PROGRESS'"
+
+    def _handle_long_running_in_simple_task(
+        self, response: str, task: dict, task_id: str, attempt: int,
+        client, state_manager, conv_logger=None, parent_task_id: str = None,
+    ) -> bool:
+        """
+        Handle LONG_RUNNING_IN_PROGRESS in a simple task.
+        
+        AI has context about autoagent-exec and may use it even in a simple task.
+        When detected, delegate to SubtaskExecutor's poll + callback logic.
+        
+        Returns:
+            True if the long-running task completed successfully,
+            False otherwise (caller should continue the retry loop).
+        """
+        subtask_exec = getattr(self, '_subtask_executor', None)
+        if subtask_exec is None:
+            # No SubtaskExecutor reference — cannot handle long-running
+            return False
+        
+        if not subtask_exec._check_long_running_in_progress(response):
+            return False
+        
+        if not subtask_exec.session_dir:
+            logger.warning(
+                f"Task {task_id}: AI returned LONG_RUNNING_IN_PROGRESS in simple task "
+                f"but no session_dir is configured. Treating as not completed."
+            )
+            return False
+        
+        print(f"   ⏳ AI submitted long-running task in simple task, waiting for completion...")
+        
+        log_session_dir = subtask_exec.session_dir
+        signal_file = os.path.join(log_session_dir, "lr_tasks", f"lr_{task_id}_signal.json")
+        output_log = os.path.join(log_session_dir, "lr_tasks", f"lr_{task_id}_output.log")
+        
+        monitor_status = subtask_exec._poll_signal_file(task_id, signal_file)
+        
+        # Restart AI to analyze the result
+        analyze_result = subtask_exec._ai_analyze_long_running_result(
+            task, client, state_manager,
+            monitor_status, output_log,
+            conv_logger=conv_logger, parent_task_id=parent_task_id,
+        )
+        
+        if analyze_result.success:
+            state_manager.add_task_history(task_id, {
+                "attempt": attempt,
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "result": "completed",
+                "summary": analyze_result.output,
+            })
+            return True
+        
+        # Analysis says not completed — record and let the retry loop continue
+        state_manager.add_task_history(task_id, {
+            "attempt": attempt,
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "result": "not_completed",
+            "summary": analyze_result.output or "Long-running task did not meet completion criteria",
+        })
+        # Reset status back to in_progress for retry
+        state_manager.mark_task_status(
+            task_id, "in_progress",
+            attempts=attempt,
+            last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        print(f"   ⏳ Long-running callback analysis failed, retrying...")
+        return False
 
 
 class NestedTaskExecutor:
@@ -1148,6 +1226,9 @@ class SubtaskExecutor:
 
     def __init__(self, session_dir: str = None):
         self.simple_executor = SimpleTaskExecutor()
+        # Back-reference so SimpleTaskExecutor can delegate long-running
+        # handling (poll + callback) when AI uses autoagent-exec in a simple task
+        self.simple_executor._subtask_executor = self
         self.session_dir = session_dir
 
     def execute(self, subtask: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None) -> SubtaskResult:
