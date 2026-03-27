@@ -831,7 +831,7 @@ Examples:
   python orchestrator.py --verbose                       # Enable debug logging
   python orchestrator.py --ideas ideas.md                # Watch ideas.md for new ideas
   python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (with human review)
-  python orchestrator.py --idle --ideas ideas.md         # Run tasks then idle for ideas
+  python orchestrator.py --ideas ideas.md                 # Run tasks then idle for ideas (idle is default)
   python orchestrator.py --list-providers                # List available AI providers
         """,
     )
@@ -934,10 +934,11 @@ Examples:
              'approval. Enter y to accept and exit, or n to provide feedback for revision.',
     )
     parser.add_argument(
-        '--idle',
+        '--no-idle',
         action='store_true',
-        help='Enter idle mode after completing tasks. Waits for new ideas in ideas.md. '
-             'Requires --ideas to be set.',
+        help='Disable idle mode. By default, when --ideas is set, the orchestrator '
+             'enters idle mode after completing tasks (waiting for new ideas). '
+             'Use --no-idle to run once and exit.',
     )
     parser.add_argument(
         '--idle-interval',
@@ -995,10 +996,8 @@ Examples:
             print(f"\n{'=' * 50}")
             return
 
-        # Validate idle mode requires ideas file
-        if args.idle and not args.ideas:
-            print("❌ --idle mode requires --ideas to be set.")
-            sys.exit(1)
+        # Determine idle mode: enabled by default when --ideas is set
+        idle_mode = bool(args.ideas) and not args.no_idle
         
         # Validate --ideas-only requires --ideas
         if args.ideas_only and not args.ideas:
@@ -1088,7 +1087,7 @@ Examples:
             print(f"\n✅ Ideas processing complete.")
             return
         
-        if args.idle:
+        if idle_mode:
             # Idle mode: run tasks then wait for new ideas
             orchestrator.run_with_idle(
                 task_id=args.task,

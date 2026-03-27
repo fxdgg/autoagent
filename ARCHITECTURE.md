@@ -1972,20 +1972,20 @@ AI 返回的 YAML 被解析后直接追加到 `todos.yaml` 的 `tasks` 列表中
 ### CLI 使用
 
 ```bash
-# 启用 ideas 处理（处理完即退出）
+# 启用 ideas 处理（默认自动进入 idle 模式持续运行）
 python orchestrator.py --ideas ideas.md
 
 # 只处理 ideas（带人工审核），不运行 todo list
 python orchestrator.py --ideas ideas.md --ideas-only
 
-# 启用 idle 模式（持续运行）
-python orchestrator.py --ideas ideas.md --idle
+# 禁用 idle 模式（处理完即退出）
+python orchestrator.py --ideas ideas.md --no-idle
 
 # 自定义轮询间隔
-python orchestrator.py --ideas ideas.md --idle --idle-interval 60
+python orchestrator.py --ideas ideas.md --idle-interval 60
 
 # 同时启用对话日志和 ideas
-python orchestrator.py --ideas ideas.md --idle --log-dir logs
+python orchestrator.py --ideas ideas.md --log-dir logs
 ```
 
 ## 总结

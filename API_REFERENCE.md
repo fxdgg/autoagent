@@ -1073,7 +1073,7 @@ class AICallError(Exception):
 | `--log-dir` | - | `.autoagent` | 日志根目录（相对于 CWD） |
 | `--ideas` | - | None | ideas.md 文件路径 |
 | `--ideas-only` | - | - | 只处理 ideas.md（带人工审核），不运行 todo list（需搭配 `--ideas`） |
-| `--idle` | - | - | 任务完成后进入 idle 模式等待新 ideas（需搭配 `--ideas`） |
+| `--no-idle` | - | - | 禁用 idle 模式（默认当 `--ideas` 指定时自动开启 idle） |
 | `--idle-interval` | - | 30 | idle 轮询间隔（秒） |
 | `--status` | - | - | 显示当前任务状态并退出 |
 | `--reset` | - | - | 重置所有状态并退出 |
@@ -1096,8 +1096,11 @@ python orchestrator.py --provider gemini --model gemini-2.5-pro
 # 使用自定义可执行文件路径
 python orchestrator.py --provider claude --executable /usr/local/bin/claude
 
-# 带 Ideas 监控和 Idle 模式
-python orchestrator.py --ideas ideas.md --idle --idle-interval 60
+# 带 Ideas 监控和 Idle 模式（--ideas 自动开启 idle）
+python orchestrator.py --ideas ideas.md --idle-interval 60
+
+# 带 Ideas 但禁用 idle（处理完即退出）
+python orchestrator.py --ideas ideas.md --no-idle
 
 # 只处理 ideas（带人工审核）
 python orchestrator.py --ideas ideas.md --ideas-only

@@ -23,7 +23,7 @@ Usage:
     python run_test.py --autoagent-dir /path/to       # Override autoagent dir
     python run_test.py --list-providers               # List available AI providers
     python run_test.py --ideas ideas.md               # Process ideas.md into TODOs
-    python run_test.py --idle --ideas ideas.md        # Run then idle for new ideas
+python run_test.py --ideas ideas.md               # Run then idle for new ideas (idle is default)
 """
 
 import os
@@ -350,7 +350,7 @@ Examples:
   python run_test.py --list-providers              # List available AI providers
   python run_test.py --ideas ideas.md              # Process ideas.md into TODOs
   python run_test.py --ideas ideas.md --ideas-only # Process ideas only (with human review)
-  python run_test.py --idle --ideas ideas.md       # Run then idle for new ideas
+python run_test.py --ideas ideas.md               # Run then idle for new ideas (idle is default)
         """,
     )
 
@@ -440,9 +440,10 @@ Examples:
              "Requires --ideas. After AI review passes, pauses for human approval.",
     )
     parser.add_argument(
-        "--idle",
+        "--no-idle",
         action="store_true",
-        help="Enter idle mode after completing tasks. Waits for new ideas. Requires --ideas.",
+        help="Disable idle mode. By default, when --ideas is set, idle mode is enabled "
+             "(waits for new ideas after tasks complete). Use --no-idle to run once and exit.",
     )
     parser.add_argument(
         "--idle-interval",
@@ -573,11 +574,9 @@ Examples:
             print("\n❌ --ideas-only mode requires --ideas to be set.")
             sys.exit(1)
         extra.append("--ideas-only")
-    if args.idle:
-        if not args.ideas:
-            print("\n❌ --idle mode requires --ideas to be set.")
-            sys.exit(1)
-        extra.append("--idle")
+    # Idle mode is enabled by default when --ideas is set
+    idle_mode = bool(args.ideas) and not args.no_idle
+    if idle_mode:
         extra.extend(["--idle-interval", str(args.idle_interval)])
     if args.use_cli:
         extra.append("--use-cli")

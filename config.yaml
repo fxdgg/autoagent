@@ -6,4 +6,4 @@
 # If an AI call exceeds this limit, the session is killed and the next
 # prompt will include a timeout notification with guidance on using
 # autoagent-exec for long-running commands.
-bash_timeout: 300
+bash_timeout: 3600
