@@ -953,6 +953,13 @@ Examples:
              'Only works with --provider codebuddy.',
     )
     parser.add_argument(
+        '--include-directories',
+        default=None,
+        help='Comma-separated list of additional directories the AI tool is allowed '
+             'to access outside the workspace (Gemini only). '
+             'Example: --include-directories /path/to/dir1,/path/to/dir2',
+    )
+    parser.add_argument(
         '--test-rules',
         default=None,
         help='Path to test rules file for --provider test. '
@@ -1032,12 +1039,36 @@ Examples:
                     "Use --executable instead."
                 )
         
+        # Parse --include-directories into a list
+        include_dirs = None
+        if args.include_directories:
+            include_dirs = [d.strip() for d in args.include_directories.split(',') if d.strip()]
+        
+        # When using Gemini with ideas, auto-include the todos.yaml parent directory
+        # so that Gemini's sandbox allows writing the temp tasks file there.
+        resolved_provider_name = args.provider.lower()
+        from ai_providers import PROVIDER_ALIASES
+        resolved_provider_name = PROVIDER_ALIASES.get(resolved_provider_name, resolved_provider_name)
+        if resolved_provider_name == 'gemini' and args.ideas:
+            todos_parent = os.path.dirname(os.path.abspath(args.config))
+            workspace_abs = os.path.abspath(args.workspace)
+            if os.path.normcase(todos_parent) != os.path.normcase(workspace_abs):
+                if include_dirs is None:
+                    include_dirs = []
+                if todos_parent not in include_dirs:
+                    include_dirs.append(todos_parent)
+                    logger.info(
+                        f"Auto-added {todos_parent} to --include-directories "
+                        f"for Gemini sandbox (todos.yaml parent != workspace)"
+                    )
+        
         provider = get_provider(
             name=args.provider,
             executable=executable,
             model=args.model,
             extra_args=args.extra_args,
             test_rules_file=getattr(args, 'test_rules', None),
+            include_directories=include_dirs,
         )
         
         logger.info(f"Using AI provider: {provider}")

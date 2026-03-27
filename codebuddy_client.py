@@ -259,12 +259,20 @@ class AIClient:
         """
         Parse a single line of stream-json output and display relevant info in real-time.
         
-        stream-json format produces one JSON object per line. Key event types:
-          - "assistant": AI message with content array (text blocks and/or tool_use)
-          - "user": Contains tool_result from tool executions
-          - "result": Final result summary with "result" text
-          - "system": System/session init messages
-          - "topic": Conversation topic
+        Supports two stream-json dialects:
+        
+        **CodeBuddy / Claude Code format:**
+          - "assistant": AI message with message.content[] array (text blocks and/or tool_use)
+          - "user": Contains tool_result in message.content[] array
+          - "result": Final result with "result", "is_error", "duration_ms", "num_turns"
+        
+        **Gemini CLI format:**
+          - "message" + role="assistant": AI text in "content" string, with "delta":true
+          - "tool_use": Top-level event with "tool_name" and "parameters"
+          - "tool_result": Top-level event with "status", "output", "error"
+          - "result": Final result with "status", "stats.duration_ms", "stats.tool_calls"
+          - "init": Session init (ignored)
+          - "message" + role="user": Echo of user prompt (ignored)
         
         Args:
             line: A single line of stream-json output
@@ -288,7 +296,7 @@ class AIClient:
         event_type = event.get("type", "")
         
         if event_type == "assistant":
-            # AI message - content is in message.content[] array
+            # CodeBuddy/Claude format: AI message with content[] array
             message = event.get("message", {})
             content_blocks = message.get("content", [])
             for block in content_blocks:
@@ -304,12 +312,52 @@ class AIClient:
                     tool_name = block.get("name", "unknown")
                     tool_input = block.get("input", {})
                     self._display_tool_use(tool_name, tool_input)
-                    # Log tool call to full_log
                     tool_log = self._format_tool_use_for_log(tool_name, tool_input)
                     full_log_parts.append(tool_log)
         
+        elif event_type == "message":
+            # Gemini format: "message" event with "role" field
+            role = event.get("role", "")
+            if role == "assistant":
+                content = event.get("content", "")
+                if isinstance(content, str) and content:
+                    assistant_text_parts.append(content)
+                    full_log_parts.append(content)
+                    sys.stdout.write(content)
+                    sys.stdout.flush()
+            # role="user" is just an echo of the prompt — ignore it
+        
+        elif event_type == "tool_use":
+            # Gemini format: top-level tool_use event
+            tool_name = event.get("tool_name", event.get("name", "unknown"))
+            tool_input = event.get("parameters", event.get("input", {}))
+            self._display_tool_use(tool_name, tool_input)
+            tool_log = self._format_tool_use_for_log(tool_name, tool_input)
+            full_log_parts.append(tool_log)
+        
+        elif event_type == "tool_result":
+            # Gemini format: top-level tool_result event
+            status = event.get("status", "")
+            output = event.get("output", "")
+            error_info = event.get("error", {})
+            is_error = (status == "error")
+            content = output if output else (error_info.get("message", "") if isinstance(error_info, dict) else str(error_info))
+            if content:
+                preview = content[:500]
+                if len(content) > 500:
+                    preview += f"... ({len(content)} chars total)"
+                sys.stdout.write(f"   ↳ {preview}\n")
+                sys.stdout.flush()
+                error_marker = " ❌" if is_error else ""
+                log_content = content[:2000]
+                if len(content) > 2000:
+                    log_content += f"\n... ({len(content)} chars total)"
+                full_log_parts.append(
+                    f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
+                )
+        
         elif event_type == "user":
-            # User message containing tool_result
+            # CodeBuddy/Claude format: user message containing tool_result
             message = event.get("message", {})
             content_blocks = message.get("content", [])
             if isinstance(content_blocks, list):
@@ -323,9 +371,7 @@ class AIClient:
                                 preview += f"... ({len(content)} chars total)"
                             sys.stdout.write(f"   ↳ {preview}\n")
                             sys.stdout.flush()
-                            # Log tool result to full_log
                             error_marker = " ❌" if is_error else ""
-                            # For log: include more content (up to 2000 chars)
                             log_content = content[:2000]
                             if len(content) > 2000:
                                 log_content += f"\n... ({len(content)} chars total)"
@@ -334,21 +380,32 @@ class AIClient:
                             )
         
         elif event_type == "result":
-            # Final result - always append result_text so that completion
-            # markers (e.g. "✅ COMPLETED") emitted in the result event
-            # are visible to _check_completion().
+            # Final result — supports both CodeBuddy/Claude and Gemini formats
             result_text = event.get("result", "")
             if result_text:
                 assistant_text_parts.append(result_text)
-            # Always print a summary line
+            
+            # CodeBuddy/Claude fields
             is_error = event.get("is_error", False)
             duration_ms = event.get("duration_ms", 0)
             num_turns = event.get("num_turns", 0)
+            
+            # Gemini fields (fallback)
+            if not is_error and event.get("status") == "error":
+                is_error = True
+            stats = event.get("stats", {})
+            if duration_ms == 0 and isinstance(stats, dict):
+                duration_ms = stats.get("duration_ms", 0)
+            if num_turns == 0 and isinstance(stats, dict):
+                num_turns = stats.get("tool_calls", 0)
+            
             status = "❌ Error" if is_error else "✅ Done"
             summary = f"\n--- {status} ({num_turns} turns, {duration_ms/1000:.1f}s) ---\n"
             sys.stdout.write(summary)
             sys.stdout.flush()
             full_log_parts.append(f"\n{summary}")
+        
+        # Silently ignore: "init", "system", "topic", etc.
 
     def _display_tool_use(self, tool_name: str, tool_input: dict):
         """Display a tool use event with a readable summary."""

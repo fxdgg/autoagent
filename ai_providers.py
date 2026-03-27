@@ -13,7 +13,7 @@ Each provider knows how to:
 
 import os
 import logging
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -170,17 +170,39 @@ class GeminiCLIProvider(AIProvider):
     Command pattern:
         type prompt.txt | gemini-internal --output-format stream-json
             -p - [--resume latest] --model <model> --yolo
+            [--include-directories <dir1>,<dir2>,...]
     
     Key differences from CodeBuddy:
     - Uses -p (--prompt) for non-interactive mode instead of --print
     - Uses --yolo or -y instead of -y for auto-accept
     - Uses --resume latest for session continuation (not --continue)
     - Prompt is passed via -p with '-' to read from stdin
+    - Supports --include-directories to allow access to directories outside workspace
     """
 
     name = "gemini"
     default_executable = "gemini-internal"
     default_model = "gemini-2.5-pro"
+
+    def __init__(
+        self,
+        executable: str = None,
+        model: str = None,
+        extra_args: Optional[str] = None,
+        include_directories: Optional[List[str]] = None,
+    ):
+        """
+        Initialize Gemini CLI provider.
+        
+        Args:
+            executable: Path to the CLI executable (None = use default)
+            model: AI model to use (None = use provider default)
+            extra_args: Additional CLI arguments to append
+            include_directories: List of additional directories Gemini is
+                allowed to read/write outside the workspace sandbox.
+        """
+        super().__init__(executable=executable, model=model, extra_args=extra_args)
+        self.include_directories = include_directories or []
 
     def build_command(self, continue_session: bool = False) -> str:
         parts = [self.executable]
@@ -192,6 +214,11 @@ class GeminiCLIProvider(AIProvider):
         
         parts.extend(["--model", self.model])
         parts.append("--yolo")
+        
+        # Add --include-directories if specified
+        if self.include_directories:
+            dirs_str = ",".join(self.include_directories)
+            parts.extend(["--include-directories", dirs_str])
         
         if self.extra_args:
             parts.append(self.extra_args)
@@ -359,6 +386,7 @@ def get_provider(
     model: str = None,
     extra_args: str = None,
     test_rules_file: str = None,
+    include_directories: List[str] = None,
 ) -> AIProvider:
     """
     Create an AI provider by name.
@@ -369,6 +397,7 @@ def get_provider(
         model: Override the default model
         extra_args: Additional CLI arguments
         test_rules_file: Path to test rules file (only for "test" provider)
+        include_directories: List of additional directories for Gemini sandbox
         
     Returns:
         AIProvider: Configured provider instance
@@ -397,6 +426,14 @@ def get_provider(
             executable=executable,
             model=model,
             extra_args=extra_args,
+        )
+    
+    if resolved == 'gemini':
+        return GeminiCLIProvider(
+            executable=executable,
+            model=model,
+            extra_args=extra_args,
+            include_directories=include_directories,
         )
     
     return provider_class(
