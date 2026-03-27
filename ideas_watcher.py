@@ -39,9 +39,6 @@ class IdeasWatcher:
     # File to archive processed ideas
     PROCESSED_STATE_FILE = ".ideas_processed.md"
 
-    # Example todos file (relative to this module's directory)
-    EXAMPLE_TODOS_FILE = "todos.example.yaml"
-
     # Temporary file for AI to write generated YAML tasks into
     TEMP_TASKS_FILE = ".ideas_tasks_temp.yaml"
 
@@ -192,12 +189,8 @@ class IdeasWatcher:
     # Maximum number of review rounds before accepting the tasks as-is
     MAX_REVIEW_ROUNDS = 3
 
-    def _get_example_yaml_path(self) -> str:
-        """Return the absolute path to todos.example.yaml (next to this module)."""
-        return os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            self.EXAMPLE_TODOS_FILE,
-        )
+    # Maximum number of schema-validation retries before accepting as-is
+    MAX_VALIDATION_RETRIES = 2
 
     def _get_temp_tasks_path(self) -> str:
         """Return the absolute path to the temporary tasks YAML file.
@@ -241,6 +234,74 @@ class IdeasWatcher:
                 os.remove(temp_path)
         except OSError as e:
             logger.warning(f"Failed to remove temp file {temp_path}: {e}")
+
+    @staticmethod
+    def _validate_task_schema(task: dict, is_subtask: bool = False) -> List[str]:
+        """Validate a single task's schema and return a list of error messages.
+
+        This mirrors the validation logic in ``Orchestrator._validate_task`` so
+        that schema problems are caught *before* tasks are written to todos.yaml.
+        """
+        errors: List[str] = []
+        task_id = task.get('id', '?')
+
+        # Required fields
+        required_fields = ['id', 'name', 'type', 'completion_criteria']
+        for field in required_fields:
+            if field not in task:
+                errors.append(f"Task {task_id} missing required field: '{field}'")
+
+        task_type = task.get('type')
+        if task_type is None:
+            return errors  # cannot validate further without type
+
+        # Validate task type
+        if is_subtask:
+            valid_types = ['simple', 'long_running']
+        else:
+            valid_types = ['simple', 'nested', 'looping']
+        if task_type not in valid_types:
+            errors.append(
+                f"Task {task_id} has invalid type: '{task_type}'. "
+                f"Valid types for {'subtask' if is_subtask else 'top-level'}: {valid_types}"
+            )
+
+        # Validate nested tasks
+        if task_type == 'nested':
+            subtasks = task.get('subtasks', [])
+            if not subtasks:
+                errors.append(f"Nested task {task_id} must have 'subtasks'")
+            else:
+                for st in subtasks:
+                    errors.extend(IdeasWatcher._validate_task_schema(st, is_subtask=True))
+
+        # Validate looping tasks
+        if task_type == 'looping':
+            subtasks = task.get('subtasks', [])
+            if not subtasks:
+                errors.append(f"Looping task {task_id} must have 'subtasks'")
+            else:
+                for st in subtasks:
+                    errors.extend(IdeasWatcher._validate_task_schema(st, is_subtask=True))
+            repeat_count = task.get('repeat_count')
+            if repeat_count is None:
+                errors.append(f"Looping task {task_id} must have 'repeat_count' field")
+            elif not isinstance(repeat_count, int) or repeat_count < 1:
+                errors.append(f"Looping task {task_id}: 'repeat_count' must be a positive integer")
+
+        return errors
+
+    @staticmethod
+    def _validate_tasks_schema(tasks: List[dict]) -> tuple:
+        """Validate the schema of a list of tasks.
+
+        Returns:
+            (valid: bool, errors: List[str])
+        """
+        all_errors: List[str] = []
+        for task in tasks:
+            all_errors.extend(IdeasWatcher._validate_task_schema(task, is_subtask=False))
+        return (len(all_errors) == 0, all_errors)
 
     def process_new_ideas(
         self,
@@ -340,37 +401,72 @@ class IdeasWatcher:
         next_id = max_id + 1
 
         # Resolve paths for the prompt
-        example_yaml_path = self._get_example_yaml_path()
         temp_tasks_path = self._get_temp_tasks_path()
         # Clean up any leftover temp file from a previous run
         self._cleanup_temp_file()
 
-        prompt = f"""You are a task planner. Given the following idea, decompose it into one or more
-concrete, actionable TODO tasks in YAML format.
+        prompt = f"""You are a task planner. Your job is to decompose a given idea into concrete, actionable
+TODO tasks in YAML format.
 
-## Idea Title
-{idea['title']}
+These tasks will be executed by an AI coding agent that can read/modify files, run shell
+commands, and analyze code and outputs. Design your tasks and completion criteria accordingly.
 
-## Idea Content
+## Idea
+
 {idea['content']}
 
-## Reference
+## Task Types
 
-Please read the example configuration file at:
-  {example_yaml_path}
-Use it as a reference for task structure, field names, types, and style conventions.
+There are 4 task types. Choose the most appropriate one for each task:
 
-## Instructions
+1. **simple** — A single-step task the AI agent completes autonomously (code changes, running
+   commands, analysis, etc.). Can be a top-level task or a subtask.
+2. **nested** — A multi-step task containing ordered subtasks. After all subtasks finish, the
+   AI evaluates whether the overall completion criteria are met. Top-level only.
+3. **looping** — An iterative task that repeats all its subtasks for a fixed number of cycles
+   (e.g., profile → optimize → benchmark → commit). No completion evaluation between cycles.
+   Top-level only.
+4. **long_running** — A task that runs in the background via nohup to avoid timeouts (e.g.,
+   model training, large data processing). Subtask only (inside nested or looping).
 
-1. Each task should have: id, name, type, completion_criteria
-2. Task IDs should start from {next_id}
-3. Task types can be: "simple" (for standalone tasks) or "nested" (for complex tasks with subtasks)
-4. For nested tasks, include a "subtasks" list where each subtask has: id, name, type, completion_criteria
-5. Subtask IDs should use dot notation (e.g., {next_id}.1, {next_id}.2)
-6. Subtask types can only be: "simple" or "long_running"
-7. For long_running subtasks, include a "command" field
-8. Write clear, measurable completion_criteria
-9. Include "initial_hint" for tasks where helpful context can guide the AI executor
+**Hierarchy rules:**
+- Top-level tasks can be: simple, nested, or looping.
+- Subtasks (inside nested/looping) can only be: simple or long_running.
+
+**When to use which:**
+- If the idea can be done in one step → use a single **simple** task.
+- If the idea requires multiple ordered steps and the AI should evaluate overall success
+  after all steps → use **nested**.
+- If the idea involves repeating an optimize-test cycle N times → use **looping** with
+  repeat_count.
+- If a subtask runs a long-running process (training, heavy computation) → use **long_running**.
+
+## Task Schema
+
+Common fields (all types):
+- id: integer for top-level tasks (starting from {next_id}), dot notation for subtasks (e.g., {next_id}.1)
+- name: string — concise task name
+- type: "simple" | "nested" | "looping" | "long_running"
+- completion_criteria: string — clear, specific, and measurable
+
+Type-specific fields:
+- simple: initial_hint (optional — helpful context for the AI executor)
+- nested: subtasks (list), max_attempts (optional, default 20)
+- looping: subtasks (list), repeat_count (required, positive integer), max_attempts_per_loop (optional, default 20)
+- long_running: (no extra required fields)
+
+## Constraints
+
+1. Do NOT over-decompose. If the idea is simple, a single "simple" task is perfectly fine.
+   Prefer fewer, well-scoped tasks over many trivial ones.
+2. Do NOT write vague completion_criteria. Each criterion must be objectively verifiable.
+   ✅ Good: "All unit tests pass with 0 failures"
+   ✅ Good: "Response time < 200ms on the /api/users endpoint"
+   ❌ Bad: "Code is optimized"
+   ❌ Bad: "Performance is improved"
+3. Do NOT use "long_running" or "simple" as a top-level task type when the idea clearly
+   requires multiple coordinated steps — use "nested" or "looping" instead.
+4. Do NOT use "nested" or "looping" as subtask types.
 
 ## Output Format
 
@@ -378,31 +474,60 @@ Write ONLY valid YAML (a list of tasks) into the following file:
   {temp_tasks_path}
 
 Do NOT include markdown code fences or any extra text in the file.
-The file content should be a YAML list of tasks, for example:
+The file content must be a YAML list of task objects. Below are examples covering all task types:
+
+### simple (top-level)
 
 - id: {next_id}
-  name: "Task name"
+  name: "Refactor logging module"
   type: simple
   completion_criteria: |
-    1. First criterion
-    2. Second criterion
+    1. All log calls use the new structured format.
+    2. No references to the old logging helper remain.
   initial_hint: |
-    Helpful context for the AI executor.
+    The old helper is in utils/legacy_logger.py.
 
-Or for a nested task:
+### nested (with simple and long_running subtasks)
 
 - id: {next_id}
-  name: "Complex task name"
+  name: "Add user authentication"
   type: nested
   max_attempts: 10
   completion_criteria: |
-    Overall completion criteria.
+    1. Login and registration endpoints return correct status codes.
+    2. All auth-related unit tests pass.
   subtasks:
     - id: {next_id}.1
-      name: "First subtask"
+      name: "Implement auth endpoints"
       type: simple
       completion_criteria: |
-        Subtask criteria.
+        POST /login and POST /register are functional.
+    - id: {next_id}.2
+      name: "Train fraud-detection model"
+      type: long_running
+      completion_criteria: |
+        Model checkpoint saved to checkpoints/ with accuracy > 0.95.
+
+### looping
+
+- id: {next_id}
+  name: "Iterative kernel optimization"
+  type: looping
+  repeat_count: 5
+  max_attempts_per_loop: 10
+  completion_criteria: |
+    Kernel execution time reduced by at least 30%.
+  subtasks:
+    - id: {next_id}.1
+      name: "Profile and optimize"
+      type: simple
+      completion_criteria: |
+        At least one optimization applied and benchmarked.
+    - id: {next_id}.2
+      name: "Run full benchmark suite"
+      type: long_running
+      completion_criteria: |
+        Benchmark results saved to results/bench_latest.json.
 """
 
         try:
@@ -423,38 +548,14 @@ Or for a nested task:
                 tasks = self._extract_yaml_tasks(result)
             self._cleanup_temp_file()
 
-            # Review loop: send tasks to a fresh-context reviewer AI
-            if review_client and tasks:
-                for review_round in range(1, self.MAX_REVIEW_ROUNDS + 1):
-                    review_passed, review_feedback = self._review_tasks(
-                        review_client, idea, tasks, result,
-                        conv_logger=conv_logger,
-                        review_round=review_round,
-                    )
-                    if review_passed:
-                        print(f"   ✅ Review passed (round {review_round})")
-                        break
-                    else:
-                        print(f"   🔄 Review rejected (round {review_round}), requesting revision...")
-                        # Send feedback back to original AI for revision
-                        result, tasks = self._revise_tasks(
-                            client, idea, review_feedback,
-                            conv_logger=conv_logger,
-                            revision_round=review_round,
-                        )
-                        if not tasks:
-                            logger.warning(
-                                f"Revision round {review_round} produced no tasks"
-                            )
-                            break
-                else:
-                    # Exhausted all review rounds — accept last version
-                    print(
-                        f"   ⚠️  Max review rounds ({self.MAX_REVIEW_ROUNDS}) reached, "
-                        f"accepting current tasks"
-                    )
+            # Review + validation loop
+            if tasks:
+                tasks, result = self._review_and_validate_loop(
+                    client, review_client, idea, tasks, result,
+                    conv_logger=conv_logger,
+                )
 
-            # Human review loop: after AI review passes, pause for human approval
+            # Human review loop: after AI review + validation passes, pause for human approval
             if human_review and tasks:
                 tasks = self._human_review_loop(
                     client, review_client, idea, tasks, result,
@@ -471,6 +572,108 @@ Or for a nested task:
             logger.error(f"AI call failed for idea decomposition: {e}")
             raise
 
+    def _review_and_validate_loop(
+        self,
+        client: CodeBuddyClient,
+        review_client: CodeBuddyClient,
+        idea: dict,
+        tasks: List[dict],
+        raw_yaml_response: str,
+        conv_logger: ConversationLogger = None,
+    ) -> tuple:
+        """Run the AI review loop followed by schema validation.
+
+        After the AI reviewer approves (or is skipped), the tasks are
+        validated against the schema.  If validation fails, the errors
+        are fed back into the review loop as feedback so the AI can fix
+        them.  This repeats up to ``MAX_VALIDATION_RETRIES`` times.
+
+        Args:
+            client: Original CodeBuddyClient (with existing context)
+            review_client: Optional CodeBuddyClient for AI review
+            idea: Original idea dict
+            tasks: Current parsed task list
+            raw_yaml_response: Raw response from the last AI call
+            conv_logger: Optional ConversationLogger
+
+        Returns:
+            (tasks, raw_yaml_response) — the final validated task list and
+            the last raw AI response.
+        """
+        result = raw_yaml_response
+
+        for validation_attempt in range(1, self.MAX_VALIDATION_RETRIES + 2):
+            # --- AI review loop ---
+            if review_client and tasks:
+                last_feedback = ""
+                for review_round in range(1, self.MAX_REVIEW_ROUNDS + 1):
+                    review_passed, review_feedback, revised_tasks = self._review_tasks(
+                        review_client, idea, tasks, result,
+                        conv_logger=conv_logger,
+                        review_round=review_round,
+                        last_feedback=last_feedback,
+                    )
+                    if review_passed:
+                        print(f"   ✅ Review passed (round {review_round})")
+                        break
+                    else:
+                        last_feedback = review_feedback
+                        if revised_tasks:
+                            print(f"   🔧 Reviewer directly revised tasks (round {review_round})")
+                            tasks = revised_tasks
+                        else:
+                            print(f"   🔄 Review rejected (round {review_round}), requesting revision...")
+                            result, tasks = self._revise_tasks(
+                                client, idea, review_feedback,
+                                conv_logger=conv_logger,
+                                revision_round=review_round,
+                            )
+                            if not tasks:
+                                logger.warning(f"Revision round {review_round} produced no tasks")
+                                break
+                else:
+                    print(
+                        f"   ⚠️  Max review rounds ({self.MAX_REVIEW_ROUNDS}) reached, "
+                        f"accepting current tasks"
+                    )
+
+            # --- Schema validation ("compile") ---
+            if not tasks:
+                break
+
+            valid, errors = self._validate_tasks_schema(tasks)
+            if valid:
+                print(f"   ✅ Schema validation passed")
+                break
+            else:
+                error_text = '\n'.join(f"  - {e}" for e in errors)
+                print(f"   ❌ Schema validation failed (attempt {validation_attempt}/{self.MAX_VALIDATION_RETRIES + 1}):")
+                for e in errors:
+                    print(f"      • {e}")
+
+                if validation_attempt > self.MAX_VALIDATION_RETRIES:
+                    print(f"   ⚠️  Max validation retries ({self.MAX_VALIDATION_RETRIES}) exceeded, accepting current tasks")
+                    break
+
+                # Feed validation errors back as review feedback
+                validation_feedback = (
+                    f"Schema validation failed with the following errors:\n"
+                    f"{error_text}\n\n"
+                    f"Please fix these issues. Every task must conform to the schema."
+                )
+                print(f"   🔄 Sending validation errors to AI for revision...")
+                result, tasks = self._revise_tasks(
+                    client, idea, validation_feedback,
+                    conv_logger=conv_logger,
+                    revision_round=validation_attempt,
+                )
+                if not tasks:
+                    logger.warning(f"Validation-retry revision produced no tasks")
+                    break
+                # Loop back to AI review + validation
+
+        return tasks, result
+
     def _review_tasks(
         self,
         review_client: CodeBuddyClient,
@@ -479,9 +682,15 @@ Or for a nested task:
         raw_yaml_response: str,
         conv_logger: ConversationLogger = None,
         review_round: int = 1,
+        last_feedback: str = "",
     ) -> tuple:
         """
         Send generated tasks to a fresh-context reviewer AI for quality check.
+        
+        If the reviewer rejects the tasks, it is instructed to directly modify
+        the temp YAML file with corrections. The caller can then read the
+        revised tasks from the temp file, potentially skipping a separate
+        revision round.
         
         Args:
             review_client: CodeBuddyClient with fresh context
@@ -490,25 +699,44 @@ Or for a nested task:
             raw_yaml_response: Raw YAML response from the decomposition AI
             conv_logger: Optional ConversationLogger
             review_round: 1-based review round number
+            last_feedback: Feedback from the previous review round (if any)
             
         Returns:
-            tuple: (passed: bool, feedback: str)
-                   passed=True if review approves, feedback contains reviewer comments
+            tuple: (passed: bool, feedback: str, revised_tasks: Optional[List[dict]])
+                   passed=True if review approves, feedback contains reviewer comments,
+                   revised_tasks contains reviewer's corrected tasks if it rejected and
+                   directly modified the file (None otherwise).
         """
         tasks_yaml = yaml.dump(tasks, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
-        # Resolve example YAML path for reference in the review prompt
-        example_yaml_path = self._get_example_yaml_path()
+        temp_tasks_path = self._get_temp_tasks_path()
+        # Write current tasks to temp file so reviewer can modify it in-place
+        self._cleanup_temp_file()
+        try:
+            with open(temp_tasks_path, 'w', encoding='utf-8') as f:
+                f.write(tasks_yaml)
+        except OSError as e:
+            logger.warning(f"Failed to write temp file for reviewer: {e}")
+
+        last_feedback_section = ""
+        if last_feedback:
+            last_feedback_section = f"""## Last Feedback
+
+The following feedback was provided in the previous review round. Check whether
+the issues have been addressed:
+
+{last_feedback}
+
+"""
 
         review_prompt = f"""You are a task review expert. Review the following TODO task decomposition
 for quality, completeness, and correctness.
 
+These tasks will be executed by an AI coding agent that can read/modify files, run shell
+commands, and analyze code and outputs.
+
 ## Original Idea
 
-### Title
-{idea['title']}
-
-### Content
 {idea['content']}
 
 ## Generated Tasks (YAML)
@@ -516,32 +744,60 @@ for quality, completeness, and correctness.
 ```yaml
 {tasks_yaml}```
 
-## Reference
+{last_feedback_section}## Task Types
 
-Please read the example configuration file at:
-  {example_yaml_path}
-Use it as the authoritative reference for valid task structure, field names,
-types, and style conventions when reviewing the generated tasks.
+There are 4 task types:
+
+1. **simple** — A single-step task. Can be top-level or subtask.
+2. **nested** — A multi-step task with ordered subtasks. Top-level only.
+3. **looping** — An iterative task repeating subtasks for N cycles. Top-level only.
+4. **long_running** — A background task via nohup. Subtask only.
+
+**Hierarchy rules:**
+- Top-level: simple, nested, or looping.
+- Subtasks (inside nested/looping): simple or long_running only.
+
+## Task Schema
+
+Common fields (all types): id, name, type, completion_criteria
+
+Type-specific fields:
+- simple: initial_hint (optional)
+- nested: subtasks (list), max_attempts (optional, default 20)
+- looping: subtasks (list), repeat_count (required), max_attempts_per_loop (optional, default 20)
+- long_running: (no extra required fields)
 
 ## Review Criteria
 
-1. Are the task IDs correct and consistent (including subtask dot notation)?
-2. Are the task types appropriate (simple vs nested, simple vs long_running for subtasks)?
-3. Are the completion_criteria clear, specific, and measurable?
-4. Does the decomposition fully cover the original idea?
-5. Are there any missing or redundant tasks?
-6. Is the YAML structure valid and well-formed?
-7. Does the output conform to the conventions shown in todos.example.yaml?
+1. **Schema correctness**: Does every task have the required fields for its type?
+   (e.g., nested/looping must have subtasks; looping must have repeat_count)
+2. **ID consistency**: Are task IDs sequential integers and subtask IDs use correct
+   dot notation (e.g., 2.1, 2.2)?
+3. **Type appropriateness**: Are task types chosen correctly?
+   - Multi-step ideas should use nested/looping, not a single simple task.
+   - Iterative optimize-test cycles should use looping, not nested.
+   - long_running is only used as a subtask, never top-level.
+   - nested/looping are never used as subtask types.
+4. **Completion criteria quality**: Is every completion_criteria specific, measurable,
+   and objectively verifiable by an AI agent?
+   ✅ Good: "All unit tests pass with 0 failures"
+   ❌ Bad: "Code is optimized" or "Performance is improved"
+5. **Decomposition granularity**: Does the decomposition fully cover the idea without
+   over-decomposing into trivial subtasks or leaving gaps?
+6. **YAML validity**: Is the YAML structure well-formed and parseable?
 
 ## Instructions
 
-If the tasks pass all criteria, respond with EXACTLY:
+If the tasks pass ALL criteria, respond with EXACTLY:
 ✅ completed
 
-If the tasks need improvement, respond with:
-❌ not completed
-
-Followed by specific feedback on what needs to be fixed.
+If the tasks need improvement:
+1. Respond with: ❌ not completed
+2. Briefly explain what needs to be fixed.
+3. Then DIRECTLY modify the YAML file at:
+     {temp_tasks_path}
+   Write the corrected full task list into that file.
+   Do NOT include markdown code fences or any extra text in the file.
 """
 
         try:
@@ -554,12 +810,22 @@ Followed by specific feedback on what needs to be fixed.
                 conv_logger.log_ideas_review_response(review_result)
 
             passed = self._check_review_passed(review_result)
-            return passed, review_result
+
+            revised_tasks = None
+            if not passed:
+                # Try to read reviewer's corrected tasks from temp file
+                revised_tasks = self._read_tasks_from_temp_file()
+                if revised_tasks:
+                    logger.info(f"Reviewer directly revised {len(revised_tasks)} task(s) in temp file")
+            self._cleanup_temp_file()
+
+            return passed, review_result, revised_tasks
 
         except AICallError as e:
             logger.error(f"AI call failed for idea review: {e}")
+            self._cleanup_temp_file()
             # On review failure, accept the tasks to avoid blocking
-            return True, ""
+            return True, "", None
 
     def _revise_tasks(
         self,
@@ -775,35 +1041,12 @@ Do NOT include markdown code fences or any extra text in the file.
                         print(f"   ⚠️  AI revision produced no valid tasks, keeping previous version.")
                         continue
 
-                    # Re-run AI review on the revised tasks
-                    if review_client:
-                        review_round = 0
-                        for review_round in range(1, self.MAX_REVIEW_ROUNDS + 1):
-                            review_passed, review_feedback = self._review_tasks(
-                                review_client, idea, tasks, result,
-                                conv_logger=conv_logger,
-                                review_round=review_round,
-                            )
-                            if review_passed:
-                                print(f"   ✅ AI review passed (round {review_round})")
-                                break
-                            else:
-                                print(f"   🔄 AI review rejected (round {review_round}), requesting revision...")
-                                result, tasks = self._revise_tasks(
-                                    client, idea, review_feedback,
-                                    conv_logger=conv_logger,
-                                    revision_round=review_round,
-                                )
-                                if not tasks:
-                                    logger.warning(
-                                        f"Revision round {review_round} produced no tasks"
-                                    )
-                                    break
-                        else:
-                            print(
-                                f"   ⚠️  Max AI review rounds ({self.MAX_REVIEW_ROUNDS}) reached, "
-                                f"presenting current version for human review"
-                            )
+                    # Re-run AI review + schema validation on the revised tasks
+                    if tasks:
+                        tasks, result = self._review_and_validate_loop(
+                            client, review_client, idea, tasks, result,
+                            conv_logger=conv_logger,
+                        )
 
                     # Loop back to human review with updated tasks
 
