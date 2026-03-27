@@ -223,7 +223,7 @@ def run_orchestrator(
         "--config", todos_yaml,
         "--provider", provider_name,
         "--workspace", project_root,
-        "--verbose",
+        # "--verbose",
     ]
 
     if model:

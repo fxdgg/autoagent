@@ -1,0 +1,189 @@
+# =============================================================================
+# Test Rules 3 - Advanced Edge Case Testing
+# =============================================================================
+# This test file exercises five specific edge cases:
+#
+#   1. Long-running task with >=2 autoagent-exec invocations (subtask 1.2):
+#      - First autoagent-exec fast-fails (command error, no LONG_RUNNING marker)
+#      - Second autoagent-exec succeeds and submits background task
+#      - Callback analyzes result and reports completed
+#
+#   2. Consecutive failures triggering failure analysis (subtask 1.3):
+#      - Subtask 1.3 has max_attempts=2 in todos.yaml
+#      - Both attempts fail with ❌ not completed
+#      - SubtaskExecutor returns success=False (max_attempts exhausted)
+#      - NestedTaskExecutor triggers AI Decision Point 1 (failure analysis)
+#      - AI decides retry_from, subtask is reset and retried successfully
+#
+#   3. Simple task using autoagent-exec with LONG_RUNNING_IN_PROGRESS (subtask 1.4):
+#      - AI decides to use autoagent-exec within a simple subtask
+#      - AI returns ⏳ LONG_RUNNING_IN_PROGRESS (not ✅ completed)
+#      - SimpleTaskExecutor detects this and delegates to poll + callback
+#      - Callback analyzes result and reports completed
+#
+#   4. Long-running task completing directly without autoagent-exec (subtask 1.5):
+#      - Subtask 1.5 is type=long_running in todos.yaml
+#      - AI completes the task directly without using autoagent-exec
+#      - _execute_long_running_subtask detects ✅ completed and returns success
+#
+# NOTE: The main task evaluation returns true directly (no second round)
+#       to keep the test focused on the scenarios above.
+#
+# Expected call sequence (ask() calls in order):
+#   Rule 1:  Subtask 1.1 attempt #1 → ✅ completed
+#   Rule 2:  Subtask 1.2 attempt #1 → autoagent-exec fast-fail + ❌ not completed
+#   Rule 3:  Subtask 1.2 attempt #2 → autoagent-exec + LONG_RUNNING_IN_PROGRESS
+#   Rule 4:  Subtask 1.2 callback   → ✅ completed
+#   Rule 5:  Subtask 1.3 attempt #1 → ❌ not completed (1st failure)
+#   Rule 6:  Subtask 1.3 attempt #2 → ❌ not completed (2nd failure, exhausts max_attempts=2)
+#   Rule 7:  Failure analysis (DP1) → JSON: retry_from=1.3, suggested_fix
+#   Rule 8:  Subtask 1.3 attempt #1 (after reset) → ✅ completed
+#   Rule 9:  Subtask 1.4 attempt #1 → autoagent-exec + LONG_RUNNING_IN_PROGRESS (simple task!)
+#   Rule 10: Subtask 1.4 callback   → ✅ completed
+#   Rule 11: Subtask 1.5 attempt #1 → ✅ completed directly (long_running without autoagent-exec)
+#   Rule 12: Main task evaluation   → main_task_completed: true
+# =============================================================================
+
+# --- Rule 1: Subtask 1.1 attempt #1 - COMPLETED ---
+# Tests: Straightforward simple task completion
+I have built the project and recorded the baseline performance.
+
+  cmake -B build -DCMAKE_BUILD_TYPE=Release -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda
+  cmake --build build --config Release
+
+The baseline timing has been recorded to baseline_timing.txt:
+  Elapsed: 150.00 ms
+
+✅ completed
+---RULE---
+# --- Rule 2: Subtask 1.2 attempt #1 - LONG_RUNNING fast-fail ---
+# Tests: autoagent-exec command fails quickly (within 10s), AI sees the error
+# The command has a typo ("ncuu" instead of "ncu"), causing immediate failure.
+# No LONG_RUNNING_IN_PROGRESS marker — the AI reports not completed.
+I tried to run ncu profiling using autoagent-exec:
+
+autoagent-exec --cmd "python -c \"import sys; sys.exit(1)\"" --task-id 1.2
+
+The command failed immediately with exit code 1.
+It seems the profiling tool path is incorrect.
+
+❌ not completed: autoagent-exec command failed - profiling tool not found
+---RULE---
+# --- Rule 3: Subtask 1.2 attempt #2 - LONG_RUNNING submission (2nd autoagent-exec) ---
+# Tests: Second autoagent-exec invocation in the same long_running subtask
+# This time the command is correct and the task is submitted to background.
+I fixed the profiling command and re-submitted:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(5)\"" --task-id 1.2
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 4: Subtask 1.2 callback - COMPLETED ---
+# Tests: Successful callback after the second autoagent-exec
+I have analyzed the ncu profiling results from the output log.
+
+Key findings:
+- fused_dct_axis_kernel takes 60% of total time
+- Memory bandwidth utilization is at 45% (room for improvement)
+- SM occupancy is 50% due to high register usage
+- Significant stalls due to memory dependency (cosf/sinf calls)
+
+Written detailed analysis to ncu_analysis.txt.
+
+✅ completed
+---RULE---
+# --- Rule 5: Subtask 1.3 attempt #1 - NOT COMPLETED (1st failure) ---
+# Tests: First failure of subtask 1.3 (max_attempts=2)
+I attempted to optimize the kernel but the changes caused compilation errors.
+
+Error in cufftdx_dct3d.cuh:
+  error: identifier "__sincosf" is undefined in host code
+  error: expected a ";"
+
+The optimization approach needs to be revised.
+
+❌ not completed: Compilation errors after optimization attempt
+---RULE---
+# --- Rule 6: Subtask 1.3 attempt #2 - NOT COMPLETED (2nd failure, exhausts max_attempts) ---
+# Tests: Second failure exhausts max_attempts=2, triggering failure analysis
+# After this, SubtaskExecutor returns success=False
+I fixed the compilation error but the optimized kernel produces incorrect results.
+
+Build succeeded, but quick validation shows:
+- Score: 75/100 (correctness broken!)
+- Several DCT coefficients are NaN due to division by zero in twiddle factor computation
+
+The optimization strategy is fundamentally flawed.
+
+❌ not completed: Correctness broken - Score 75/100, NaN values in output
+---RULE---
+# --- Rule 7: Failure analysis (AI Decision Point 1) ---
+# Tests: AI analyzes consecutive failures and decides retry strategy
+# This is triggered because subtask 1.3 exhausted max_attempts=2
+{
+    "analysis": "Subtask 1.3 failed twice. First attempt had compilation errors due to using __sincosf in host code. Second attempt fixed compilation but introduced NaN values from division by zero in twiddle factor computation. The optimization approach of precomputing twiddle factors needs a different implementation that avoids the zero-division edge case.",
+    "retry_from": "1.3",
+    "reasoning": "The profiling data from subtask 1.2 is still valid. Only the optimization implementation in 1.3 needs to be redone with a safer approach.",
+    "suggested_fix": "Instead of precomputing twiddle factors with division, use __sincosf() intrinsic directly in the kernel with proper guard for edge cases (n=0). Also ensure all device-only intrinsics are guarded with __CUDA_ARCH__ preprocessor checks.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 8: Subtask 1.3 attempt #1 (after reset) - COMPLETED ---
+# Tests: Successful retry after failure analysis provided suggested_fix
+I have re-optimized the CUDA kernel using the suggested approach:
+1. Used __sincosf() intrinsic with proper __CUDA_ARCH__ guards
+2. Added edge-case handling for n=0 in twiddle factor computation
+3. Improved memory coalescing for Y/Z axis operations
+4. Used shared memory for intermediate results
+
+The code compiles without errors and quick validation shows Score: 100/100.
+
+✅ completed
+---RULE---
+# --- Rule 9: Subtask 1.4 attempt #1 - SIMPLE TASK WITH LONG_RUNNING_IN_PROGRESS ---
+# Tests: AI uses autoagent-exec within a simple task and returns LONG_RUNNING_IN_PROGRESS
+# SimpleTaskExecutor detects this marker and delegates to poll + callback logic.
+# This verifies that _handle_long_running_in_simple_task works correctly.
+I'll run the full benchmark using autoagent-exec to avoid timeout issues:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(5)\"" --task-id 1.4
+
+The task has been submitted to background.
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 10: Subtask 1.4 callback - COMPLETED ---
+# Tests: Callback analysis after LONG_RUNNING_IN_PROGRESS in a simple task
+# This is the _ai_analyze_long_running_result call triggered by SimpleTaskExecutor
+The benchmark completed successfully. Results from the output log:
+- Score: 100/100 (correctness preserved!)
+- Elapsed: 115.00 ms (was 150.00 ms)
+- Speedup: 23.3%
+- Target met: YES (need 20%, got 23.3%)
+
+Written results to optimization_result.txt.
+
+✅ completed
+---RULE---
+# --- Rule 11: Subtask 1.5 attempt #1 - LONG_RUNNING WITHOUT AUTOAGENT-EXEC ---
+# Tests: AI completes a long_running task directly without using autoagent-exec
+# Subtask 1.5 is type=long_running in todos.yaml, but the AI decides the task
+# is simple enough to complete directly. The _execute_long_running_subtask method
+# detects ✅ completed (no LONG_RUNNING_IN_PROGRESS) and returns success.
+The optimization achieved 23.3% speedup with correct results.
+I can commit this directly without needing a long-running process.
+
+git add -A
+git commit -m "perf: optimize cuFFTDx DCT3D kernel - 23.3% speedup"
+
+Updated baseline_timing.txt with new timing (115.00 ms).
+
+✅ completed
+---RULE---
+# --- Rule 12: Main task evaluation - COMPLETED ---
+# Tests: Main task evaluation returns true directly (simplified flow)
+{
+    "main_task_completed": true,
+    "analysis": "The optimization achieved 23.3% speedup (150ms -> 115ms) with correctness preserved (Score: 100/100). The 20% target has been exceeded. The optimization used __sincosf() intrinsics with proper edge-case handling and improved memory coalescing.",
+    "confidence": "high"
+}

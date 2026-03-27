@@ -1,0 +1,185 @@
+# =============================================================================
+# Test Rules 4 - Ideas Decomposition Testing
+# =============================================================================
+# This test file verifies that ideas.md content is correctly decomposed into
+# TODO tasks and appended to todos.yaml, and that the full workflow
+# (ideas processing + task execution) works end-to-end.
+#
+# Prerequisites:
+#   - Run with: --ideas ideas.md
+#   - ideas.md contains 2 ideas separated by ---
+#   - todos.yaml initially has task 1 (nested, 5 subtasks)
+#
+# Flow:
+#   1. Orchestrator detects ideas.md, calls check_and_process_ideas()
+#   2. IdeasWatcher parses 2 ideas from ideas.md
+#   3. For each idea, AI is called to decompose it into tasks (Rules 1-2)
+#   4. New tasks are appended to todos.yaml
+#   5. Orchestrator reloads todos and executes all tasks (original + new)
+#
+# Expected call sequence (ask() calls in order):
+#   Rule 1:  Idea 1 decomposition → YAML for task 2 (simple)
+#   Rule 2:  Idea 2 decomposition → YAML for task 3 (nested with 2 subtasks)
+#   Rule 3:  Subtask 1.1 attempt #1 → ✅ completed
+#   Rule 4:  Subtask 1.2 attempt #1 → autoagent-exec + LONG_RUNNING_IN_PROGRESS
+#   Rule 5:  Subtask 1.2 callback   → ✅ completed
+#   Rule 6:  Subtask 1.3 attempt #1 → ✅ completed
+#   Rule 7:  Subtask 1.4 attempt #1 → ✅ completed
+#   Rule 8:  Subtask 1.5 attempt #1 → ✅ completed
+#   Rule 9:  Main task 1 evaluation  → main_task_completed: true
+#   Rule 10: Task 2 attempt #1       → ✅ completed
+#   Rule 11: Subtask 3.1 attempt #1  → ✅ completed
+#   Rule 12: Subtask 3.2 attempt #1  → autoagent-exec + LONG_RUNNING_IN_PROGRESS
+#   Rule 13: Subtask 3.2 callback    → ✅ completed
+#   Rule 14: Main task 3 evaluation   → main_task_completed: true
+# =============================================================================
+
+# --- Rule 1: Idea 1 decomposition ---
+# Tests: AI decomposes the first idea (Use __sincosf intrinsic) into a simple task
+# IdeasWatcher calls client.ask() with the idea content and expects YAML back
+- id: 2
+  name: "Replace cosf/sinf with __sincosf intrinsic"
+  type: simple
+  completion_criteria: |
+    Replace all separate cosf() and sinf() calls in cufftdx_dct3d.cuh
+    with the __sincosf() intrinsic. Verify the code compiles and produces
+    correct results (Score: 100/100).
+  initial_hint: |
+    Look at the PostProcess functions in both DCT and IDCT kernels
+    in cufftdx_dct3d.cuh.
+---RULE---
+# --- Rule 2: Idea 2 decomposition ---
+# Tests: AI decomposes the second idea (shared memory transpose) into a nested task
+- id: 3
+  name: "Implement shared memory transpose for non-X axis operations"
+  type: nested
+  max_attempts: 10
+  completion_criteria: |
+    Implement shared memory transpose buffer for AXIS=1 and AXIS=2 operations.
+    Verify correctness (Score: 100/100) and measure performance improvement.
+  subtasks:
+    - id: 3.1
+      name: "Implement shared memory transpose buffer"
+      type: simple
+      completion_criteria: |
+        Add shared memory transpose logic for Y and Z axis passes.
+        Code must compile without errors.
+    - id: 3.2
+      name: "Benchmark and verify correctness"
+      type: long_running
+      completion_criteria: |
+        Run the full benchmark suite. Score must be 100/100.
+        Record performance numbers.
+---RULE---
+# --- Rule 3: Subtask 1.1 attempt #1 - COMPLETED ---
+# Tests: Original task 1 subtask execution after ideas processing
+I have built the project and recorded the baseline performance.
+
+  cmake -B build -DCMAKE_BUILD_TYPE=Release -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda
+  cmake --build build --config Release
+
+The baseline timing has been recorded to baseline_timing.txt:
+  Elapsed: 150.00 ms
+
+✅ completed
+---RULE---
+# --- Rule 4: Subtask 1.2 attempt #1 - LONG_RUNNING submission ---
+I'll use autoagent-exec to run the ncu profiling command:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(5)\"" --task-id 1.2
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 5: Subtask 1.2 callback - COMPLETED ---
+I have analyzed the ncu profiling results.
+
+Key findings:
+- fused_dct_axis_kernel takes 60% of total time
+- Memory bandwidth utilization is at 45%
+- SM occupancy is 50% due to high register usage
+
+Written analysis to ncu_analysis.txt.
+
+✅ completed
+---RULE---
+# --- Rule 6: Subtask 1.3 attempt #1 - COMPLETED ---
+I have optimized the CUDA kernel:
+1. Replaced cosf()/sinf() with __sincosf() intrinsic
+2. Improved memory coalescing for Y/Z axis operations
+
+The code compiles without errors.
+
+✅ completed
+---RULE---
+# --- Rule 7: Subtask 1.4 attempt #1 - COMPLETED ---
+Build and benchmark results:
+- Score: 100/100 (correctness preserved)
+- Elapsed: 115.00 ms (was 150.00 ms)
+- Speedup: 23.3%
+- Target met: YES
+
+Written results to optimization_result.txt.
+
+✅ completed
+---RULE---
+# --- Rule 8: Subtask 1.5 attempt #1 - COMPLETED ---
+The optimization achieved 23.3% speedup with correct results.
+Committed: git commit -m "perf: optimize cuFFTDx DCT3D kernel - 23.3% speedup"
+Updated baseline_timing.txt with new timing (115.00 ms).
+
+✅ completed
+---RULE---
+# --- Rule 9: Main task 1 evaluation - COMPLETED ---
+{
+    "main_task_completed": true,
+    "analysis": "The optimization achieved 23.3% speedup (150ms -> 115ms) with correctness preserved (Score: 100/100). The 20% target has been exceeded.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 10: Task 2 (from idea 1) attempt #1 - COMPLETED ---
+# Tests: Execution of a task that was dynamically added from ideas.md
+I have replaced all separate cosf() and sinf() calls with __sincosf()
+in cufftdx_dct3d.cuh:
+
+1. Found 4 pairs of cosf/sinf calls in PostProcess functions
+2. Replaced each pair with a single __sincosf() call
+3. Added proper __CUDA_ARCH__ guards for device-only intrinsics
+4. Verified compilation: no errors
+5. Quick validation: Score 100/100
+
+✅ completed
+---RULE---
+# --- Rule 11: Subtask 3.1 (from idea 2) attempt #1 - COMPLETED ---
+# Tests: Execution of a nested task subtask that was dynamically added
+I have implemented the shared memory transpose buffer:
+
+1. Added __shared__ float tile[TILE_SIZE][TILE_SIZE+1] for bank conflict avoidance
+2. For AXIS=1: load coalesced → transpose in smem → FFT → transpose back → store coalesced
+3. For AXIS=2: similar pattern with different indexing
+4. Code compiles without errors
+
+✅ completed
+---RULE---
+# --- Rule 12: Subtask 3.2 (from idea 2) attempt #1 - LONG_RUNNING ---
+# Tests: Long-running subtask in a dynamically added nested task
+I'll run the full benchmark suite using autoagent-exec:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(5)\"" --task-id 3.2
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 13: Subtask 3.2 callback - COMPLETED ---
+The benchmark completed successfully:
+- Score: 100/100 (correctness preserved!)
+- Y-axis speedup: 35% (better coalescing)
+- Z-axis speedup: 28% (better coalescing)
+- Overall speedup: 15% additional on top of previous optimizations
+
+✅ completed
+---RULE---
+# --- Rule 14: Main task 3 evaluation - COMPLETED ---
+{
+    "main_task_completed": true,
+    "analysis": "Shared memory transpose successfully implemented for AXIS=1 and AXIS=2. Correctness preserved (Score: 100/100). Y-axis improved by 35%, Z-axis by 28%.",
+    "confidence": "high"
+}
