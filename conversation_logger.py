@@ -319,6 +319,68 @@ class ConversationLogger:
         except Exception as e:
             logger.error(f"Failed to write index file {filepath}: {e}")
 
+    def log_ideas_prompt(
+        self,
+        idea_title: str,
+        idea_index: int,
+        prompt: str,
+    ):
+        """
+        Write the prompt section for an ideas decomposition call.
+
+        All ideas decomposition logs are written to a single
+        ``conversations/ideas.md`` file.
+
+        Args:
+            idea_title: Title of the idea being decomposed
+            idea_index: 1-based index of the idea
+            prompt: The prompt sent to AI
+        """
+        filepath = os.path.join(self.session_dir, "ideas.md")
+
+        content_parts = []
+
+        is_new_file = not os.path.exists(filepath)
+        if is_new_file:
+            content_parts.append("# Ideas Decomposition Log\n\n")
+
+        content_parts.append(f"## Idea #{idea_index}: {idea_title}\n\n")
+        content_parts.append(f"### Prompt\n\n")
+        content_parts.append(f"```\n{prompt}\n```\n\n")
+
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write("".join(content_parts))
+            logger.debug(f"Logged ideas prompt to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to write ideas prompt log to {filepath}: {e}")
+
+    def log_ideas_response(
+        self,
+        response: str,
+    ):
+        """
+        Append the response section for an ideas decomposition call.
+
+        Must be called after ``log_ideas_prompt`` for the same idea.
+
+        Args:
+            response: The AI response (YAML task definitions)
+        """
+        filepath = os.path.join(self.session_dir, "ideas.md")
+
+        content_parts = []
+        content_parts.append(f"### Response\n\n")
+        content_parts.append(f"```yaml\n{response}\n```\n\n")
+        content_parts.append(f"---\n\n")
+
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write("".join(content_parts))
+            logger.debug(f"Logged ideas response to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to write ideas response log to {filepath}: {e}")
+
     def finalize(self):
         """
         Finalize all logs. Rebuild index files for nested tasks.

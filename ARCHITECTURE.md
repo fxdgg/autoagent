@@ -1128,6 +1128,7 @@ autoagent/
 │       │   ├── lr_<task_id>_signal.json   # long_running 信号文件（自动生成）
 │       │   └── lr_<task_id>_output.log    # long_running 命令输出日志（自动生成）
 │       └── conversations/             # 对话日志目录
+│           ├── ideas.md               # Ideas 拆解日志（prompt + response）
 │           ├── task_1.md              # 简单任务的对话日志
 │           ├── task_2.md              # 嵌套任务的索引文件
 │           └── subtask_2/             # 嵌套任务的子任务目录
@@ -1548,6 +1549,9 @@ class ConversationLogger:
     def log_nested_response(self, task_id, task_name, response)
     # Convenience wrapper (calls log_nested_prompt + log_nested_response)
     def log_nested_task_ai_call(self, task_id, task_name, call_type, prompt, response, round_num, metadata=None)
+    # Ideas decomposition logging (written to conversations/ideas.md)
+    def log_ideas_prompt(self, idea_title, idea_index, prompt)
+    def log_ideas_response(self, response)
     def register_nested_task(self, task_id, task_name, subtask_ids)
     def build_index_file(self, task_id)
     def finalize(self)
@@ -1564,6 +1568,7 @@ class ConversationLogger:
     ├── todos_state.yaml               # 任务状态
     ├── .ideas_processed.yaml          # Ideas 处理记录
     └── conversations/                 # 对话日志（固定目录名）
+        ├── ideas.md                    # Ideas 拆解日志（prompt + AI 返回的 YAML）
         ├── task_1.md                   # 简单任务：完整对话记录
         ├── task_2.md                   # 嵌套任务：索引文件（含子任务链接）
         └── subtask_2/                  # 嵌套任务的子任务目录
@@ -1598,6 +1603,28 @@ AI 的完整响应内容...
 ...
 ```
 
+Ideas 拆解日志（`ideas.md`）格式：
+
+```markdown
+# Ideas Decomposition Log
+
+## Idea #1: 想法标题
+
+### Prompt
+
+```
+AI 分解 prompt...
+```
+
+### Response
+
+```yaml
+AI 返回的 YAML 任务定义...
+```
+
+---
+```
+
 ### 日志类型
 
 | 日志类型 | 文件位置 | 触发场景 |
@@ -1605,6 +1632,7 @@ AI 的完整响应内容...
 | 任务对话 | `task_<id>.md` | 简单任务的每次 attempt |
 | 子任务对话 | `subtask_<parent_id>/task_<id>.md` | 子任务的每次 attempt |
 | AI 决策 | `subtask_<parent_id>/_decisions.md` | 失败分析、主任务评估 |
+| Ideas 拆解 | `ideas.md` | Ideas 分解为 TODO 时的 AI 调用 |
 | 索引文件 | `task_<id>.md` | 嵌套任务的导航索引 |
 
 ### 使用方式
@@ -1649,7 +1677,7 @@ class IdeasWatcher:
     def __init__(self, ideas_file, todos_file, processed_state_file)
     def has_new_ideas(self) -> bool
     def parse_ideas(self) -> List[dict]
-    def process_new_ideas(self, client: CodeBuddyClient) -> int
+    def process_new_ideas(self, client: CodeBuddyClient, conv_logger: ConversationLogger = None) -> int
     def mark_all_processed(self)
     def reset(self)
 ```
@@ -1701,7 +1729,9 @@ processed_hashes:
 4. 对每个新 idea：
    ├─ 加载现有 todos.yaml 确定下一个可用 task ID
    ├─ 构造 prompt 发送给 AI
+   ├─ 记录 prompt 到 conversations/ideas.md（如果提供了 conv_logger）
    ├─ AI 返回 YAML 格式的任务定义
+   ├─ 记录 response 到 conversations/ideas.md（如果提供了 conv_logger）
    ├─ 解析 AI 响应（支持纯 YAML、代码块包裹、混合文本提取）
    ├─ 追加新任务到 todos.yaml
    └─ 标记该 idea 为已处理

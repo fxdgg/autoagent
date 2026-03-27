@@ -674,6 +674,40 @@ def log_nested_task_ai_call(
 
 一次性记录嵌套任务的 AI 决策调用（内部调用 `log_nested_prompt` + `log_nested_response`）。
 
+#### log_ideas_prompt（Ideas 拆解日志）
+
+```python
+def log_ideas_prompt(
+    self,
+    idea_title: str,
+    idea_index: int,
+    prompt: str,
+)
+```
+
+在 AI 调用**之前**将 ideas 拆解的 prompt 写入 `conversations/ideas.md`。所有 ideas 拆解日志写入同一个文件。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `idea_title` | str | 想法标题 |
+| `idea_index` | int | 1-based 想法序号 |
+| `prompt` | str | 发送给 AI 的拆解提示词 |
+
+#### log_ideas_response（Ideas 拆解日志）
+
+```python
+def log_ideas_response(
+    self,
+    response: str,
+)
+```
+
+在 AI 返回**之后**将 response 追加到 `conversations/ideas.md`。必须在 `log_ideas_prompt()` 之后调用。Response 以 YAML 代码块格式记录。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `response` | str | AI 返回的 YAML 任务定义 |
+
 #### register_nested_task
 
 ```python
@@ -747,10 +781,15 @@ def parse_ideas(self) -> List[dict]
 #### process_new_ideas
 
 ```python
-def process_new_ideas(self, client: CodeBuddyClient) -> int
+def process_new_ideas(self, client: CodeBuddyClient, conv_logger: ConversationLogger = None) -> int
 ```
 
 处理所有新 ideas：解析 → 调用 AI 分解 → 追加到 todos.yaml。返回处理的 idea 数量。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `client` | CodeBuddyClient | - | AI 客户端实例 |
+| `conv_logger` | ConversationLogger | None | 可选的对话日志记录器，提供时会将 prompt/response 记录到 `conversations/ideas.md` |
 
 #### mark_all_processed / reset
 
@@ -1069,8 +1108,8 @@ orchestrator.run_with_idle()  # 不会退出，直到 Ctrl+C
 | **SubtaskExecutor** | 子任务分发执行（接收 session_dir） |
 | **autoagent_exec.py** | long_running 任务启动器（10s 快速失败 + 信号文件） |
 | **StateManager** | 任务状态持久化（todos_state.yaml） |
-| **ConversationLogger** | 对话日志记录、索引生成 |
-| **IdeasWatcher** | ideas.md 监控、AI 分解、任务追加 |
+| **ConversationLogger** | 对话日志记录、索引生成、Ideas 拆解日志 |
+| **IdeasWatcher** | ideas.md 监控、AI 分解、任务追加（支持日志记录） |
 | **setup_logging()** | 日志配置（控制台 + orchestrator.log） |
 
 如有其他问题，请参考：

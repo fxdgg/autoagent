@@ -15,6 +15,7 @@ import logging
 from typing import Optional, List
 
 from codebuddy_client import AIClient, CodeBuddyClient, AICallError
+from conversation_logger import ConversationLogger
 
 logger = logging.getLogger(__name__)
 
@@ -161,12 +162,17 @@ class IdeasWatcher:
 
         return ideas
 
-    def process_new_ideas(self, client: CodeBuddyClient) -> int:
+    def process_new_ideas(
+        self,
+        client: CodeBuddyClient,
+        conv_logger: ConversationLogger = None,
+    ) -> int:
         """
         Process all new ideas: parse, convert to TODOs via AI, and append to todos.yaml.
         
         Args:
             client: CodeBuddyClient instance to call AI for task decomposition
+            conv_logger: Optional ConversationLogger to record prompts/responses
             
         Returns:
             int: Number of new ideas processed
@@ -181,7 +187,11 @@ class IdeasWatcher:
         for idea in ideas:
             print(f"\n   💡 Processing idea: {idea['title']}")
             try:
-                new_tasks = self._decompose_idea_to_tasks(client, idea)
+                new_tasks = self._decompose_idea_to_tasks(
+                    client, idea,
+                    conv_logger=conv_logger,
+                    idea_index=processed_count + 1,
+                )
                 if new_tasks:
                     self._append_tasks_to_todos(new_tasks)
                     print(f"   ✅ Added {len(new_tasks)} task(s) from idea: {idea['title']}")
@@ -199,13 +209,21 @@ class IdeasWatcher:
 
         return processed_count
 
-    def _decompose_idea_to_tasks(self, client: CodeBuddyClient, idea: dict) -> List[dict]:
+    def _decompose_idea_to_tasks(
+        self,
+        client: CodeBuddyClient,
+        idea: dict,
+        conv_logger: ConversationLogger = None,
+        idea_index: int = 1,
+    ) -> List[dict]:
         """
         Call AI to decompose an idea into structured TODO tasks.
         
         Args:
             client: CodeBuddyClient instance
             idea: Idea dict with 'title', 'content', 'body' fields
+            conv_logger: Optional ConversationLogger to record prompts/responses
+            idea_index: 1-based index of the idea (for logging)
             
         Returns:
             List[dict]: List of task configurations compatible with todos.yaml format
@@ -271,7 +289,15 @@ Or for a nested task:
 """
 
         try:
+            # Log prompt before AI call (crash-safe)
+            if conv_logger:
+                conv_logger.log_ideas_prompt(idea['title'], idea_index, prompt)
+
             result = client.ask(prompt, continue_session=True)
+
+            # Log response after AI call
+            if conv_logger:
+                conv_logger.log_ideas_response(result)
 
             # Parse the YAML from the AI response
             tasks = self._extract_yaml_tasks(result)

@@ -574,7 +574,7 @@ class TodoOrchestrator:
                 context_id="ideas_processor",
             )
         
-        count = self.ideas_watcher.process_new_ideas(client)
+        count = self.ideas_watcher.process_new_ideas(client, conv_logger=self.conv_logger)
         
         if count > 0:
             print(f"\n   📝 Processed {count} new idea(s), reloading task list...")
