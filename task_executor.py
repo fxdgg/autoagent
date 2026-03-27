@@ -13,7 +13,7 @@ import json
 import time
 import subprocess
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 
 from codebuddy_client import AIClient, CodeBuddyClient, AICallError
 
@@ -82,6 +82,9 @@ class SimpleTaskExecutor:
             
             print(f"\n   Attempt #{attempts}")
             
+            # Re-fetch state each attempt so history from previous attempts is visible
+            current_state = state_manager.get_task_state(task_id)
+            
             # Build prompt
             prompt = self._build_prompt(task, attempts, current_state, parent_context=parent_context)
             
@@ -112,9 +115,10 @@ class SimpleTaskExecutor:
                 
                 # Check if AI reports completion
                 # Extract a meaningful summary from the AI response
-                summary = self._extract_summary(result)
+                completion_status = self._check_completion(result)
                 
-                if self._check_completion(result):
+                if completion_status is True:
+                    summary = self._extract_summary(result)
                     print(f"   ✅ Task {task_id} completed!")
                     state_manager.mark_task_status(
                         task_id, "completed",
@@ -131,7 +135,18 @@ class SimpleTaskExecutor:
                     })
                     return True
                 else:
-                    print(f"   ⏳ Not completed yet, AI will try to improve...")
+                    if completion_status is None:
+                        # No marker found at all — give AI a clear hint
+                        summary = (
+                            f"Cannot find {self._SIMPLE_TASK_MARKERS} "
+                            f"in previous response. "
+                            f"Please include the required status marker."
+                        )
+                        print(f"   ⚠️ No completion marker found in response for task {task_id}")
+                    else:
+                        # Explicitly marked as not completed
+                        summary = self._extract_summary(result)
+                        print(f"   ⏳ Not completed yet, AI will try to improve...")
                     state_manager.add_task_history(task_id, {
                         "attempt": attempts,
                         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -271,7 +286,7 @@ class SimpleTaskExecutor:
         # Fallback: just take the last 300 chars
         return ai_response.strip()[-300:]
 
-    def _check_completion(self, response: str) -> bool:
+    def _check_completion(self, response: str) -> Optional[bool]:
         """
         Check if the AI reports the task as completed.
         
@@ -284,7 +299,9 @@ class SimpleTaskExecutor:
             response: AI response text
             
         Returns:
-            bool: True if AI indicates completion
+            True  - AI explicitly indicates completion
+            False - AI explicitly indicates not completed
+            None  - No completion/not-completion marker found in response
         """
         response_lower = response.lower()
         
@@ -342,8 +359,12 @@ class SimpleTaskExecutor:
                 if not has_negation:
                     return True
         
-        # Default: not completed
-        return False
+        # No marker found at all
+        return None
+
+    # Marker names used in "Cannot find ... in previous response" messages
+    _SIMPLE_TASK_MARKERS = "'✅ completed' or '❌ not completed'"
+    _LONG_RUNNING_MARKERS = "'✅ completed', '❌ not completed', or '⏳ LONG_RUNNING_IN_PROGRESS'"
 
 
 class NestedTaskExecutor:
@@ -1236,7 +1257,10 @@ class SubtaskExecutor:
             )
             
             try:
-                continue_session = (attempt > 1)
+                # Long-running subtasks always run inside a parent task's context,
+                # so always continue the session (like other subtasks).
+                # Only the very first call of a main task should start a new session.
+                continue_session = True
                 
                 # Write prompt to log BEFORE calling AI (crash safety)
                 if conv_logger:
@@ -1269,14 +1293,34 @@ class SubtaskExecutor:
                     monitor_status = self._poll_signal_file(subtask_id, signal_file)
                     
                     # Restart AI to analyze the result
-                    return self._ai_analyze_long_running_result(
+                    analyze_result = self._ai_analyze_long_running_result(
                         subtask, client, state_manager,
                         monitor_status, output_log,
                         conv_logger=conv_logger, parent_task_id=parent_task_id,
                     )
+                    
+                    if analyze_result.success:
+                        return analyze_result
+                    
+                    # Analysis says not completed — retry within long-running loop
+                    print(f"      ⏳ Long-running callback analysis failed, retrying...")
+                    state_manager.add_task_history(subtask_id, {
+                        "attempt": attempt,
+                        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "result": "not_completed",
+                        "summary": analyze_result.output or "Long-running task did not meet completion criteria",
+                    })
+                    # Reset status back to in_progress for retry (undo the "failed" set by _ai_analyze)
+                    state_manager.mark_task_status(
+                        subtask_id, "in_progress",
+                        attempts=attempt,
+                        last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                    continue
                 
                 # Check for normal completion (AI might have handled it directly)
-                if self.simple_executor._check_completion(result):
+                completion_status = self.simple_executor._check_completion(result)
+                if completion_status is True:
                     summary = SimpleTaskExecutor._extract_summary(result)
                     print(f"      ✅ Long-running task {subtask_id} completed directly!")
                     state_manager.mark_task_status(
@@ -1288,12 +1332,21 @@ class SubtaskExecutor:
                     return SubtaskResult(success=True, output=summary)
                 
                 # AI didn't complete and didn't submit long-running — maybe fast-fail retry
-                print(f"      ⏳ Not completed yet, retrying...")
+                if completion_status is None:
+                    summary = (
+                        f"Cannot find {SimpleTaskExecutor._LONG_RUNNING_MARKERS} "
+                        f"in previous response. "
+                        f"Please include the required status marker."
+                    )
+                    print(f"      ⚠️ No completion/long-running marker found in response for task {subtask_id}")
+                else:
+                    summary = SimpleTaskExecutor._extract_summary(result)
+                    print(f"      ⏳ Not completed yet, retrying...")
                 state_manager.add_task_history(subtask_id, {
                     "attempt": attempt,
                     "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "result": "not_completed",
-                    "summary": SimpleTaskExecutor._extract_summary(result),
+                    "summary": summary,
                 })
                 
             except AICallError as e:
@@ -1585,7 +1638,8 @@ exactly as shown above (with the emoji prefix).
                 )
             
             # Reuse the same robust check logic from SimpleTaskExecutor
-            is_completed = self.simple_executor._check_completion(result)
+            completion_status = self.simple_executor._check_completion(result)
+            is_completed = completion_status is True
             
             # Read log content for SubtaskResult
             log_content = ""
@@ -1597,9 +1651,8 @@ exactly as shown above (with the emoji prefix).
                 except Exception:
                     log_content = "(failed to read log file)"
             
-            summary = SimpleTaskExecutor._extract_summary(result)
-            
             if is_completed:
+                summary = SimpleTaskExecutor._extract_summary(result)
                 state_manager.mark_task_status(
                     subtask_id, "completed",
                     last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1607,13 +1660,22 @@ exactly as shown above (with the emoji prefix).
                 )
                 print(f"      ✅ Long-running task {subtask_id} completed!")
             else:
+                if completion_status is None:
+                    summary = (
+                        f"Cannot find {SimpleTaskExecutor._SIMPLE_TASK_MARKERS} "
+                        f"in previous response. "
+                        f"Please include the required status marker."
+                    )
+                    print(f"      ⚠️ No completion marker found in response for task {subtask_id}")
+                else:
+                    summary = SimpleTaskExecutor._extract_summary(result)
+                    print(f"      ❌ Long-running task {subtask_id} did not meet criteria")
                 state_manager.mark_task_status(
                     subtask_id, "failed",
                     error_type="validation_failed",
                     last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
                     ai_reasoning=summary,
                 )
-                print(f"      ❌ Long-running task {subtask_id} did not meet criteria")
             
             return SubtaskResult(
                 success=is_completed,
