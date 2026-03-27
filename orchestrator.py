@@ -163,7 +163,7 @@ class TodoOrchestrator:
 
         # Derived paths inside the session directory
         resolved_state_file = os.path.join(self.session_dir, "todos_state.yaml")
-        resolved_ideas_processed = os.path.join(self.session_dir, ".ideas_processed.yaml")
+        resolved_ideas_processed = os.path.join(self.session_dir, ".ideas_processed.md")
 
         self.state_manager = StateManager(resolved_state_file)
         self.conv_logger = ConversationLogger(self.session_dir)

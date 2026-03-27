@@ -28,14 +28,15 @@ class IdeasWatcher:
     1. Read ideas.md and detect new (unprocessed) ideas
     2. Call AI to decompose each idea into structured TODO tasks
     3. Append the new tasks to todos.yaml
-    4. Mark processed ideas so they are not re-processed
+    4. Remove the processed idea from ideas.md
+    5. Archive the processed idea text into .ideas_processed.md
     
-    Ideas in ideas.md are separated by markdown headings (## or ###) or
-    horizontal rules (---). Each section is treated as one idea.
+    Ideas in ideas.md are separated by horizontal rules (---). Each section
+    between separators is treated as one idea.
     """
 
-    # File to track which ideas have been processed
-    PROCESSED_STATE_FILE = ".ideas_processed.yaml"
+    # File to archive processed ideas
+    PROCESSED_STATE_FILE = ".ideas_processed.md"
 
     def __init__(
         self,
@@ -54,30 +55,58 @@ class IdeasWatcher:
         self.ideas_file = ideas_file
         self.todos_file = todos_file
         self.processed_state_file = processed_state_file or self.PROCESSED_STATE_FILE
-        self._processed_hashes = self._load_processed_state()
         self._last_mtime = 0.0
 
-    def _load_processed_state(self) -> set:
-        """Load the set of already-processed idea hashes."""
-        if not os.path.exists(self.processed_state_file):
-            return set()
+    def _archive_idea(self, idea: dict):
+        """Archive a processed idea by appending its original text to .ideas_processed.md."""
         try:
-            with open(self.processed_state_file, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f)
-            if data and isinstance(data, dict):
-                return set(data.get('processed_hashes', []))
+            is_new = not os.path.exists(self.processed_state_file)
+            with open(self.processed_state_file, 'a', encoding='utf-8') as f:
+                if is_new:
+                    f.write("# Processed Ideas Archive\n\n")
+                f.write(idea['content'])
+                f.write("\n\n---\n\n")
+            logger.debug(f"Archived idea '{idea['title']}' to {self.processed_state_file}")
         except Exception as e:
-            logger.warning(f"Failed to load processed state: {e}")
-        return set()
+            logger.error(f"Failed to archive idea: {e}")
 
-    def _save_processed_state(self):
-        """Save the set of processed idea hashes."""
+    def _remove_idea_from_file(self, idea: dict):
+        """
+        Remove a processed idea from ideas.md.
+
+        Re-reads the file, splits by '---', removes the matching section,
+        and writes back.
+        """
         try:
-            data = {'processed_hashes': sorted(self._processed_hashes)}
-            with open(self.processed_state_file, 'w', encoding='utf-8') as f:
-                yaml.dump(data, f, default_flow_style=False)
+            with open(self.ideas_file, 'r', encoding='utf-8') as f:
+                content = f.read()
         except Exception as e:
-            logger.error(f"Failed to save processed state: {e}")
+            logger.error(f"Failed to read ideas file for removal: {e}")
+            return
+
+        sections = re.split(r'\n---\n', content)
+        remaining = []
+        removed = False
+        for section in sections:
+            if not removed and section.strip() == idea['content'].strip():
+                removed = True
+                continue
+            remaining.append(section)
+
+        new_content = '\n---\n'.join(remaining).strip()
+        # If there's still content, ensure it ends with a newline
+        if new_content:
+            new_content += '\n'
+
+        try:
+            with open(self.ideas_file, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            if removed:
+                logger.debug(f"Removed idea '{idea['title']}' from {self.ideas_file}")
+            else:
+                logger.warning(f"Could not find idea '{idea['title']}' in {self.ideas_file} for removal")
+        except Exception as e:
+            logger.error(f"Failed to write ideas file after removal: {e}")
 
     def has_new_ideas(self) -> bool:
         """
@@ -100,14 +129,11 @@ class IdeasWatcher:
         """
         Parse ideas.md and extract individual ideas.
         
-        Each idea is delimited by:
-        - Markdown headings (## or ###)
-        - Horizontal rules (---)
-        - Or treated as a single block if no delimiters found
+        Ideas are delimited by horizontal rules (``---``). Each section
+        between separators is treated as one idea.
         
         Returns:
-            List[dict]: List of ideas with 'title', 'content', and 'hash' fields.
-                        Only includes ideas not yet processed.
+            List[dict]: List of ideas with 'title', 'content', 'body', and 'hash' fields.
         """
         if not os.path.exists(self.ideas_file):
             return []
@@ -128,9 +154,8 @@ class IdeasWatcher:
         if not content.strip():
             return []
 
-        # Split by headings or horizontal rules
-        # Pattern matches: ## heading, ### heading, or --- (horizontal rule)
-        sections = re.split(r'\n(?=#{2,3}\s)|(?<=\n)---+\n', content)
+        # Split only by horizontal rules (---)
+        sections = re.split(r'\n---\n', content)
 
         ideas = []
         for section in sections:
@@ -138,27 +163,22 @@ class IdeasWatcher:
             if not section:
                 continue
 
-            # Extract title from heading if present
-            heading_match = re.match(r'^(#{2,3})\s+(.+?)(?:\n|$)', section)
-            if heading_match:
-                title = heading_match.group(2).strip()
-                body = section[heading_match.end():].strip()
-            else:
-                # Use first line as title, rest as body
-                lines = section.split('\n', 1)
-                title = lines[0].strip()
-                body = lines[1].strip() if len(lines) > 1 else ""
+            # Use first line as title, rest as body
+            lines = section.split('\n', 1)
+            title = lines[0].strip()
+            # Strip leading '#' characters from title for display
+            display_title = re.sub(r'^#+\s*', '', title)
+            body = lines[1].strip() if len(lines) > 1 else ""
 
             # Compute hash of the idea content for deduplication
             idea_hash = hashlib.sha256(section.encode('utf-8')).hexdigest()[:16]
 
-            if idea_hash not in self._processed_hashes:
-                ideas.append({
-                    'title': title,
-                    'content': section,
-                    'body': body,
-                    'hash': idea_hash,
-                })
+            ideas.append({
+                'title': display_title,
+                'content': section,
+                'body': body,
+                'hash': idea_hash,
+            })
 
         return ideas
 
@@ -198,9 +218,9 @@ class IdeasWatcher:
                 else:
                     print(f"   ⚠️  No tasks generated from idea: {idea['title']}")
 
-                # Mark as processed regardless of whether tasks were generated
-                self._processed_hashes.add(idea['hash'])
-                self._save_processed_state()
+                # Archive the idea and remove it from ideas.md
+                self._archive_idea(idea)
+                self._remove_idea_from_file(idea)
                 processed_count += 1
 
             except Exception as e:
@@ -427,12 +447,16 @@ Or for a nested task:
         """Mark all current ideas as processed without generating tasks."""
         ideas = self.parse_ideas()
         for idea in ideas:
-            self._processed_hashes.add(idea['hash'])
-        self._save_processed_state()
+            self._archive_idea(idea)
+        # Clear the ideas file
+        try:
+            with open(self.ideas_file, 'w', encoding='utf-8') as f:
+                f.write('')
+        except Exception as e:
+            logger.error(f"Failed to clear ideas file: {e}")
 
     def reset(self):
-        """Reset all processed state, allowing all ideas to be re-processed."""
-        self._processed_hashes = set()
+        """Reset all processed state (remove the archive file)."""
         self._last_mtime = 0.0
         if os.path.exists(self.processed_state_file):
             os.remove(self.processed_state_file)
