@@ -47,7 +47,7 @@ class TodoOrchestrator:
 | `ideas_file` | str | None | ideas.md 文件路径（None 则禁用 ideas 监控） |
 | `idle_interval` | int | 30 | idle 模式检查间隔（秒） |
 
-> **注意**：`state_file` 参数已废弃。`todos_state.yaml`、`orchestrator.log`、`.ideas_processed.yaml` 等运行时文件
+> **注意**：`state_file` 参数已废弃。`todos_state.yaml`、`orchestrator.log`、`.ideas_processed.md` 等运行时文件
 > 现在统一放置在由 `log_dir` + `.autoagent_log` 推导出的会话目录下，不再出现在项目目录中。
 
 ### 方法
@@ -119,10 +119,14 @@ def reset(self) -> None
 #### check_and_process_ideas
 
 ```python
-def check_and_process_ideas(self) -> int
+def check_and_process_ideas(self, human_review: bool = False) -> int
 ```
 
-检查 ideas.md 是否有新内容，如果有则调用 AI 分解为 TODO 任务并追加到 todos.yaml。返回处理的新 idea 数量。
+检查 ideas.md 是否有新内容，如果有则调用 AI 分解为 TODO 任务并追加到 todos.yaml。生成的任务会经过独立 AI 审查，审查不通过则自动修订重审。返回处理的新 idea 数量。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `human_review` | bool | False | 如果为 True，AI 审查通过后挂起等待人工确认 |
 
 #### run_with_idle
 
@@ -708,6 +712,78 @@ def log_ideas_response(
 |------|------|------|
 | `response` | str | AI 返回的 YAML 任务定义 |
 
+#### log_ideas_review_prompt（Ideas 审查日志）
+
+```python
+def log_ideas_review_prompt(
+    self,
+    review_round: int,
+    prompt: str,
+)
+```
+
+将 ideas 审查的 prompt 写入 `conversations/ideas.md`。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `review_round` | int | 1-based 审查轮次 |
+| `prompt` | str | 发送给审查 AI 的提示词 |
+
+#### log_ideas_review_response（Ideas 审查日志）
+
+```python
+def log_ideas_review_response(
+    self,
+    response: str,
+)
+```
+
+将审查 AI 的响应追加到 `conversations/ideas.md`。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `response` | str | 审查 AI 的响应（包含 ✅ completed 或 ❌ not completed） |
+
+#### log_ideas_revision_prompt（Ideas 修订日志）
+
+```python
+def log_ideas_revision_prompt(
+    self,
+    revision_round: int,
+    prompt: str,
+)
+```
+
+将 ideas 修订的 prompt 写入 `conversations/ideas.md`。当审查被拒绝后，将反馈发送给原 AI 进行修订时调用。也用于记录人工反馈（以 `[Human Feedback]` 前缀标记）。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `revision_round` | int | 1-based 修订轮次 |
+| `prompt` | str | 修订提示词（含审查反馈或人工反馈） |
+
+#### log_ideas_revision_response（Ideas 修订日志）
+
+```python
+def log_ideas_revision_response(
+    self,
+    response: str,
+)
+```
+
+将修订后的 AI 响应追加到 `conversations/ideas.md`。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `response` | str | 修订后的 YAML 任务定义 |
+
+#### log_ideas_section_end
+
+```python
+def log_ideas_section_end(self)
+```
+
+写入分隔符（`---`）标记一个 idea 处理段落的结束。
+
 #### register_nested_task
 
 ```python
@@ -749,7 +825,7 @@ class IdeasWatcher:
 |------|------|--------|------|
 | `ideas_file` | str | "ideas.md" | Ideas 文件路径 |
 | `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
-| `processed_state_file` | str | ".ideas_processed.yaml" | 已处理状态记录文件（位于会话目录下） |
+| `processed_state_file` | str | ".ideas_processed.md" | 已处理 ideas 归档文件（位于会话目录下） |
 
 ### 方法
 
@@ -781,15 +857,23 @@ def parse_ideas(self) -> List[dict]
 #### process_new_ideas
 
 ```python
-def process_new_ideas(self, client: CodeBuddyClient, conv_logger: ConversationLogger = None) -> int
+def process_new_ideas(
+    self,
+    client: CodeBuddyClient,
+    review_client: CodeBuddyClient = None,
+    conv_logger: ConversationLogger = None,
+    human_review: bool = False,
+) -> int
 ```
 
-处理所有新 ideas：解析 → 调用 AI 分解 → 追加到 todos.yaml。返回处理的 idea 数量。
+处理所有新 ideas：解析 → 调用 AI 分解 → AI 审查 → 可选人工审核 → 追加到 todos.yaml → 归档并从 ideas.md 删除。返回处理的 idea 数量。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `client` | CodeBuddyClient | - | AI 客户端实例 |
-| `conv_logger` | ConversationLogger | None | 可选的对话日志记录器，提供时会将 prompt/response 记录到 `conversations/ideas.md` |
+| `client` | CodeBuddyClient | - | AI 客户端实例（用于任务分解） |
+| `review_client` | CodeBuddyClient | None | 可选的独立 AI 客户端（全新上下文，用于审查）。如果为 None 则跳过审查步骤 |
+| `conv_logger` | ConversationLogger | None | 可选的对话日志记录器 |
+| `human_review` | bool | False | 如果为 True，AI 审查通过后挂起等待人工确认 |
 
 #### mark_all_processed / reset
 
@@ -988,6 +1072,7 @@ class AICallError(Exception):
 | `--timeout` | - | 3600 | AI 调用超时时间（秒） |
 | `--log-dir` | - | `.autoagent` | 日志根目录（相对于 CWD） |
 | `--ideas` | - | None | ideas.md 文件路径 |
+| `--ideas-only` | - | - | 只处理 ideas.md（带人工审核），不运行 todo list（需搭配 `--ideas`） |
 | `--idle` | - | - | 任务完成后进入 idle 模式等待新 ideas（需搭配 `--ideas`） |
 | `--idle-interval` | - | 30 | idle 轮询间隔（秒） |
 | `--status` | - | - | 显示当前任务状态并退出 |
@@ -1013,6 +1098,9 @@ python orchestrator.py --provider claude --executable /usr/local/bin/claude
 
 # 带 Ideas 监控和 Idle 模式
 python orchestrator.py --ideas ideas.md --idle --idle-interval 60
+
+# 只处理 ideas（带人工审核）
+python orchestrator.py --ideas ideas.md --ideas-only
 
 # 查看所有可用 provider
 python orchestrator.py --list-providers
@@ -1108,8 +1196,8 @@ orchestrator.run_with_idle()  # 不会退出，直到 Ctrl+C
 | **SubtaskExecutor** | 子任务分发执行（接收 session_dir） |
 | **autoagent_exec.py** | long_running 任务启动器（10s 快速失败 + 信号文件） |
 | **StateManager** | 任务状态持久化（todos_state.yaml） |
-| **ConversationLogger** | 对话日志记录、索引生成、Ideas 拆解日志 |
-| **IdeasWatcher** | ideas.md 监控、AI 分解、任务追加（支持日志记录） |
+| **ConversationLogger** | 对话日志记录、索引生成、Ideas 拆解/审查/修订日志 |
+| **IdeasWatcher** | ideas.md 监控、AI 分解、AI 审查、人工审核、任务追加（支持日志记录） |
 | **setup_logging()** | 日志配置（控制台 + orchestrator.log） |
 
 如有其他问题，请参考：

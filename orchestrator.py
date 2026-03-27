@@ -528,10 +528,27 @@ class TodoOrchestrator:
         return status
 
     def reset(self):
-        """Reset all task states."""
-        self.state_manager.reset()
-        if self.ideas_watcher:
-            self.ideas_watcher.reset()
+        """Reset all task states by removing the entire session directory."""
+        import shutil
+
+        # Close file handlers first to avoid "file in use" errors on Windows
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers[:]:
+            if isinstance(handler, logging.FileHandler):
+                handler.close()
+                root_logger.removeHandler(handler)
+
+        # Remove the entire session directory
+        if os.path.exists(self.session_dir):
+            shutil.rmtree(self.session_dir)
+            print(f"  Removed: {self.session_dir}")
+
+        # Remove the .autoagent_log marker so a fresh session is created next run
+        marker_file = os.path.join(self.workspace, ".autoagent_log")
+        if os.path.exists(marker_file):
+            os.remove(marker_file)
+            print(f"  Removed: {marker_file}")
+
         print("✅ All task states have been reset.")
 
     def check_and_process_ideas(self, human_review: bool = False) -> int:

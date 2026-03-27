@@ -12,6 +12,7 @@ import time
 import yaml
 import hashlib
 import logging
+import tempfile
 from typing import Optional, List
 
 from codebuddy_client import AIClient, CodeBuddyClient, AICallError
@@ -38,6 +39,12 @@ class IdeasWatcher:
     # File to archive processed ideas
     PROCESSED_STATE_FILE = ".ideas_processed.md"
 
+    # Example todos file (relative to this module's directory)
+    EXAMPLE_TODOS_FILE = "todos.example.yaml"
+
+    # Temporary file for AI to write generated YAML tasks into
+    TEMP_TASKS_FILE = ".ideas_tasks_temp.yaml"
+
     def __init__(
         self,
         ideas_file: str = "ideas.md",
@@ -50,7 +57,7 @@ class IdeasWatcher:
         Args:
             ideas_file: Path to the ideas markdown file
             todos_file: Path to the todos YAML configuration file
-            processed_state_file: Path to track processed ideas (default: .ideas_processed.yaml)
+        processed_state_file: Path to track processed ideas (default: .ideas_processed.md)
         """
         self.ideas_file = ideas_file
         self.todos_file = todos_file
@@ -185,6 +192,56 @@ class IdeasWatcher:
     # Maximum number of review rounds before accepting the tasks as-is
     MAX_REVIEW_ROUNDS = 3
 
+    def _get_example_yaml_path(self) -> str:
+        """Return the absolute path to todos.example.yaml (next to this module)."""
+        return os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            self.EXAMPLE_TODOS_FILE,
+        )
+
+    def _get_temp_tasks_path(self) -> str:
+        """Return the absolute path to the temporary tasks YAML file.
+
+        The file is placed next to the todos.yaml file so that the AI
+        tool can write to it in the project working directory.
+        """
+        return os.path.join(
+            os.path.dirname(os.path.abspath(self.todos_file)) or os.getcwd(),
+            self.TEMP_TASKS_FILE,
+        )
+
+    def _read_tasks_from_temp_file(self) -> Optional[List[dict]]:
+        """Try to read and parse tasks from the temporary YAML file.
+
+        Returns:
+            List[dict] if the file exists and contains a valid YAML list,
+            None otherwise.  The temp file is deleted after a successful read.
+        """
+        temp_path = self._get_temp_tasks_path()
+        if not os.path.exists(temp_path):
+            return None
+        try:
+            with open(temp_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            if not content.strip():
+                return None
+            parsed = yaml.safe_load(content)
+            if isinstance(parsed, list) and len(parsed) > 0:
+                logger.info(f"Successfully read {len(parsed)} task(s) from temp file {temp_path}")
+                return parsed
+        except Exception as e:
+            logger.warning(f"Failed to read/parse temp tasks file {temp_path}: {e}")
+        return None
+
+    def _cleanup_temp_file(self):
+        """Remove the temporary tasks file if it exists."""
+        temp_path = self._get_temp_tasks_path()
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError as e:
+            logger.warning(f"Failed to remove temp file {temp_path}: {e}")
+
     def process_new_ideas(
         self,
         client: CodeBuddyClient,
@@ -282,6 +339,12 @@ class IdeasWatcher:
                 max_id = max(max_id, int(tid))
         next_id = max_id + 1
 
+        # Resolve paths for the prompt
+        example_yaml_path = self._get_example_yaml_path()
+        temp_tasks_path = self._get_temp_tasks_path()
+        # Clean up any leftover temp file from a previous run
+        self._cleanup_temp_file()
+
         prompt = f"""You are a task planner. Given the following idea, decompose it into one or more
 concrete, actionable TODO tasks in YAML format.
 
@@ -290,6 +353,12 @@ concrete, actionable TODO tasks in YAML format.
 
 ## Idea Content
 {idea['content']}
+
+## Reference
+
+Please read the example configuration file at:
+  {example_yaml_path}
+Use it as a reference for task structure, field names, types, and style conventions.
 
 ## Instructions
 
@@ -305,8 +374,11 @@ concrete, actionable TODO tasks in YAML format.
 
 ## Output Format
 
-Respond with ONLY valid YAML (no markdown code fences, no extra text).
-The output should be a list of tasks, for example:
+Write ONLY valid YAML (a list of tasks) into the following file:
+  {temp_tasks_path}
+
+Do NOT include markdown code fences or any extra text in the file.
+The file content should be a YAML list of tasks, for example:
 
 - id: {next_id}
   name: "Task name"
@@ -344,8 +416,12 @@ Or for a nested task:
             if conv_logger:
                 conv_logger.log_ideas_response(result)
 
-            # Parse the YAML from the AI response
-            tasks = self._extract_yaml_tasks(result)
+            # Parse the YAML: prefer temp file, fall back to response text
+            tasks = self._read_tasks_from_temp_file()
+            if tasks is None:
+                logger.info("Temp file not found or empty, falling back to response text parsing")
+                tasks = self._extract_yaml_tasks(result)
+            self._cleanup_temp_file()
 
             # Review loop: send tasks to a fresh-context reviewer AI
             if review_client and tasks:
@@ -421,6 +497,9 @@ Or for a nested task:
         """
         tasks_yaml = yaml.dump(tasks, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
+        # Resolve example YAML path for reference in the review prompt
+        example_yaml_path = self._get_example_yaml_path()
+
         review_prompt = f"""You are a task review expert. Review the following TODO task decomposition
 for quality, completeness, and correctness.
 
@@ -437,6 +516,13 @@ for quality, completeness, and correctness.
 ```yaml
 {tasks_yaml}```
 
+## Reference
+
+Please read the example configuration file at:
+  {example_yaml_path}
+Use it as the authoritative reference for valid task structure, field names,
+types, and style conventions when reviewing the generated tasks.
+
 ## Review Criteria
 
 1. Are the task IDs correct and consistent (including subtask dot notation)?
@@ -445,6 +531,7 @@ for quality, completeness, and correctness.
 4. Does the decomposition fully cover the original idea?
 5. Are there any missing or redundant tasks?
 6. Is the YAML structure valid and well-formed?
+7. Does the output conform to the conventions shown in todos.example.yaml?
 
 ## Instructions
 
@@ -495,6 +582,9 @@ Followed by specific feedback on what needs to be fixed.
         Returns:
             tuple: (raw_response: str, tasks: List[dict])
         """
+        temp_tasks_path = self._get_temp_tasks_path()
+        self._cleanup_temp_file()
+
         revision_prompt = f"""Your previous task decomposition was reviewed and needs revision.
 
 ## Reviewer Feedback
@@ -504,7 +594,10 @@ Followed by specific feedback on what needs to be fixed.
 ## Instructions
 
 Please revise the task decomposition based on the feedback above.
-Respond with ONLY valid YAML (no markdown code fences, no extra text).
+Write ONLY valid YAML (a list of tasks) into the following file:
+  {temp_tasks_path}
+
+Do NOT include markdown code fences or any extra text in the file.
 """
 
         try:
@@ -516,7 +609,11 @@ Respond with ONLY valid YAML (no markdown code fences, no extra text).
             if conv_logger:
                 conv_logger.log_ideas_revision_response(result)
 
-            tasks = self._extract_yaml_tasks(result)
+            tasks = self._read_tasks_from_temp_file()
+            if tasks is None:
+                logger.info("Temp file not found or empty after revision, falling back to response text parsing")
+                tasks = self._extract_yaml_tasks(result)
+            self._cleanup_temp_file()
             return result, tasks
 
         except AICallError as e:
@@ -646,6 +743,9 @@ Respond with ONLY valid YAML (no markdown code fences, no extra text).
                 print(f"   🔄 Sending human feedback to AI for revision...")
 
                 # Send human feedback to AI for revision
+                temp_tasks_path = self._get_temp_tasks_path()
+                self._cleanup_temp_file()
+
                 revision_prompt = f"""Your task decomposition needs revision based on human feedback.
 
 ## Human Feedback
@@ -655,7 +755,10 @@ Respond with ONLY valid YAML (no markdown code fences, no extra text).
 ## Instructions
 
 Please revise the task decomposition based on the feedback above.
-Respond with ONLY valid YAML (no markdown code fences, no extra text).
+Write ONLY valid YAML (a list of tasks) into the following file:
+  {temp_tasks_path}
+
+Do NOT include markdown code fences or any extra text in the file.
 """
                 try:
                     result = client.ask(revision_prompt, continue_session=True)
@@ -663,7 +766,11 @@ Respond with ONLY valid YAML (no markdown code fences, no extra text).
                     if conv_logger:
                         conv_logger.log_ideas_revision_response(result)
 
-                    tasks = self._extract_yaml_tasks(result)
+                    tasks = self._read_tasks_from_temp_file()
+                    if tasks is None:
+                        logger.info("Temp file not found after human-feedback revision, falling back to response text parsing")
+                        tasks = self._extract_yaml_tasks(result)
+                    self._cleanup_temp_file()
                     if not tasks:
                         print(f"   ⚠️  AI revision produced no valid tasks, keeping previous version.")
                         continue

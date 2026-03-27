@@ -33,6 +33,7 @@
 │  - 配置解析器                           │
 │  - Context 管理器                       │  ← 管理 CodeBuddy context 生命周期
 │  - IdeasWatcher                         │  ← 监控 ideas.md 并转换为 TODO
+│  - AI 审查 + 人工审核                   │  ← Ideas 拆解质量保障
 │  - Idle 模式                            │  ← 任务完成后等待新 ideas
 └────────────────┬────────────────────────┘
                  │
@@ -89,10 +90,10 @@ orchestrator.py
     │   └── subprocess (执行命令)
     ├── state_manager.py (状态持久化)
     ├── conversation_logger.py (对话日志)
-    ├── ideas_watcher.py (Ideas 监控)
+    ├── ideas_watcher.py          # Ideas 文件监控与任务分解
     │   ├── codebuddy_client.py → AIClient (AI 分解 Ideas)
-    │   └── yaml (追加任务到 todos.yaml)
-    └── monitor.py (长时间任务监控)
+    │   ├── codebuddy_client.py → AIClient (AI 审查 + 修订)
+    │   └── yaml (追加任务到 todos.yaml)    └── monitor.py (长时间任务监控)
         └── subprocess (监控进程)
 ```
 
@@ -1123,7 +1124,7 @@ autoagent/
 │   └── <project>_<random>/   # 项目专属会话目录（由 .autoagent_log 指定）
 │       ├── orchestrator.log           # Orchestrator 运行日志
 │       ├── todos_state.yaml           # 任务状态（自动生成）
-│       ├── .ideas_processed.yaml      # Ideas 处理记录（自动生成）
+│       ├── .ideas_processed.md         # Ideas 归档（已处理的 idea 原文）
 │       ├── lr_tasks/                  # long_running 任务文件目录
 │       │   ├── lr_<task_id>_signal.json   # long_running 信号文件（自动生成）
 │       │   └── lr_<task_id>_output.log    # long_running 命令输出日志（自动生成）
@@ -1146,7 +1147,7 @@ autoagent/
 - 首次运行时自动生成：`<项目目录名>_<随机8位字符>`
 - 后续运行读取该文件，确保同一个项目始终写入同一个日志子文件夹
 - 最终日志路径为 `<log_dir>/<.autoagent_log中的内容>/`
-- 所有运行时状态文件（`todos_state.yaml`、`orchestrator.log`、`.ideas_processed.yaml`、`conversations/`）
+- 所有运行时状态文件（`todos_state.yaml`、`orchestrator.log`、`.ideas_processed.md`、`conversations/`）
   均位于该目录下，**不会出现在项目目录中**
 
 ## 系统与AI的协作流程图
@@ -1552,6 +1553,14 @@ class ConversationLogger:
     # Ideas decomposition logging (written to conversations/ideas.md)
     def log_ideas_prompt(self, idea_title, idea_index, prompt)
     def log_ideas_response(self, response)
+    # Two-step incremental logging for ideas review
+    def log_ideas_review_prompt(self, review_round, prompt)
+    def log_ideas_review_response(self, response)
+    # Two-step incremental logging for ideas revision
+    def log_ideas_revision_prompt(self, revision_round, prompt)
+    def log_ideas_revision_response(self, response)
+    # Section separator
+    def log_ideas_section_end(self)
     def register_nested_task(self, task_id, task_name, subtask_ids)
     def build_index_file(self, task_id)
     def finalize(self)
@@ -1566,7 +1575,7 @@ class ConversationLogger:
 └── cufftdx_optimization_ko53bi1b/   # 项目专属（由 .autoagent_log 指定）
     ├── orchestrator.log               # Orchestrator 运行日志
     ├── todos_state.yaml               # 任务状态
-    ├── .ideas_processed.yaml          # Ideas 处理记录
+    ├── .ideas_processed.md            # Ideas 归档（已处理的 idea 原文）
     └── conversations/                 # 对话日志（固定目录名）
         ├── ideas.md                    # Ideas 拆解日志（prompt + AI 返回的 YAML）
         ├── task_1.md                   # 简单任务：完整对话记录
@@ -1622,6 +1631,65 @@ AI 分解 prompt...
 AI 返回的 YAML 任务定义...
 ```
 
+### Review #1 Prompt
+
+```
+AI 审查 prompt...
+```
+
+### Review Response
+
+✅ completed
+
+---
+
+## Idea #2: 另一个想法
+
+### Prompt
+
+```
+AI 分解 prompt...
+```
+
+### Response
+
+```yaml
+AI 返回的 YAML...
+```
+
+### Review #1 Prompt
+
+```
+AI 审查 prompt...
+```
+
+### Review Response
+
+❌ not completed
+任务 ID 不连续，缺少 completion_criteria...
+
+### Revision #1 Prompt
+
+```
+AI 修订 prompt（含审查反馈）...
+```
+
+### Revision Response
+
+```yaml
+修订后的 YAML...
+```
+
+### Review #2 Prompt
+
+```
+AI 再次审查...
+```
+
+### Review Response
+
+✅ completed
+
 ---
 ```
 
@@ -1633,6 +1701,9 @@ AI 返回的 YAML 任务定义...
 | 子任务对话 | `subtask_<parent_id>/task_<id>.md` | 子任务的每次 attempt |
 | AI 决策 | `subtask_<parent_id>/_decisions.md` | 失败分析、主任务评估 |
 | Ideas 拆解 | `ideas.md` | Ideas 分解为 TODO 时的 AI 调用 |
+| Ideas 审查 | `ideas.md` | AI 审查生成的任务（Review Prompt/Response） |
+| Ideas 修订 | `ideas.md` | AI 根据审查反馈修订任务（Revision Prompt/Response） |
+| Ideas 人工反馈 | `ideas.md` | 人工审核反馈（以 `[Human Feedback]` 标记） |
 | 索引文件 | `task_<id>.md` | 嵌套任务的导航索引 |
 
 ### 使用方式
@@ -1674,10 +1745,17 @@ python orchestrator.py --log-dir logs
 
 ```python
 class IdeasWatcher:
+    MAX_REVIEW_ROUNDS = 3  # Maximum AI review rounds before accepting
+
     def __init__(self, ideas_file, todos_file, processed_state_file)
     def has_new_ideas(self) -> bool
     def parse_ideas(self) -> List[dict]
-    def process_new_ideas(self, client: CodeBuddyClient, conv_logger: ConversationLogger = None) -> int
+    def process_new_ideas(
+        self, client: CodeBuddyClient,
+        review_client: CodeBuddyClient = None,
+        conv_logger: ConversationLogger = None,
+        human_review: bool = False,
+    ) -> int
     def mark_all_processed(self)
     def reset(self)
 ```
@@ -1705,39 +1783,133 @@ class IdeasWatcher:
 探索将 DCT3D 分布到多个 GPU 上的可能性。
 ```
 
-### 去重机制
+### 去重与归档机制
 
-使用 SHA256 hash 跟踪已处理的想法，存储在会话目录的 `.ideas_processed.yaml` 中：
+已处理的想法会被归档到会话目录的 `.ideas_processed.md` 中（保留原文），同时从 `ideas.md` 中删除对应条目：
 
-```yaml
-processed_hashes:
-  - a1b2c3d4e5f6g7h8
-  - i9j0k1l2m3n4o5p6
+```markdown
+# Processed Ideas Archive
+
+## 添加单元测试
+
+给 state_manager 添加完整的单元测试覆盖，包括边界情况。
+
+---
+
+## 优化内存访问模式
+
+参考 ncu profiling 结果...
+
+---
 ```
 
-已处理的想法不会被重复分解为任务。
+每次处理一个 idea 后，该 idea 的原文被追加到归档文件，并从 `ideas.md` 中移除。
 
 ### Idea → TODO 转换流程
 
 ```
 1. 检测 ideas.md 变更（基于文件修改时间）
    ↓
-2. 解析 ideas.md，提取各个 idea section
+2. 解析 ideas.md，提取各个 idea section（以 --- 分隔）
    ↓
-3. 过滤掉已处理的 ideas（hash 去重）
-   ↓
-4. 对每个新 idea：
+3. 对每个新 idea：
    ├─ 加载现有 todos.yaml 确定下一个可用 task ID
-   ├─ 构造 prompt 发送给 AI
-   ├─ 记录 prompt 到 conversations/ideas.md（如果提供了 conv_logger）
+   ├─ 构造 prompt 发送给 AI（decompose）
+   ├─ 记录 prompt 到 conversations/ideas.md
    ├─ AI 返回 YAML 格式的任务定义
-   ├─ 记录 response 到 conversations/ideas.md（如果提供了 conv_logger）
+   ├─ 记录 response 到 conversations/ideas.md
    ├─ 解析 AI 响应（支持纯 YAML、代码块包裹、混合文本提取）
+   │
+   ├─ 【AI 审查循环】（如果提供了 review_client）
+   │   ├─ 将生成的任务发送给全新上下文的 AI 审查
+   │   ├─ 审查通过（✅ completed）→ 跳出循环
+   │   └─ 审查拒绝（❌ not completed）→ 反馈给原 AI 修订 → 重新审查
+   │       （最多 MAX_REVIEW_ROUNDS=3 轮）
+   │
+   ├─ 【人工审核循环】（如果 human_review=True）
+   │   ├─ 显示生成的任务 YAML，等待人工输入
+   │   ├─ 输入 y → 接受任务
+   │   └─ 输入 n → 人工输入反馈 → AI 修订 → AI 重新审查 → 再次人工审核
+   │
    ├─ 追加新任务到 todos.yaml
-   └─ 标记该 idea 为已处理
+   ├─ 归档 idea 到 .ideas_processed.md
+   └─ 从 ideas.md 中删除该 idea
    ↓
-5. 通知 Orchestrator 重新加载任务列表
+4. 通知 Orchestrator 重新加载任务列表
 ```
+
+### AI 审查机制
+
+**设计理念**：每次 AI 生成待添加的 TODO 后，将生成内容交给一个**具有全新上下文的 AI** 进行独立审查，确保任务分解的质量。
+
+**审查流程**：
+
+```mermaid
+graph TD
+    A[AI 拆解 idea 为 tasks] --> B[AI 审查<br/>全新上下文]
+    B -->|❌ 拒绝| C[AI 修订<br/>原上下文]
+    C --> B
+    B -->|✅ 通过| D{human_review?}
+    D -->|否| E[添加到 todos.yaml]
+    D -->|是| F["👤 显示任务, 等待人工输入"]
+    F -->|输入 y| E
+    F -->|输入 n| G[人工输入反馈]
+    G --> H[AI 根据反馈修订]
+    H --> B
+```
+
+**审查标准**（由 reviewer AI 判断）：
+1. 任务 ID 是否正确且一致（包括子任务点号表示法）
+2. 任务类型是否合适（simple vs nested，simple vs long_running）
+3. 完成标准是否清晰、具体、可衡量
+4. 分解是否完整覆盖了原始想法
+5. 是否有遗漏或冗余的任务
+6. YAML 结构是否有效且格式良好
+
+**完成检测**：使用与 `SimpleTaskExecutor._check_completion()` 相同的三层检测策略：
+1. 严格否定标记：`❌ not completed` → 拒绝
+2. 严格肯定标记：`✅ completed` → 通过
+3. 模糊肯定匹配（兜底）
+
+### 人工审核模式（--ideas-only）
+
+**设计理念**：在 AI 审查通过后，增加一个人工审核环节，让用户最终确认任务分解的质量。
+
+**使用方式**：
+```bash
+python orchestrator.py --ideas ideas.md --ideas-only
+```
+
+**交互流程**：
+```
+────────────────────────────────────────────────────────────
+   👤 Human Review Required
+────────────────────────────────────────────────────────────
+   Idea: 添加单元测试
+
+   Generated Tasks:
+────────────────────────────────
+   - id: 2
+     name: "添加 state_manager 单元测试"
+     type: simple
+     completion_criteria: |
+       1. 测试覆盖率 > 90%
+       2. 所有边界情况已覆盖
+────────────────────────────────
+
+   Accept these tasks? (y/n): n
+   Please provide your feedback (end with an empty line):
+   > 需要拆分为多个子任务，分别测试不同模块
+   > 
+   🔄 Sending human feedback to AI for revision...
+```
+
+**`--ideas-only` 模式特点**：
+- 只处理 ideas.md，不运行 todo list
+- AI 审查通过后挂起等待人工审核
+- 人工输入 `y` → 接受任务，程序退出
+- 人工输入 `n` → 输入反馈 → AI 修订 → AI 重新审查 → 再次人工审核
+- 所有对话（包括人工反馈）都记录到 `conversations/ideas.md`
 
 ### AI 分解 Prompt 模板
 
@@ -1803,6 +1975,9 @@ AI 返回的 YAML 被解析后直接追加到 `todos.yaml` 的 `tasks` 列表中
 # 启用 ideas 处理（处理完即退出）
 python orchestrator.py --ideas ideas.md
 
+# 只处理 ideas（带人工审核），不运行 todo list
+python orchestrator.py --ideas ideas.md --ideas-only
+
 # 启用 idle 模式（持续运行）
 python orchestrator.py --ideas ideas.md --idle
 
@@ -1831,4 +2006,6 @@ python orchestrator.py --ideas ideas.md --idle --log-dir logs
 - ✅ 对话日志系统（完整记录 AI 交互，含工具调用，支持审计和回顾）
 - ✅ stream-json 实时解析（实时显示 AI 工具调用和执行结果）
 - ✅ Ideas 监控（自动将 ideas.md 中的想法分解为 TODO 任务）
+- ✅ Ideas AI 审查（独立上下文的 AI 审查生成的任务质量，支持多轮修订）
+- ✅ Ideas 人工审核（`--ideas-only` 模式，AI 审查通过后挂起等待人工确认）
 - ✅ Idle 模式（任务完成后持续等待新输入，实现持续工作流）
