@@ -182,9 +182,13 @@ class IdeasWatcher:
 
         return ideas
 
+    # Maximum number of review rounds before accepting the tasks as-is
+    MAX_REVIEW_ROUNDS = 3
+
     def process_new_ideas(
         self,
         client: CodeBuddyClient,
+        review_client: CodeBuddyClient = None,
         conv_logger: ConversationLogger = None,
     ) -> int:
         """
@@ -192,6 +196,8 @@ class IdeasWatcher:
         
         Args:
             client: CodeBuddyClient instance to call AI for task decomposition
+            review_client: Optional CodeBuddyClient with fresh context for reviewing
+                           generated tasks. If None, review step is skipped.
             conv_logger: Optional ConversationLogger to record prompts/responses
             
         Returns:
@@ -209,6 +215,7 @@ class IdeasWatcher:
             try:
                 new_tasks = self._decompose_idea_to_tasks(
                     client, idea,
+                    review_client=review_client,
                     conv_logger=conv_logger,
                     idea_index=processed_count + 1,
                 )
@@ -233,15 +240,22 @@ class IdeasWatcher:
         self,
         client: CodeBuddyClient,
         idea: dict,
+        review_client: CodeBuddyClient = None,
         conv_logger: ConversationLogger = None,
         idea_index: int = 1,
     ) -> List[dict]:
         """
         Call AI to decompose an idea into structured TODO tasks.
         
+        If a review_client is provided, the generated tasks are sent to a
+        fresh-context AI for review. If the review rejects the tasks, the
+        feedback is sent back to the original AI for revision. This loop
+        repeats up to MAX_REVIEW_ROUNDS times.
+        
         Args:
             client: CodeBuddyClient instance
             idea: Idea dict with 'title', 'content', 'body' fields
+            review_client: Optional CodeBuddyClient with fresh context for review
             conv_logger: Optional ConversationLogger to record prompts/responses
             idea_index: 1-based index of the idea (for logging)
             
@@ -321,11 +335,210 @@ Or for a nested task:
 
             # Parse the YAML from the AI response
             tasks = self._extract_yaml_tasks(result)
+
+            # Review loop: send tasks to a fresh-context reviewer AI
+            if review_client and tasks:
+                for review_round in range(1, self.MAX_REVIEW_ROUNDS + 1):
+                    review_passed, review_feedback = self._review_tasks(
+                        review_client, idea, tasks, result,
+                        conv_logger=conv_logger,
+                        review_round=review_round,
+                    )
+                    if review_passed:
+                        print(f"   ✅ Review passed (round {review_round})")
+                        break
+                    else:
+                        print(f"   🔄 Review rejected (round {review_round}), requesting revision...")
+                        # Send feedback back to original AI for revision
+                        result, tasks = self._revise_tasks(
+                            client, idea, review_feedback,
+                            conv_logger=conv_logger,
+                            revision_round=review_round,
+                        )
+                        if not tasks:
+                            logger.warning(
+                                f"Revision round {review_round} produced no tasks"
+                            )
+                            break
+                else:
+                    # Exhausted all review rounds — accept last version
+                    print(
+                        f"   ⚠️  Max review rounds ({self.MAX_REVIEW_ROUNDS}) reached, "
+                        f"accepting current tasks"
+                    )
+
+            # Write section end separator
+            if conv_logger:
+                conv_logger.log_ideas_section_end()
+
             return tasks
 
         except AICallError as e:
             logger.error(f"AI call failed for idea decomposition: {e}")
             raise
+
+    def _review_tasks(
+        self,
+        review_client: CodeBuddyClient,
+        idea: dict,
+        tasks: List[dict],
+        raw_yaml_response: str,
+        conv_logger: ConversationLogger = None,
+        review_round: int = 1,
+    ) -> tuple:
+        """
+        Send generated tasks to a fresh-context reviewer AI for quality check.
+        
+        Args:
+            review_client: CodeBuddyClient with fresh context
+            idea: Original idea dict
+            tasks: Parsed task list
+            raw_yaml_response: Raw YAML response from the decomposition AI
+            conv_logger: Optional ConversationLogger
+            review_round: 1-based review round number
+            
+        Returns:
+            tuple: (passed: bool, feedback: str)
+                   passed=True if review approves, feedback contains reviewer comments
+        """
+        tasks_yaml = yaml.dump(tasks, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+        review_prompt = f"""You are a task review expert. Review the following TODO task decomposition
+for quality, completeness, and correctness.
+
+## Original Idea
+
+### Title
+{idea['title']}
+
+### Content
+{idea['content']}
+
+## Generated Tasks (YAML)
+
+```yaml
+{tasks_yaml}```
+
+## Review Criteria
+
+1. Are the task IDs correct and consistent (including subtask dot notation)?
+2. Are the task types appropriate (simple vs nested, simple vs long_running for subtasks)?
+3. Are the completion_criteria clear, specific, and measurable?
+4. Does the decomposition fully cover the original idea?
+5. Are there any missing or redundant tasks?
+6. Is the YAML structure valid and well-formed?
+
+## Instructions
+
+If the tasks pass all criteria, respond with EXACTLY:
+✅ completed
+
+If the tasks need improvement, respond with:
+❌ not completed
+
+Followed by specific feedback on what needs to be fixed.
+"""
+
+        try:
+            if conv_logger:
+                conv_logger.log_ideas_review_prompt(review_round, review_prompt)
+
+            review_result = review_client.ask(review_prompt, continue_session=False)
+
+            if conv_logger:
+                conv_logger.log_ideas_review_response(review_result)
+
+            passed = self._check_review_passed(review_result)
+            return passed, review_result
+
+        except AICallError as e:
+            logger.error(f"AI call failed for idea review: {e}")
+            # On review failure, accept the tasks to avoid blocking
+            return True, ""
+
+    def _revise_tasks(
+        self,
+        client: CodeBuddyClient,
+        idea: dict,
+        review_feedback: str,
+        conv_logger: ConversationLogger = None,
+        revision_round: int = 1,
+    ) -> tuple:
+        """
+        Send review feedback back to the original AI for task revision.
+        
+        Args:
+            client: Original CodeBuddyClient (with existing context)
+            idea: Original idea dict
+            review_feedback: Feedback from the reviewer AI
+            conv_logger: Optional ConversationLogger
+            revision_round: 1-based revision round number
+            
+        Returns:
+            tuple: (raw_response: str, tasks: List[dict])
+        """
+        revision_prompt = f"""Your previous task decomposition was reviewed and needs revision.
+
+## Reviewer Feedback
+
+{review_feedback}
+
+## Instructions
+
+Please revise the task decomposition based on the feedback above.
+Respond with ONLY valid YAML (no markdown code fences, no extra text).
+"""
+
+        try:
+            if conv_logger:
+                conv_logger.log_ideas_revision_prompt(revision_round, revision_prompt)
+
+            result = client.ask(revision_prompt, continue_session=True)
+
+            if conv_logger:
+                conv_logger.log_ideas_revision_response(result)
+
+            tasks = self._extract_yaml_tasks(result)
+            return result, tasks
+
+        except AICallError as e:
+            logger.error(f"AI call failed for idea revision: {e}")
+            raise
+
+    @staticmethod
+    def _check_review_passed(review_response: str) -> bool:
+        """
+        Check if the reviewer AI approved the tasks.
+        
+        Uses the same three-layer detection strategy as SimpleTaskExecutor:
+        1. Strict negative markers (highest priority)
+        2. Strict positive markers
+        3. Fuzzy positive matching (fallback)
+        
+        Args:
+            review_response: The reviewer's response text
+            
+        Returns:
+            bool: True if review passed
+        """
+        lower = review_response.lower()
+
+        # Layer 1: Strict negative markers
+        if '❌ not completed' in lower or '❌not completed' in lower:
+            return False
+
+        # Layer 2: Strict positive markers
+        if '✅ completed' in lower or '✅completed' in lower:
+            return True
+
+        # Layer 3: Fuzzy matching
+        import re as _re
+        if _re.search(r'✅.*completed', lower):
+            if not _re.search(r'not\s+completed|fail|reject', lower):
+                return True
+
+        # Default: not passed
+        return False
 
     def _extract_yaml_tasks(self, response: str) -> List[dict]:
         """

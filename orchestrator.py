@@ -559,12 +559,25 @@ class TodoOrchestrator:
                 timeout=self.timeout,
                 context_id="ideas_processor",
             )
+            # Review client uses the same TestProvider (shared rule sequence)
+            review_client = AIClientTest(
+                provider=self.provider,
+                workspace=self.workspace,
+                timeout=self.timeout,
+                context_id="ideas_reviewer",
+            )
         elif self.use_cli:
             client = AIClient(
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
                 context_id="ideas_processor",
+            )
+            review_client = AIClient(
+                provider=self.provider,
+                workspace=self.workspace,
+                timeout=self.timeout,
+                context_id="ideas_reviewer",
             )
         else:
             client = AIClientSDK(
@@ -573,8 +586,18 @@ class TodoOrchestrator:
                 timeout=self.timeout,
                 context_id="ideas_processor",
             )
+            review_client = AIClientSDK(
+                provider=self.provider,
+                workspace=self.workspace,
+                timeout=self.timeout,
+                context_id="ideas_reviewer",
+            )
         
-        count = self.ideas_watcher.process_new_ideas(client, conv_logger=self.conv_logger)
+        count = self.ideas_watcher.process_new_ideas(
+            client,
+            review_client=review_client,
+            conv_logger=self.conv_logger,
+        )
         
         if count > 0:
             print(f"\n   📝 Processed {count} new idea(s), reloading task list...")

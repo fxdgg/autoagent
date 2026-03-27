@@ -372,7 +372,6 @@ class ConversationLogger:
         content_parts = []
         content_parts.append(f"### Response\n\n")
         content_parts.append(f"```yaml\n{response}\n```\n\n")
-        content_parts.append(f"---\n\n")
 
         try:
             with open(filepath, 'a', encoding='utf-8') as f:
@@ -380,6 +379,120 @@ class ConversationLogger:
             logger.debug(f"Logged ideas response to {filepath}")
         except Exception as e:
             logger.error(f"Failed to write ideas response log to {filepath}: {e}")
+
+    def log_ideas_review_prompt(
+        self,
+        review_round: int,
+        prompt: str,
+    ):
+        """
+        Write the prompt section for an ideas review call.
+
+        Appended to the same ``conversations/ideas.md`` file, under the
+        current idea section.
+
+        Args:
+            review_round: 1-based review round number
+            prompt: The review prompt sent to AI
+        """
+        filepath = os.path.join(self.session_dir, "ideas.md")
+
+        content_parts = []
+        content_parts.append(f"### Review #{review_round} Prompt\n\n")
+        content_parts.append(f"```\n{prompt}\n```\n\n")
+
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write("".join(content_parts))
+            logger.debug(f"Logged ideas review prompt to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to write ideas review prompt log to {filepath}: {e}")
+
+    def log_ideas_review_response(
+        self,
+        response: str,
+    ):
+        """
+        Append the response section for an ideas review call.
+
+        Must be called after ``log_ideas_review_prompt``.
+
+        Args:
+            response: The reviewer AI response
+        """
+        filepath = os.path.join(self.session_dir, "ideas.md")
+
+        content_parts = []
+        content_parts.append(f"### Review Response\n\n")
+        content_parts.append(f"{response}\n\n")
+
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write("".join(content_parts))
+            logger.debug(f"Logged ideas review response to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to write ideas review response log to {filepath}: {e}")
+
+    def log_ideas_revision_prompt(
+        self,
+        revision_round: int,
+        prompt: str,
+    ):
+        """
+        Write the prompt section for an ideas revision call (after review rejection).
+
+        Args:
+            revision_round: 1-based revision round number
+            prompt: The revision prompt sent to the original AI
+        """
+        filepath = os.path.join(self.session_dir, "ideas.md")
+
+        content_parts = []
+        content_parts.append(f"### Revision #{revision_round} Prompt\n\n")
+        content_parts.append(f"```\n{prompt}\n```\n\n")
+
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write("".join(content_parts))
+            logger.debug(f"Logged ideas revision prompt to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to write ideas revision prompt log to {filepath}: {e}")
+
+    def log_ideas_revision_response(
+        self,
+        response: str,
+    ):
+        """
+        Append the response section for an ideas revision call.
+
+        Must be called after ``log_ideas_revision_prompt``.
+
+        Args:
+            response: The revised AI response (YAML task definitions)
+        """
+        filepath = os.path.join(self.session_dir, "ideas.md")
+
+        content_parts = []
+        content_parts.append(f"### Revision Response\n\n")
+        content_parts.append(f"```yaml\n{response}\n```\n\n")
+
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write("".join(content_parts))
+            logger.debug(f"Logged ideas revision response to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to write ideas revision response log to {filepath}: {e}")
+
+    def log_ideas_section_end(self):
+        """Write a separator to mark the end of an idea's processing section."""
+        filepath = os.path.join(self.session_dir, "ideas.md")
+
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write("---\n\n")
+            logger.debug(f"Logged ideas section end to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to write ideas section end to {filepath}: {e}")
 
     def finalize(self):
         """
