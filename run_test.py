@@ -349,6 +349,7 @@ Examples:
   python run_test.py --results                     # Show results summary
   python run_test.py --list-providers              # List available AI providers
   python run_test.py --ideas ideas.md              # Process ideas.md into TODOs
+  python run_test.py --ideas ideas.md --ideas-only # Process ideas only (with human review)
   python run_test.py --idle --ideas ideas.md       # Run then idle for new ideas
         """,
     )
@@ -431,6 +432,12 @@ Examples:
         "--ideas",
         default=None,
         help="Path to ideas.md file. When set, new ideas will be processed into TODO tasks.",
+    )
+    parser.add_argument(
+        "--ideas-only",
+        action="store_true",
+        help="Only process ideas.md (with human review), do not run the TODO task list. "
+             "Requires --ideas. After AI review passes, pauses for human approval.",
     )
     parser.add_argument(
         "--idle",
@@ -561,6 +568,11 @@ Examples:
     if args.ideas:
         ideas_path = os.path.abspath(os.path.join(project_root, args.ideas))
         extra.extend(["--ideas", ideas_path])
+    if args.ideas_only:
+        if not args.ideas:
+            print("\n❌ --ideas-only mode requires --ideas to be set.")
+            sys.exit(1)
+        extra.append("--ideas-only")
     if args.idle:
         if not args.ideas:
             print("\n❌ --idle mode requires --ideas to be set.")

@@ -534,9 +534,12 @@ class TodoOrchestrator:
             self.ideas_watcher.reset()
         print("✅ All task states have been reset.")
 
-    def check_and_process_ideas(self) -> int:
+    def check_and_process_ideas(self, human_review: bool = False) -> int:
         """
         Check for new ideas in ideas.md and process them into TODO tasks.
+        
+        Args:
+            human_review: If True, pause for human approval after AI review passes.
         
         Returns:
             int: Number of new ideas processed (0 if no watcher or no new ideas)
@@ -597,6 +600,7 @@ class TodoOrchestrator:
             client,
             review_client=review_client,
             conv_logger=self.conv_logger,
+            human_review=human_review,
         )
         
         if count > 0:
@@ -787,6 +791,7 @@ Examples:
   python orchestrator.py --reset                         # Reset all state
   python orchestrator.py --verbose                       # Enable debug logging
   python orchestrator.py --ideas ideas.md                # Watch ideas.md for new ideas
+  python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (with human review)
   python orchestrator.py --idle --ideas ideas.md         # Run tasks then idle for ideas
   python orchestrator.py --list-providers                # List available AI providers
         """,
@@ -883,6 +888,13 @@ Examples:
         help='Path to ideas.md file. When set, new ideas will be processed into TODO tasks.',
     )
     parser.add_argument(
+        '--ideas-only',
+        action='store_true',
+        help='Only process ideas.md (with human review), do not run the TODO task list. '
+             'Requires --ideas to be set. After AI review passes, pauses for human '
+             'approval. Enter y to accept and exit, or n to provide feedback for revision.',
+    )
+    parser.add_argument(
         '--idle',
         action='store_true',
         help='Enter idle mode after completing tasks. Waits for new ideas in ideas.md. '
@@ -947,6 +959,11 @@ Examples:
         # Validate idle mode requires ideas file
         if args.idle and not args.ideas:
             print("❌ --idle mode requires --ideas to be set.")
+            sys.exit(1)
+        
+        # Validate --ideas-only requires --ideas
+        if args.ideas_only and not args.ideas:
+            print("❌ --ideas-only mode requires --ideas to be set.")
             sys.exit(1)
         
         # Validate non-codebuddy providers always use CLI (SDK is codebuddy-only)
@@ -1017,7 +1034,17 @@ Examples:
         
         # Process ideas before running tasks (if ideas file is configured)
         if orchestrator.ideas_watcher:
-            orchestrator.check_and_process_ideas()
+            orchestrator.check_and_process_ideas(
+                human_review=args.ideas_only,
+            )
+        
+        # --ideas-only mode: only process ideas, then exit
+        if args.ideas_only:
+            if orchestrator.conv_logger:
+                orchestrator.conv_logger.finalize()
+                print(f"📝 Conversation logs saved to: {orchestrator.session_dir}")
+            print(f"\n✅ Ideas processing complete.")
+            return
         
         if args.idle:
             # Idle mode: run tasks then wait for new ideas

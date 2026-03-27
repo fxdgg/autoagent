@@ -190,6 +190,7 @@ class IdeasWatcher:
         client: CodeBuddyClient,
         review_client: CodeBuddyClient = None,
         conv_logger: ConversationLogger = None,
+        human_review: bool = False,
     ) -> int:
         """
         Process all new ideas: parse, convert to TODOs via AI, and append to todos.yaml.
@@ -199,6 +200,9 @@ class IdeasWatcher:
             review_client: Optional CodeBuddyClient with fresh context for reviewing
                            generated tasks. If None, review step is skipped.
             conv_logger: Optional ConversationLogger to record prompts/responses
+            human_review: If True, after AI review passes, pause for human approval.
+                          Human can accept (y) or reject with feedback (n) which
+                          triggers another AI revision cycle.
             
         Returns:
             int: Number of new ideas processed
@@ -218,6 +222,7 @@ class IdeasWatcher:
                     review_client=review_client,
                     conv_logger=conv_logger,
                     idea_index=processed_count + 1,
+                    human_review=human_review,
                 )
                 if new_tasks:
                     self._append_tasks_to_todos(new_tasks)
@@ -243,6 +248,7 @@ class IdeasWatcher:
         review_client: CodeBuddyClient = None,
         conv_logger: ConversationLogger = None,
         idea_index: int = 1,
+        human_review: bool = False,
     ) -> List[dict]:
         """
         Call AI to decompose an idea into structured TODO tasks.
@@ -252,12 +258,17 @@ class IdeasWatcher:
         feedback is sent back to the original AI for revision. This loop
         repeats up to MAX_REVIEW_ROUNDS times.
         
+        When human_review is True, after AI review passes the program pauses
+        for human approval. The human can accept (y) or provide feedback (n)
+        which triggers another AI revision + review cycle.
+        
         Args:
             client: CodeBuddyClient instance
             idea: Idea dict with 'title', 'content', 'body' fields
             review_client: Optional CodeBuddyClient with fresh context for review
             conv_logger: Optional ConversationLogger to record prompts/responses
             idea_index: 1-based index of the idea (for logging)
+            human_review: If True, pause for human approval after AI review passes
             
         Returns:
             List[dict]: List of task configurations compatible with todos.yaml format
@@ -366,6 +377,13 @@ Or for a nested task:
                         f"   ⚠️  Max review rounds ({self.MAX_REVIEW_ROUNDS}) reached, "
                         f"accepting current tasks"
                     )
+
+            # Human review loop: after AI review passes, pause for human approval
+            if human_review and tasks:
+                tasks = self._human_review_loop(
+                    client, review_client, idea, tasks, result,
+                    conv_logger=conv_logger,
+                )
 
             # Write section end separator
             if conv_logger:
@@ -539,6 +557,157 @@ Respond with ONLY valid YAML (no markdown code fences, no extra text).
 
         # Default: not passed
         return False
+
+    def _human_review_loop(
+        self,
+        client: CodeBuddyClient,
+        review_client: CodeBuddyClient,
+        idea: dict,
+        tasks: List[dict],
+        raw_yaml_response: str,
+        conv_logger: ConversationLogger = None,
+    ) -> List[dict]:
+        """
+        Pause for human review after AI review passes.
+        
+        Displays the generated tasks and waits for human input:
+        - 'y': Accept the tasks and continue
+        - 'n': Human provides feedback, AI revises, AI re-reviews, then
+               pauses for human review again
+        
+        Args:
+            client: Original CodeBuddyClient (with existing context)
+            review_client: CodeBuddyClient for AI review (fresh context)
+            idea: Original idea dict
+            tasks: Current parsed task list
+            raw_yaml_response: Raw YAML response from the last AI call
+            conv_logger: Optional ConversationLogger
+            
+        Returns:
+            List[dict]: Final approved task list
+        """
+        revision_counter = 0
+        result = raw_yaml_response
+
+        while True:
+            # Display current tasks for human review
+            tasks_yaml = yaml.dump(
+                tasks, default_flow_style=False,
+                allow_unicode=True, sort_keys=False,
+            )
+            print(f"\n{'─' * 60}")
+            print(f"   👤 Human Review Required")
+            print(f"{'─' * 60}")
+            print(f"   Idea: {idea['title']}")
+            print(f"\n   Generated Tasks:")
+            print(f"{'─' * 40}")
+            for line in tasks_yaml.split('\n'):
+                print(f"   {line}")
+            print(f"{'─' * 40}")
+
+            # Wait for human input
+            try:
+                choice = input("\n   Accept these tasks? (y/n): ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\n   ⚠️  Input interrupted, accepting current tasks.")
+                break
+
+            if choice == 'y':
+                print(f"   ✅ Human approved the tasks.")
+                break
+            elif choice == 'n':
+                # Get human feedback
+                print(f"   Please provide your feedback (end with an empty line):")
+                feedback_lines = []
+                try:
+                    while True:
+                        line = input("   > ")
+                        if line.strip() == '':
+                            break
+                        feedback_lines.append(line)
+                except (EOFError, KeyboardInterrupt):
+                    print("\n   ⚠️  Input interrupted, accepting current tasks.")
+                    break
+
+                if not feedback_lines:
+                    print(f"   ⚠️  No feedback provided, please try again.")
+                    continue
+
+                human_feedback = '\n'.join(feedback_lines)
+                revision_counter += 1
+
+                # Log human feedback
+                if conv_logger:
+                    conv_logger.log_ideas_revision_prompt(
+                        revision_counter,
+                        f"[Human Feedback]\n{human_feedback}",
+                    )
+
+                print(f"   🔄 Sending human feedback to AI for revision...")
+
+                # Send human feedback to AI for revision
+                revision_prompt = f"""Your task decomposition needs revision based on human feedback.
+
+## Human Feedback
+
+{human_feedback}
+
+## Instructions
+
+Please revise the task decomposition based on the feedback above.
+Respond with ONLY valid YAML (no markdown code fences, no extra text).
+"""
+                try:
+                    result = client.ask(revision_prompt, continue_session=True)
+
+                    if conv_logger:
+                        conv_logger.log_ideas_revision_response(result)
+
+                    tasks = self._extract_yaml_tasks(result)
+                    if not tasks:
+                        print(f"   ⚠️  AI revision produced no valid tasks, keeping previous version.")
+                        continue
+
+                    # Re-run AI review on the revised tasks
+                    if review_client:
+                        review_round = 0
+                        for review_round in range(1, self.MAX_REVIEW_ROUNDS + 1):
+                            review_passed, review_feedback = self._review_tasks(
+                                review_client, idea, tasks, result,
+                                conv_logger=conv_logger,
+                                review_round=review_round,
+                            )
+                            if review_passed:
+                                print(f"   ✅ AI review passed (round {review_round})")
+                                break
+                            else:
+                                print(f"   🔄 AI review rejected (round {review_round}), requesting revision...")
+                                result, tasks = self._revise_tasks(
+                                    client, idea, review_feedback,
+                                    conv_logger=conv_logger,
+                                    revision_round=review_round,
+                                )
+                                if not tasks:
+                                    logger.warning(
+                                        f"Revision round {review_round} produced no tasks"
+                                    )
+                                    break
+                        else:
+                            print(
+                                f"   ⚠️  Max AI review rounds ({self.MAX_REVIEW_ROUNDS}) reached, "
+                                f"presenting current version for human review"
+                            )
+
+                    # Loop back to human review with updated tasks
+
+                except AICallError as e:
+                    logger.error(f"AI call failed during human-feedback revision: {e}")
+                    print(f"   ❌ AI revision failed: {e}")
+                    print(f"   Keeping previous version.")
+            else:
+                print(f"   ⚠️  Invalid input. Please enter 'y' or 'n'.")
+
+        return tasks
 
     def _extract_yaml_tasks(self, response: str) -> List[dict]:
         """
