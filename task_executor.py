@@ -72,6 +72,8 @@ class SimpleTaskExecutor:
         
         logger.info(f"Executing simple task {task_id}: {task['name']}")
         
+        last_timeout_error = None  # Track if previous attempt timed out
+        
         while attempts < max_attempts:
             attempts += 1
             state_manager.mark_task_status(
@@ -85,8 +87,13 @@ class SimpleTaskExecutor:
             # Re-fetch state each attempt so history from previous attempts is visible
             current_state = state_manager.get_task_state(task_id)
             
-            # Build prompt
-            prompt = self._build_prompt(task, attempts, current_state, parent_context=parent_context)
+            # Build prompt (with timeout feedback if previous attempt timed out)
+            prompt = self._build_prompt(
+                task, attempts, current_state,
+                parent_context=parent_context,
+                timeout_feedback=last_timeout_error,
+            )
+            last_timeout_error = None  # Reset after injecting into prompt
             
             try:
                 # First attempt of a main task: don't continue session
@@ -166,6 +173,11 @@ class SimpleTaskExecutor:
             except AICallError as e:
                 logger.error(f"AI call failed for task {task_id}: {e}")
                 print(f"   ❌ AI call error: {e}")
+                # Detect timeout errors so we can inject feedback in the next prompt
+                error_str = str(e).lower()
+                if "timed out" in error_str or "timeout" in error_str:
+                    last_timeout_error = str(e)
+                    print(f"   ⏰ Timeout detected — next attempt will include long-running task guidance")
                 # Append error as response (prompt was already logged above)
                 if conv_logger:
                     conv_logger.log_response(
@@ -189,7 +201,7 @@ class SimpleTaskExecutor:
         )
         return False
 
-    def _build_prompt(self, task: dict, attempt: int, state: dict, parent_context: dict = None) -> str:
+    def _build_prompt(self, task: dict, attempt: int, state: dict, parent_context: dict = None, timeout_feedback: str = None) -> str:
         """Build the prompt for AI.
         
         Args:
@@ -200,6 +212,10 @@ class SimpleTaskExecutor:
                 - subtasks: list of all sibling subtasks (for orientation)
                 - suggested_fix: AI's suggested fix from failure analysis
                 - ai_decisions: list of past AI decisions
+            timeout_feedback: If set, the previous AI call timed out.
+                This string contains the error message. The prompt will
+                include guidance on using autoagent-exec for long-running
+                commands.
         """
         parts = [
             "You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.",
@@ -252,12 +268,54 @@ class SimpleTaskExecutor:
                     "Please analyze what went wrong and try a different approach."
                 )
         
+        # Inject timeout feedback with autoagent-exec guidance
+        if timeout_feedback:
+            # Resolve autoagent-exec path for the guidance
+            exec_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "autoagent_exec.py"
+            ).replace("\\", "/")
+            # Resolve log session dir from SubtaskExecutor if available
+            log_session_dir = ""
+            subtask_exec = getattr(self, '_subtask_executor', None)
+            if subtask_exec and subtask_exec.session_dir:
+                log_session_dir = subtask_exec.session_dir.replace("\\", "/")
+            
+            timeout_guidance = (
+                f"**⏰ TIMEOUT WARNING:** Your previous Bash command timed out ({timeout_feedback}). "
+                f"The session was terminated before completion.\n\n"
+                f"If your task requires running a command that takes more than a few minutes "
+                f"(e.g. compilation, benchmarking, data processing), you MUST use the "
+                f"`autoagent-exec` launcher to run it as a background task:\n\n"
+                f'python "{exec_path}" --log-dir "{log_session_dir}" --task-id {str(task["id"])} -- <your command here>\n\n'
+                f"- If the command fails within 10s, the error is shown immediately — fix and retry.\n"
+                f"- If the command is still running after 10s, it will be detached and you will see \"TASK SUBMITTED\".\n"
+                f"- When you see \"TASK SUBMITTED\", output: ⏳ LONG_RUNNING_IN_PROGRESS\n"
+                f"  AutoAgent will call you back with the results.\n\n"
+                f"**Do NOT run long-running commands directly via Bash.** Use autoagent-exec instead."
+            )
+            parts.append(timeout_guidance)
+        
         parts.append(
             "\nWhen finished, end your response with EXACTLY one of these status lines (on its own line):\n"
             "  ✅ completed\n"
             "  ❌ not completed: <reason>\n"
             "This status line is MANDATORY and must be the LAST line of your response."
         )
+
+        # On the first attempt, briefly explain autoagent-exec so the AI
+        # knows how to handle long-running commands *before* hitting a timeout.
+        if attempt == 1:
+            exec_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "autoagent_exec.py"
+            ).replace("\\", "/")
+            parts.append(
+                "**Note on long-running commands:** If a Bash command may take more than a few minutes "
+                "(e.g. compilation, benchmarking, profiling), do NOT run it directly. Instead use:\n"
+                f'  python "{exec_path}" --task-id {str(task["id"])} -- <your command>\n'
+                "The launcher will auto-detach after 10s and print \"TASK SUBMITTED\". "
+                "When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS"
+            )
+
         
         return "\n\n".join(parts)
 

@@ -103,7 +103,7 @@ class TodoOrchestrator:
         state_file: str = None,
         provider: AIProvider = None,
         workspace: str = ".",
-        timeout: int = 3600,
+        timeout: int = 300,
         log_dir: str = None,
         ideas_file: str = None,
         idle_interval: int = 30,
@@ -790,9 +790,31 @@ def _ensure_utf8_stdio():
         sys.stderr = open(sys.stderr.fileno(), mode="w", encoding="utf-8", errors="replace", closefd=False)
 
 
+def _load_config():
+    """Load config.yaml from the same directory as this script.
+    
+    Returns:
+        dict: Configuration values. Empty dict if file not found.
+    """
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f) or {}
+            logger.debug(f"Loaded config from {config_path}: {config}")
+            return config
+        except Exception as e:
+            logger.warning(f"Failed to load config.yaml: {e}")
+    return {}
+
+
 def main():
     """CLI entry point."""
     _ensure_utf8_stdio()
+
+    # Load config.yaml defaults
+    config = _load_config()
+    default_timeout = config.get('bash_timeout', 300)
 
     parser = argparse.ArgumentParser(
         description="AI-driven task execution system (supports CodeBuddy, Claude Code, Gemini CLI)",
@@ -865,8 +887,8 @@ Examples:
     parser.add_argument(
         '--timeout',
         type=int,
-        default=3600,
-        help='Timeout for AI calls in seconds (default: 3600)',
+        default=None,
+        help=f'Timeout for AI calls in seconds (default: {default_timeout}, from config.yaml)',
     )
     parser.add_argument(
         '--status',
@@ -1022,11 +1044,14 @@ Examples:
         logger.info(f"Using AI provider: {provider}")
         
         # Create orchestrator
+        # Resolve timeout: CLI arg > config.yaml > fallback 300
+        effective_timeout = args.timeout if args.timeout is not None else default_timeout
+        
         orchestrator = TodoOrchestrator(
             todos_file=args.config,
             provider=provider,
             workspace=args.workspace,
-            timeout=args.timeout,
+            timeout=effective_timeout,
             log_dir=_log_dir_raw,
             ideas_file=args.ideas,
             idle_interval=args.idle_interval,

@@ -1,0 +1,9 @@
+# AutoAgent Configuration
+# This file provides default settings for the orchestrator.
+# Command-line arguments (e.g. --timeout) will override these values.
+
+# Timeout for each AI call (in seconds).
+# If an AI call exceeds this limit, the session is killed and the next
+# prompt will include a timeout notification with guidance on using
+# autoagent-exec for long-running commands.
+bash_timeout: 300
