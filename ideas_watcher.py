@@ -208,7 +208,8 @@ class IdeasWatcher:
 
         Returns:
             List[dict] if the file exists and contains a valid YAML list,
-            None otherwise.  The temp file is deleted after a successful read.
+            None otherwise.  The caller is responsible for cleaning up the
+            temp file via ``_cleanup_temp_file()`` when appropriate.
         """
         temp_path = self._get_temp_tasks_path()
         if not os.path.exists(temp_path):
@@ -951,13 +952,20 @@ Do NOT include markdown code fences or any extra text in the file.
         """
         revision_counter = 0
         result = raw_yaml_response
+        temp_tasks_path = self._get_temp_tasks_path()
 
         while True:
-            # Display current tasks for human review
+            # Write current tasks to temp file so human can edit directly
             tasks_yaml = yaml.dump(
                 tasks, default_flow_style=False,
                 allow_unicode=True, sort_keys=False,
             )
+            try:
+                with open(temp_tasks_path, 'w', encoding='utf-8') as f:
+                    f.write(tasks_yaml)
+            except OSError as e:
+                logger.warning(f"Failed to write temp file for human review: {e}")
+
             print(f"\n{'─' * 60}")
             print(f"   👤 Human Review Required")
             print(f"{'─' * 60}")
@@ -967,6 +975,8 @@ Do NOT include markdown code fences or any extra text in the file.
             for line in tasks_yaml.split('\n'):
                 print(f"   {line}")
             print(f"{'─' * 40}")
+            print(f"\n   📝 You can also edit the tasks directly in:")
+            print(f"      {temp_tasks_path}")
 
             # Wait for human input
             try:
@@ -976,11 +986,43 @@ Do NOT include markdown code fences or any extra text in the file.
                 break
 
             if choice == 'y':
-                print(f"   ✅ Human approved the tasks.")
+                # Check if human edited the temp file
+                edited_tasks = self._read_tasks_from_temp_file()
+                if edited_tasks is not None:
+                    # Validate the human-edited tasks
+                    valid, errors = self._validate_tasks_schema(edited_tasks)
+                    if valid:
+                        tasks = edited_tasks
+                        print(f"   ✅ Human approved the tasks (loaded from temp file).")
+                    else:
+                        print(f"   ⚠️  Temp file has schema errors:")
+                        for e in errors:
+                            print(f"      • {e}")
+                        print(f"   Please fix the errors and try again.")
+                        # Restore tasks in temp file and loop back
+                        continue
+                else:
+                    print(f"   ✅ Human approved the tasks.")
                 break
             elif choice == 'n':
-                # Get human feedback
-                print(f"   Please provide your feedback (end with an empty line):")
+                # Check if human already edited the temp file
+                edited_tasks = self._read_tasks_from_temp_file()
+                temp_file_loaded = False
+                if edited_tasks is not None:
+                    # Human edited the file — validate and use it
+                    valid, errors = self._validate_tasks_schema(edited_tasks)
+                    if valid:
+                        tasks = edited_tasks
+                        temp_file_loaded = True
+                        print(f"   📝 Loaded human-edited tasks from temp file.")
+                    else:
+                        print(f"   ⚠️  Temp file has schema errors:")
+                        for e in errors:
+                            print(f"      • {e}")
+                        print(f"   Please fix the errors and try again, or provide text feedback below.")
+
+                # Get human feedback prompt for AI reviewer
+                print(f"   Please provide your feedback for AI reviewer (end with an empty line, or leave empty to skip):")
                 feedback_lines = []
                 try:
                     while True:
@@ -992,27 +1034,39 @@ Do NOT include markdown code fences or any extra text in the file.
                     print("\n   ⚠️  Input interrupted, accepting current tasks.")
                     break
 
-                if not feedback_lines:
-                    print(f"   ⚠️  No feedback provided, please try again.")
+                human_feedback = '\n'.join(feedback_lines) if feedback_lines else ''
+
+                if not human_feedback and not temp_file_loaded:
+                    print(f"   ⚠️  No feedback provided and no file edits detected, please try again.")
                     continue
 
-                human_feedback = '\n'.join(feedback_lines)
-                revision_counter += 1
+                if human_feedback:
+                    revision_counter += 1
 
-                # Log human feedback
-                if conv_logger:
-                    conv_logger.log_ideas_revision_prompt(
-                        revision_counter,
-                        f"[Human Feedback]\n{human_feedback}",
+                    # Log human feedback
+                    if conv_logger:
+                        conv_logger.log_ideas_revision_prompt(
+                            revision_counter,
+                            f"[Human Feedback]\n{human_feedback}",
+                        )
+
+                    print(f"   🔄 Sending human feedback to AI for revision...")
+
+                    # Send human feedback to AI for revision
+                    self._cleanup_temp_file()
+
+                    # Build revision prompt with current tasks context
+                    current_tasks_yaml = yaml.dump(
+                        tasks, default_flow_style=False,
+                        allow_unicode=True, sort_keys=False,
                     )
+                    revision_prompt = f"""Your task decomposition needs revision based on human feedback.
 
-                print(f"   🔄 Sending human feedback to AI for revision...")
+## Current Tasks
 
-                # Send human feedback to AI for revision
-                temp_tasks_path = self._get_temp_tasks_path()
-                self._cleanup_temp_file()
-
-                revision_prompt = f"""Your task decomposition needs revision based on human feedback.
+```yaml
+{current_tasks_yaml}
+```
 
 ## Human Feedback
 
@@ -1026,37 +1080,38 @@ Write ONLY valid YAML (a list of tasks) into the following file:
 
 Do NOT include markdown code fences or any extra text in the file.
 """
-                try:
-                    result = client.ask(revision_prompt, continue_session=True)
+                    try:
+                        result = client.ask(revision_prompt, continue_session=True)
 
-                    if conv_logger:
-                        conv_logger.log_ideas_revision_response(result)
+                        if conv_logger:
+                            conv_logger.log_ideas_revision_response(result)
 
-                    tasks = self._read_tasks_from_temp_file()
-                    if tasks is None:
-                        logger.info("Temp file not found after human-feedback revision, falling back to response text parsing")
-                        tasks = self._extract_yaml_tasks(result)
-                    self._cleanup_temp_file()
-                    if not tasks:
-                        print(f"   ⚠️  AI revision produced no valid tasks, keeping previous version.")
+                        tasks = self._read_tasks_from_temp_file()
+                        if tasks is None:
+                            logger.info("Temp file not found after human-feedback revision, falling back to response text parsing")
+                            tasks = self._extract_yaml_tasks(result)
+                        if not tasks:
+                            print(f"   ⚠️  AI revision produced no valid tasks, keeping previous version.")
+                            continue
+
+                    except AICallError as e:
+                        logger.error(f"AI call failed during human-feedback revision: {e}")
+                        print(f"   ❌ AI revision failed: {e}")
+                        print(f"   Keeping previous version.")
                         continue
 
-                    # Re-run AI review + schema validation on the revised tasks
-                    if tasks:
-                        tasks, result = self._review_and_validate_loop(
-                            client, review_client, idea, tasks, result,
-                            conv_logger=conv_logger,
-                        )
+                # Re-run AI review + schema validation on the (possibly revised) tasks
+                tasks, result = self._review_and_validate_loop(
+                    client, review_client, idea, tasks, result,
+                    conv_logger=conv_logger,
+                )
 
-                    # Loop back to human review with updated tasks
-
-                except AICallError as e:
-                    logger.error(f"AI call failed during human-feedback revision: {e}")
-                    print(f"   ❌ AI revision failed: {e}")
-                    print(f"   Keeping previous version.")
+                # Loop back to human review with updated tasks
             else:
                 print(f"   ⚠️  Invalid input. Please enter 'y' or 'n'.")
 
+        # Clean up temp file when leaving the human review loop
+        self._cleanup_temp_file()
         return tasks
 
     def _extract_yaml_tasks(self, response: str) -> List[dict]:
