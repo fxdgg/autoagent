@@ -6,8 +6,6 @@ Corresponds to ``SubtaskExecutor._build_long_running_prompt()`` and
 """
 
 from prompts.shared import (
-    SYSTEM_PROMPT_CODING_AGENT,
-    STATUS_MARKER_INSTRUCTION,
     apply_system_prompt_prefix,
     build_sibling_context,
     build_history_section,
@@ -35,7 +33,6 @@ def build_long_running_prompt(
         parent_context: Optional context from the parent task.
     """
     parts = [
-        SYSTEM_PROMPT_CODING_AGENT,
         f"Task: {subtask['name']}",
         f"Type: long_running (\u26a0\ufe0f This task may take a long time)",
         f"Completion Criteria: {subtask['completion_criteria']}",
@@ -131,6 +128,4 @@ Please:
 1. Read the output log file above to understand what happened
 2. Evaluate whether the task completed successfully
 3. Check if the results meet the completion criteria
-4. If the task produced output files, you may examine them as needed
-
-{STATUS_MARKER_INSTRUCTION}"""
+4. If the task produced output files, you may examine them as needed"""

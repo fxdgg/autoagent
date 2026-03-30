@@ -121,6 +121,7 @@ class AIClient:
         prompt: str,
         expect_json: bool = False,
         timeout: int = None,
+        system_prompt: str = None,
         **kwargs,
     ) -> Union[str, dict]:
         """
@@ -135,6 +136,9 @@ class AIClient:
             prompt: The prompt to send
             expect_json: Whether to parse the response as JSON
             timeout: Override default timeout
+            system_prompt: Optional system prompt.  For providers that
+                support ``--append-system-prompt`` it is passed via CLI;
+                for others it is prepended to the user prompt.
             
         Returns:
             str or dict: The AI response (parsed as JSON if expect_json=True)
@@ -158,7 +162,14 @@ class AIClient:
             time.sleep(delay)
 
         # Build command args (without prompt - prompt goes via stdin)
-        cmd_args = self._build_command()
+        # If the provider supports --append-system-prompt, pass it via CLI;
+        # otherwise prepend it to the user prompt.
+        effective_system_prompt = system_prompt
+        if effective_system_prompt and not self.provider.supports_system_prompt:
+            prompt = effective_system_prompt + "\n\n" + prompt
+            effective_system_prompt = None  # Already in prompt
+
+        cmd_args = self._build_command(system_prompt=effective_system_prompt)
         
         logger.info(
             f"[{self.context_id}] Calling {self.provider.name} "
@@ -291,7 +302,7 @@ class AIClient:
                 except OSError:
                     pass
 
-    def _build_command(self) -> str:
+    def _build_command(self, system_prompt: str = None) -> str:
         """
         Build the AI CLI command string (without prompt).
 
@@ -299,10 +310,16 @@ class AIClient:
         specific AI tool being used. If a session_id exists, it is passed
         to the provider so the CLI resumes that session.
 
+        Args:
+            system_prompt: Optional system prompt to pass to the provider.
+
         Returns:
             str: The command string (prompt will be piped via stdin)
         """
-        return self.provider.build_command(session_id=self._session_id)
+        return self.provider.build_command(
+            session_id=self._session_id,
+            system_prompt=system_prompt,
+        )
 
     def _handle_stream_line(self, line: str, assistant_text_parts: list, full_log_parts: list = None):
         """
@@ -743,6 +760,7 @@ class AIClientSDK:
         prompt: str,
         expect_json: bool = False,
         timeout: int = None,
+        system_prompt: str = None,
         **kwargs,
     ) -> Union[str, dict]:
         """
@@ -757,6 +775,9 @@ class AIClientSDK:
             prompt: The prompt to send
             expect_json: Whether to parse the response as JSON
             timeout: Override default timeout
+            system_prompt: Optional system prompt.  The SDK does not
+                support a separate system prompt channel, so it is
+                prepended to the user prompt.
             
         Returns:
             str or dict: The AI response (parsed as JSON if expect_json=True)
@@ -765,6 +786,10 @@ class AIClientSDK:
             AICallError: If the call fails
         """
         effective_timeout = timeout or self.timeout
+
+        # SDK does not support a separate system prompt; prepend to user prompt
+        if system_prompt:
+            prompt = system_prompt + "\n\n" + prompt
 
         # Exponential backoff: wait before retrying after consecutive failures
         if self._consecutive_failures > 0:
@@ -1192,6 +1217,7 @@ class AIClientTest:
         prompt: str,
         expect_json: bool = False,
         timeout: int = None,
+        system_prompt: str = None,
         **kwargs,
     ) -> Union[str, dict]:
         """
@@ -1209,6 +1235,8 @@ class AIClientTest:
                     long_running tasks, otherwise logged only)
             expect_json: Whether to parse the response as JSON
             timeout: Ignored
+            system_prompt: Optional system prompt (prepended to prompt
+                for logging purposes only; does not affect test responses)
             
         Returns:
             str or dict: The next test response

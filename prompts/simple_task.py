@@ -5,7 +5,6 @@ Corresponds to ``SimpleTaskExecutor._build_prompt()`` in task_executor.py.
 """
 
 from prompts.shared import (
-    SYSTEM_PROMPT_CODING_AGENT,
     apply_system_prompt_prefix,
     build_sibling_context,
     build_history_section,
@@ -43,7 +42,6 @@ def build_simple_task_prompt(
             convenience script (forward-slash normalised).
     """
     parts = [
-        SYSTEM_PROMPT_CODING_AGENT,
         f"Task: {task['name']}",
         f"Completion Criteria: {task['completion_criteria']}",
     ]

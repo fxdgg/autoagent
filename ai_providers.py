@@ -58,6 +58,11 @@ class AIProvider:
     # Default model
     default_model: str = ""
 
+    # Whether this provider supports --append-system-prompt CLI parameter.
+    # If True, system_prompt is passed via CLI; otherwise it must be
+    # prepended to the user prompt by the caller.
+    supports_system_prompt: bool = False
+
     def __init__(
         self,
         executable: str = None,
@@ -76,7 +81,7 @@ class AIProvider:
         self.model = model or self.default_model
         self.extra_args = extra_args
 
-    def build_command(self, session_id: str = None) -> str:
+    def build_command(self, session_id: str = None, system_prompt: str = None) -> str:
         """
         Build the CLI command string (without prompt).
 
@@ -85,6 +90,9 @@ class AIProvider:
         Args:
             session_id: Session ID to resume. If provided, the CLI will
                 continue an existing conversation. If None, starts a new session.
+            system_prompt: Optional system prompt to append via
+                ``--append-system-prompt``.  Ignored by providers that
+                do not support it (``supports_system_prompt = False``).
 
         Returns:
             str: The command string
@@ -137,8 +145,9 @@ class CodeBuddyProvider(AIProvider):
     name = "codebuddy"
     default_executable = "codebuddy"
     default_model = DEFAULT_MODEL
+    supports_system_prompt = True
 
-    def build_command(self, session_id: str = None) -> str:
+    def build_command(self, session_id: str = None, system_prompt: str = None) -> str:
         parts = [self.executable]
 
         parts.append("--debug --verbose --print")
@@ -148,6 +157,11 @@ class CodeBuddyProvider(AIProvider):
             parts.extend(["--resume", session_id])
 
         parts.extend(["--model", self.model])
+
+        if system_prompt:
+            # Escape double quotes for shell safety
+            escaped = system_prompt.replace('"', '\\"')
+            parts.extend(["--append-system-prompt", f'"{escaped}"'])
 
         if self.extra_args:
             parts.append(self.extra_args)
@@ -175,8 +189,9 @@ class ClaudeCodeProvider(AIProvider):
     name = "claude"
     default_executable = "claude"
     default_model = "claude-sonnet-4-6"
+    supports_system_prompt = True
 
-    def build_command(self, session_id: str = None) -> str:
+    def build_command(self, session_id: str = None, system_prompt: str = None) -> str:
         parts = [self.executable]
 
         parts.append("--verbose --print")
@@ -187,7 +202,12 @@ class ClaudeCodeProvider(AIProvider):
 
         parts.extend(["--model", self.model])
         parts.append("--dangerously-skip-permissions")
-        
+
+        if system_prompt:
+            # Escape double quotes for shell safety
+            escaped = system_prompt.replace('"', '\\"')
+            parts.extend(["--append-system-prompt", f'"{escaped}"'])
+
         if self.extra_args:
             parts.append(self.extra_args)
         
@@ -238,7 +258,7 @@ class GeminiCLIProvider(AIProvider):
         super().__init__(executable=executable, model=model, extra_args=extra_args)
         self.include_directories = include_directories or []
 
-    def build_command(self, session_id: str = None) -> str:
+    def build_command(self, session_id: str = None, system_prompt: str = None) -> str:
         parts = [self.executable]
 
         parts.extend(["--output-format", "stream-json"])
@@ -257,6 +277,8 @@ class GeminiCLIProvider(AIProvider):
         if self.extra_args:
             parts.append(self.extra_args)
         
+        # system_prompt is ignored — Gemini CLI does not support it
+
         # -p - means: non-interactive mode, read prompt from stdin
         parts.extend(["-p", "-"])
         
@@ -289,7 +311,7 @@ class OpenCodeProvider(AIProvider):
     default_executable = "opencode"
     default_model = ""  # Uses opencode's configured default
 
-    def build_command(self, session_id: str = None) -> str:
+    def build_command(self, session_id: str = None, system_prompt: str = None) -> str:
         parts = [self.executable, "run"]
 
         parts.extend(["--format", "json"])
@@ -302,6 +324,8 @@ class OpenCodeProvider(AIProvider):
 
         if self.extra_args:
             parts.append(self.extra_args)
+
+        # system_prompt is ignored — OpenCode does not support it
 
         return " ".join(parts)
 
@@ -437,7 +461,7 @@ class TestProvider(AIProvider):
         """Return the number of remaining unused rules."""
         return max(0, len(self._rules) - self._rule_index)
 
-    def build_command(self, session_id: str = None) -> str:
+    def build_command(self, session_id: str = None, system_prompt: str = None) -> str:
         # Not used for test provider
         return "echo test-provider"
 

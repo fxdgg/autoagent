@@ -16,6 +16,7 @@ import logging
 from typing import Optional, Tuple
 
 from codebuddy_client import AIClient, CodeBuddyClient, AICallError
+from prompts.shared import SYSTEM_PROMPT_CODING_AGENT
 from prompts.simple_task import build_simple_task_prompt
 from prompts.long_running_task import (
     build_long_running_prompt as _build_lr_prompt,
@@ -207,7 +208,7 @@ class SimpleTaskExecutor:
                         parent_task_id=parent_task_id,
                     )
                 
-                result = client.ask(prompt)
+                result = client.ask(prompt, system_prompt=SYSTEM_PROMPT_CODING_AGENT)
                 
                 # Append response to log AFTER AI returns
                 if conv_logger:
@@ -1499,7 +1500,7 @@ class SubtaskExecutor:
                         parent_task_id=parent_task_id,
                     )
                 
-                result = client.ask(prompt)
+                result = client.ask(prompt, system_prompt=SYSTEM_PROMPT_CODING_AGENT)
                 
                 # Append response to log AFTER AI returns
                 if conv_logger:
@@ -1831,7 +1832,7 @@ class SubtaskExecutor:
                     metadata={"type": "long_running_analysis"},
                 )
             
-            result = client.ask(prompt)
+            result = client.ask(prompt, system_prompt=SYSTEM_PROMPT_CODING_AGENT)
             
             # Append response to log AFTER AI returns
             if conv_logger:
