@@ -140,11 +140,11 @@ def build_system_prompt_coding_agent(
 
     For providers that do **not** support a dedicated system-prompt
     channel (``supports_system_prompt=False``), the returned text is
-    wrapped with section headings so it can be prepended to the user
-    prompt without ambiguity.
+    meant to be **appended** after the user prompt so the AI sees the
+    task description first and the operational instructions second.
 
     The user-configured ``system_prompt_prefix`` (from the *task* dict
-    or from config.yaml) is appended after the ``# Task Description``
+    or from config.yaml) is placed before the ``# Instructions``
     heading (or at the end for providers with native system-prompt
     support).
 
@@ -154,12 +154,19 @@ def build_system_prompt_coding_agent(
             section is omitted.
         supports_system_prompt: Whether the AI provider supports a
             dedicated ``--append-system-prompt`` CLI parameter.  When
-            *False*, section headings are added for clarity.
+            *False*, the returned text is appended (not prepended) to
+            the user prompt, with section headings for clarity.
         task: Optional task configuration dict.  When provided, its
             ``system_prompt_prefix`` field (if any) overrides the
             global setting from config.yaml.
     """
     parts = []
+
+    # Append user-configured system_prompt_prefix first
+    # (task-level overrides global)
+    prefix = get_system_prompt_prefix(task)
+    if prefix:
+        parts.append(prefix)
 
     # For providers without native system-prompt support, add a heading
     # so the AI can distinguish instructions from the task description.
@@ -196,17 +203,6 @@ def build_system_prompt_coding_agent(
             "and be killed. Even if autoagent-exec fails, fix the command arguments "
             "and retry with autoagent-exec — NEVER fall back to running directly in Bash."
         )
-
-    # For providers without native system-prompt support, add a
-    # "Task Description" heading so the subsequent user prompt is
-    # clearly separated from the instructions above.
-    if not supports_system_prompt:
-        parts.append("# Task Description")
-
-    # Append user-configured system_prompt_prefix (task-level overrides global)
-    prefix = get_system_prompt_prefix(task)
-    if prefix:
-        parts.append(prefix)
 
     return "\n\n".join(parts)
 

@@ -163,10 +163,11 @@ class AIClient:
 
         # Build command args (without prompt - prompt goes via stdin)
         # If the provider supports --append-system-prompt, pass it via CLI;
-        # otherwise prepend it to the user prompt.
+        # otherwise append it to the user prompt so the AI sees the task
+        # description first and the operational instructions second.
         effective_system_prompt = system_prompt
         if effective_system_prompt and not self.provider.supports_system_prompt:
-            prompt = effective_system_prompt + "\n\n" + prompt
+            prompt = prompt + "\n\n" + effective_system_prompt
             effective_system_prompt = None  # Already in prompt
 
         cmd_args = self._build_command(system_prompt=effective_system_prompt)
