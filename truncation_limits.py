@@ -21,6 +21,7 @@ _DEFAULTS = {
     'human_feedback': 3000,
     'error_text': 2000,
     'log_file': 2000,
+    'previous_subtask_summary': 4000,
 }
 
 

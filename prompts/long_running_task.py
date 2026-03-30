@@ -8,6 +8,7 @@ Corresponds to ``SubtaskExecutor._build_long_running_prompt()`` and
 from prompts.shared import (
     build_sibling_context,
     build_history_section,
+    build_previous_subtask_section,
     build_suggested_fix_section,
 )
 
@@ -43,6 +44,11 @@ def build_long_running_prompt(
 
     if subtask.get('initial_hint') and attempt == 1:
         parts.append(f"Initial Hint: {subtask['initial_hint']}")
+
+    # Previous subtask summary (when context isolation is enabled)
+    prev_section = build_previous_subtask_section(parent_context)
+    if prev_section:
+        parts.append(prev_section)
 
     # Sibling subtask orientation
     sibling = build_sibling_context(subtask, parent_context)
