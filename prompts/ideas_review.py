@@ -7,6 +7,7 @@ in ideas_watcher.py.
 """
 
 from truncation_limits import limits
+from prompts.shared import load_task_design_guide
 
 
 def build_ideas_review_prompt(
@@ -24,6 +25,8 @@ def build_ideas_review_prompt(
         last_feedback_section: Optional pre-formatted section containing
             the previous reviewer's feedback (may be empty string).
     """
+    task_design_guide = load_task_design_guide()
+
     return f"""You are a task review expert. Review the following TODO task decomposition
 for quality, completeness, and correctness.
 
@@ -39,35 +42,19 @@ commands, and analyze code and outputs.
 ```yaml
 {tasks_yaml[:limits.get('tasks_yaml')] + chr(10) + '# (YAML truncated)' if len(tasks_yaml) > limits.get('tasks_yaml') else tasks_yaml}```
 
-{last_feedback_section}## Task Types
+{last_feedback_section}## Task Design Guide
 
-There are 6 task types:
+The following guide describes how AutoAgent executes tasks at runtime. Use it as
+the authoritative reference for task types, schema, hierarchy rules, and best
+practices when reviewing the generated tasks.
 
-1. **simple** \u2014 A single-step task. Can be top-level or subtask.
-2. **nested** \u2014 A multi-step task with ordered subtasks. Top-level only.
-3. **looping** \u2014 An iterative task repeating subtasks for N cycles. Top-level only.
-4. **long_running** \u2014 A background task via autoagent-exec. Subtask only.
-5. **simple_once** \u2014 Same as simple, but never re-executed once completed. Subtask only.
-6. **long_running_once** \u2014 Same as long_running, but never re-executed once completed. Subtask only.
-
-**Hierarchy rules:**
-- Top-level: simple, nested, or looping.
-- Subtasks (inside nested/looping): simple, long_running, simple_once, or long_running_once.
-
-## Task Schema
-
-Common fields (all types): id, name, type, completion_criteria
-
-Type-specific fields:
-- simple / simple_once: initial_hint (optional)
-- nested: subtasks (list), max_attempts (optional, default 20)
-- looping: subtasks (list), repeat_count (required), max_attempts_per_loop (optional, default 20)
-- long_running / long_running_once: command (optional), initial_hint (optional)
-
-Optional field (all types):
-- model: "default" | "simple" (optional, defaults to "default")
+<task_design_guide>
+{task_design_guide}
+</task_design_guide>
 
 ## Review Criteria
+
+Evaluate the generated tasks against these criteria:
 
 1. **Schema correctness**: Does every task have the required fields for its type?
    (e.g., nested/looping must have subtasks; looping must have repeat_count)

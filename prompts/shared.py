@@ -6,7 +6,47 @@ consistency in role definitions, status marker instructions, and common
 formatting utilities.
 """
 
+import os
+import logging
+
 from truncation_limits import limits
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Task Design Guide loader (cached)
+# ---------------------------------------------------------------------------
+
+_task_design_guide_cache: str | None = None
+
+
+def load_task_design_guide() -> str:
+    """Load and cache the content of TASK_DESIGN_GUIDE.md.
+
+    The file is located at ``autoagent/TASK_DESIGN_GUIDE.md`` (one level up
+    from the ``prompts/`` package directory).
+
+    Returns:
+        The full text of the guide, or a short fallback message if the file
+        cannot be read.
+    """
+    global _task_design_guide_cache
+    if _task_design_guide_cache is not None:
+        return _task_design_guide_cache
+
+    guide_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "TASK_DESIGN_GUIDE.md"
+    )
+    try:
+        with open(guide_path, "r", encoding="utf-8") as f:
+            _task_design_guide_cache = f.read()
+    except OSError as e:
+        logger.warning(f"Failed to load TASK_DESIGN_GUIDE.md: {e}")
+        _task_design_guide_cache = (
+            "(Task Design Guide not available — refer to the task schema "
+            "documentation for task types, fields, and best practices.)"
+        )
+    return _task_design_guide_cache
 
 
 # ---------------------------------------------------------------------------
