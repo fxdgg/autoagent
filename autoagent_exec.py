@@ -23,11 +23,10 @@ Output log:  <log-dir>/lr_tasks/lr_<task_id>_output.log
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
-import signal as signal_mod
-
 
 # Timeout in seconds for fast-fail detection
 FAST_FAIL_TIMEOUT = 10
@@ -87,11 +86,9 @@ def write_signal_file(path: str, data: dict):
     tmp_path = path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
-    # Atomic rename (works on Windows for replacing existing files in Python 3.3+)
-    if os.path.exists(path):
-        os.replace(tmp_path, path)
-    else:
-        os.rename(tmp_path, path)
+    # os.replace works on all platforms in Python 3.3+ and handles
+    # both existing and non-existing targets atomically.
+    os.replace(tmp_path, path)
 
 
 def main():
@@ -100,11 +97,13 @@ def main():
     log_dir = args.log_dir
     task_id = args.task_id
     command = args.command
-    # Use subprocess.list2cmdline to properly quote arguments that contain
-    # spaces (e.g. "C:/Program Files/..."). A naive " ".join() would lose
-    # the quotes that the shell stripped during argv parsing, causing
-    # paths with spaces to be split incorrectly when shell=True.
-    command_str = subprocess.list2cmdline(command)
+    # Re-quote the command list into a single shell string.
+    # On Windows, use subprocess.list2cmdline (handles "C:/Program Files/...").
+    # On POSIX, use shlex.join which produces /bin/sh-compatible quoting.
+    if os.name == "nt":
+        command_str = subprocess.list2cmdline(command)
+    else:
+        command_str = shlex.join(command)
 
     # Ensure lr_tasks subdirectory exists
     lr_tasks_dir = os.path.join(log_dir, "lr_tasks")
@@ -190,8 +189,8 @@ def main():
                     print(f"--- End of Output ---")
                 else:
                     print(f"   (no output captured)")
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"   (failed to read output log: {e})")
 
             # Do NOT write a signal file — let the AI fix and retry
             sys.exit(exit_code)
@@ -200,6 +199,11 @@ def main():
     # Detach: we don't need to do anything special since stdout/stderr
     # are already redirected to the log file. The process will continue
     # running even after this script exits.
+
+    # Close our file handle so the subprocess owns the only handle to
+    # the log file.  On Windows this avoids sharing-violation issues.
+    # The subprocess will continue writing via its inherited fd.
+    log_fh.close()
 
     print(f"\n[RUNNING] Command is still running after {FAST_FAIL_TIMEOUT}s -- treating as long-running task.")
     print(f"   PID: {pid}")

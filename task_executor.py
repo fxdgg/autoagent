@@ -1502,6 +1502,7 @@ class SubtaskExecutor:
     def _poll_signal_file(
         self, subtask_id: str, signal_file: str,
         check_interval: int = 15, max_wait: int = 24 * 3600,
+        max_initial_wait: int = 20,
     ) -> str:
         """
         Poll the signal file until the long-running task completes.
@@ -1510,6 +1511,12 @@ class SubtaskExecutor:
         still says "running" but the process has exited, we treat it
         as finished/error (in case the monitor process failed to update).
         
+        Args:
+            max_initial_wait: Maximum seconds to wait for the signal file
+                to appear. If the file never appears (e.g. autoagent-exec
+                fast-failed and exited without writing one), return "error"
+                after this timeout. Default 20s.
+        
         Returns:
             str: "finished", "error", or "timeout"
         """
@@ -1517,9 +1524,11 @@ class SubtaskExecutor:
         pid = None  # Will be read from signal file
         consecutive_errors = 0
         max_consecutive_errors = 10  # After 10 consecutive read failures, escalate
+        signal_file_seen = False  # Track if we've ever seen the signal file
 
         while elapsed < max_wait:
             if os.path.exists(signal_file):
+                signal_file_seen = True
                 try:
                     with open(signal_file, "r", encoding="utf-8") as f:
                         signal_data = json.load(f)
@@ -1569,6 +1578,20 @@ class SubtaskExecutor:
                         )
                         print(f"      [WARNING] Signal file corrupted after {consecutive_errors} retries, treating as finished")
                         return "finished"
+            else:
+                # Signal file doesn't exist yet — check initial wait timeout
+                if not signal_file_seen and elapsed >= max_initial_wait:
+                    logger.warning(
+                        f"Signal file for {subtask_id} never appeared after "
+                        f"{max_initial_wait}s. autoagent-exec likely fast-failed "
+                        f"without writing a signal file."
+                    )
+                    print(
+                        f"      [ERROR] Signal file never appeared after "
+                        f"{max_initial_wait}s — autoagent-exec likely failed. "
+                        f"Treating as error."
+                    )
+                    return "error"
             
             time.sleep(check_interval)
             elapsed += check_interval

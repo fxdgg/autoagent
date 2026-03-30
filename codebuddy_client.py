@@ -1278,6 +1278,10 @@ class AIClientTest:
         cmd = exec_match.group(1)
         task_id = exec_match.group(2)
 
+        # Clean up escaped quotes that may come from test_rules.txt
+        # e.g. python -c \"import time; time.sleep(5)\" → python -c "import time; time.sleep(5)"
+        cmd = cmd.replace('\\"', '"')
+
         # Extract exec_path from the prompt
         # The prompt contains: python "<exec_path>" --log-dir "<log_dir>" --task-id <id> -- <command>
         exec_path_match = re.search(
@@ -1310,18 +1314,32 @@ class AIClientTest:
         print(f"   task_id:   {task_id}")
         print(f"   command:   {cmd}")
 
-        # Build the real autoagent_exec.py command
-        full_cmd = (
-            f'{sys.executable} "{exec_path}" '
-            f'--log-dir "{log_dir}" '
-            f'--task-id {task_id} '
-            f'-- {cmd}'
-        )
+        # Build the real autoagent_exec.py command as a list to avoid
+        # shell quoting issues (especially on Linux where /bin/sh handles
+        # quotes differently from cmd.exe).
+        # We use shlex.split to properly tokenize the cmd string (which
+        # may contain quoted arguments like: python -c "import time; ...")
+        import shlex
+        if os.name == 'nt':
+            # On Windows, shlex.split doesn't handle Windows paths well;
+            # use a simple split but preserve quoted strings
+            cmd_parts = shlex.split(cmd, posix=False)
+            # Remove surrounding quotes that shlex.split(posix=False) preserves
+            cmd_parts = [p.strip('"').strip("'") for p in cmd_parts]
+        else:
+            cmd_parts = shlex.split(cmd)
+
+        full_cmd = [
+            sys.executable, exec_path,
+            '--log-dir', log_dir,
+            '--task-id', task_id,
+            '--',
+        ] + cmd_parts
 
         try:
             result = subprocess.run(
                 full_cmd,
-                shell=True,
+                shell=False,
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
