@@ -988,7 +988,8 @@ Examples:
   python orchestrator.py --reset                         # Reset all state
   python orchestrator.py --verbose                       # Enable debug logging
   python orchestrator.py --ideas ideas.md                # Watch ideas.md for new ideas
-  python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (with human review)
+python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no task execution)
+    python orchestrator.py --ideas ideas.md --human-review  # Process ideas with human review
   python orchestrator.py --ideas ideas.md                 # Run tasks then idle for ideas (idle is default)
   python orchestrator.py --list-providers                # List available AI providers
         """,
@@ -1089,9 +1090,15 @@ Examples:
     parser.add_argument(
         '--ideas-only',
         action='store_true',
-        help='Only process ideas.md (with human review), do not run the TODO task list. '
-             'Requires --ideas to be set. After AI review passes, pauses for human '
-             'approval. Enter y to accept and exit, or n to provide feedback for revision.',
+        help='Only process ideas.md, do not run the TODO task list. '
+             'Requires --ideas to be set.',
+    )
+    parser.add_argument(
+        '--human-review',
+        action='store_true',
+        help='Enable human review for ideas processing. After AI review passes, '
+             'pauses for human approval. Enter y to accept and exit, or n to provide '
+             'feedback for revision. (default: disabled)',
     )
     parser.add_argument(
         '--no-idle',
@@ -1308,7 +1315,7 @@ Examples:
         # Process ideas before running tasks (if ideas file is configured)
         if orchestrator.ideas_watcher:
             orchestrator.check_and_process_ideas(
-                human_review=args.ideas_only,
+                human_review=args.human_review,
             )
         
         # --ideas-only mode: only process ideas, then exit

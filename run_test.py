@@ -350,7 +350,8 @@ Examples:
   python run_test.py --results                     # Show results summary
   python run_test.py --list-providers              # List available AI providers
   python run_test.py --ideas ideas.md              # Process ideas.md into TODOs
-  python run_test.py --ideas ideas.md --ideas-only # Process ideas only (with human review)
+  python run_test.py --ideas ideas.md --ideas-only # Process ideas only (no task execution)
+  python run_test.py --ideas ideas.md --human-review # Process ideas with human review
 python run_test.py --ideas ideas.md               # Run then idle for new ideas (idle is default)
         """,
     )
@@ -437,8 +438,14 @@ python run_test.py --ideas ideas.md               # Run then idle for new ideas 
     parser.add_argument(
         "--ideas-only",
         action="store_true",
-        help="Only process ideas.md (with human review), do not run the TODO task list. "
-             "Requires --ideas. After AI review passes, pauses for human approval.",
+        help="Only process ideas.md, do not run the TODO task list. "
+             "Requires --ideas.",
+    )
+    parser.add_argument(
+        "--human-review",
+        action="store_true",
+        help="Enable human review for ideas processing. After AI review passes, "
+             "pauses for human approval. (default: disabled)",
     )
     parser.add_argument(
         "--no-idle",
@@ -575,6 +582,8 @@ python run_test.py --ideas ideas.md               # Run then idle for new ideas 
             print("\n❌ --ideas-only mode requires --ideas to be set.")
             sys.exit(1)
         extra.append("--ideas-only")
+    if args.human_review:
+        extra.append("--human-review")
     # Idle mode is enabled by default when --ideas is set
     idle_mode = bool(args.ideas) and not args.no_idle
     if idle_mode:

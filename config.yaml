@@ -45,6 +45,7 @@ preset:
     provider: codebuddy
     use-cli: false
     model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:claude-haiku-4.5"
+    human-review: true  # When processing ideas, force human review After AI review
     verbose: false
   
   - name: test
@@ -53,4 +54,5 @@ preset:
     provider: codebuddy
     use-cli: false
     model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;simple:deepseek-v3-2-volc-ioa"
+    human-review: true  # When processing ideas, force human review After AI review
     verbose: false
