@@ -940,14 +940,23 @@ def _merge_preset_with_args(args, preset):
         'no_idle': 'no_idle',
         'use_cli': 'use_cli',
         'ideas_only': 'ideas_only',
+        'human_review': 'human_review',
     }
     
     # Default values that indicate "not set by user"
+    # For store_true args, the argparse default is False, so we need to
+    # include them here so the preset can override them.
     defaults_not_set = {
         'config': 'todos.yaml',
         'provider': 'codebuddy',
         'workspace': '.',
         'idle_interval': 30,
+        'verbose': False,
+        'no_skip': False,
+        'no_idle': False,
+        'use_cli': False,
+        'ideas_only': False,
+        'human_review': False,
     }
     
     for preset_key, arg_key in preset_to_arg_map.items():
