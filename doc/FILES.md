@@ -107,6 +107,13 @@ autoagent/
 - **作用**：全局配置文件
 - **内容**：
   ```yaml
+  # System prompt prefix (appended to the system prompt for all tasks)
+  # Can be overridden per-task in todos.yaml via the system_prompt_prefix field.
+  system_prompt_prefix: "You are an AI coding agent. ..."
+
+  # Default AI model (used when no model is specified via CLI --model or preset)
+  default_model: glm-5.0-ioa
+
   # Timeout for each AI call (in seconds).
   bash_timeout: 3600
 
@@ -134,18 +141,24 @@ autoagent/
     - name: default
       ideas: ${workspace}/ideas.md
       config: ${workspace}/todos.yaml
-      provider: opencode
-      model: model-scope/ZhipuAI/GLM-5
-      verbose: false
+      provider: codebuddy
+      use_cli: false
+      model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:claude-haiku-4.5"
+      human_review: true
+      verbose: true
 
-    - name: claude
-      ideas: ${workspace}/ideas.md
-      config: ${workspace}/todos.yaml
-      provider: claude
-      model: claude-opus-4-6
-      verbose: false
+    - name: test
+      ideas: ${workspace}/../ideas.md
+      config: ${workspace}/../todos.yaml
+      provider: codebuddy
+      use_cli: false
+      model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;simple:deepseek-v3-2-volc-ioa"
+      human_review: true
+      verbose: true
   ```
 - **用途**：
+  - `system_prompt_prefix`: 全局系统提示词前缀，附加到所有任务的系统提示词中，可在 todos.yaml 中按任务覆盖
+  - `default_model`: 默认 AI 模型，当 CLI `--model` 和 preset 均未指定时使用
   - `bash_timeout`: 提供默认超时配置值
   - `backoff_max_wait`: AI CLI 连续失败时的最大退避等待时间（指数退避：5s→10s→20s→...→上限）
   - `truncation_limits`: 控制各类提示词字段的最大字符数，防止上下文过长
@@ -180,7 +193,7 @@ autoagent/
 - **作用**：AI Provider 抽象层
 - **核心类**：
   - `AIProvider`：基类，提供 `set_model(model_name)` 方法用于运行时切换模型
-  - `CodeBuddyProvider`：CodeBuddy CLI（默认模型 `deepseek-v3.2`）
+  - `CodeBuddyProvider`：CodeBuddy CLI（默认模型从 `config.yaml` 的 `default_model` 加载，回退到 `deepseek-v3.2`）
   - `ClaudeCodeProvider`：Claude Code（默认模型 `claude-sonnet-4-6`）
   - `GeminiCLIProvider`：Gemini Cli（默认模型 `gemini-2.5-pro`）
   - `OpenCodeProvider`：OpenCode CLI（使用自身配置默认模型）
@@ -234,6 +247,13 @@ autoagent/
 #### prompts/shared.py
 - **作用**：共享常量和工具函数
 - **内容**：角色定义（coding agent、task planner、task reviewer）、状态标记指令（✅/❌ completed/not completed）、通用辅助函数（构建历史记录、兄弟任务上下文、autoagent-exec 说明等）
+- **核心函数**：
+  - `build_system_prompt_coding_agent(exec_script_path, supports_system_prompt, task)`: 构建编码代理的系统提示词（含状态标记指令和 autoagent-exec 使用说明）
+  - `load_system_prompt_prefix()`: 从 config.yaml 加载并缓存 `system_prompt_prefix`
+  - `get_system_prompt_prefix(task)`: 获取有效的系统提示词前缀（任务级覆盖全局）
+  - `apply_system_prompt_prefix(parts, task)`: 将前缀插入到 prompt 部件列表的开头
+  - `load_task_design_guide()`: 加载并缓存 TASK_DESIGN_GUIDE.md 内容
+  - `build_timeout_guidance(exec_script_path, timeout_feedback)`: 构建超时警告提示
 
 #### prompts/simple_task.py
 - **作用**：简单任务执行 prompt 构造器
@@ -330,7 +350,7 @@ tasks:
 |------|------|------|------|
 | `id` | int/string | 是 | 任务 ID（唯一标识） |
 | `name` | string | 是 | 任务名称 |
-| `type` | string | 是 | 任务类型：`simple`、`nested`、`looping`、`long_running`、`simple_once`、`long_running_once` |
+| `type` | string | 是 | 顶层任务类型：`simple`、`nested`、`looping`；子任务类型：`simple`、`long_running`、`simple_once`、`long_running_once` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
 | `model` | string | 否 | 模型选择：`"default"` 或 `"simple"`（默认 `"default"`） |
 

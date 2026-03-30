@@ -82,6 +82,29 @@ def apply_system_prompt_prefix(parts: list, task: dict = None) -> None:
         parts.insert(0, prefix)
 
 
+def prepend_system_prompt_prefix(prompt: str, task: dict = None) -> str:
+    """Prepend the user-configured system prompt prefix to a prompt string.
+
+    The prefix is always placed at the very beginning of the user prompt
+    so that the AI sees the role/persona instruction first, regardless of
+    whether the provider supports a native system-prompt channel.
+
+    Args:
+        prompt: The original user prompt string.
+        task: Optional task configuration dict.  When provided, its
+            ``system_prompt_prefix`` field (if any) overrides the
+            global setting.
+
+    Returns:
+        The prompt with the prefix prepended (separated by two newlines),
+        or the original prompt unchanged if no prefix is configured.
+    """
+    prefix = get_system_prompt_prefix(task)
+    if prefix:
+        return prefix + "\n\n" + prompt
+    return prompt
+
+
 # ---------------------------------------------------------------------------
 # Task Design Guide loader (cached)
 # ---------------------------------------------------------------------------
@@ -143,10 +166,13 @@ def build_system_prompt_coding_agent(
     meant to be **appended** after the user prompt so the AI sees the
     task description first and the operational instructions second.
 
-    The user-configured ``system_prompt_prefix`` (from the *task* dict
-    or from config.yaml) is placed before the ``# Instructions``
-    heading (or at the end for providers with native system-prompt
-    support).
+    .. note::
+
+        The user-configured ``system_prompt_prefix`` is **not** included
+        here.  It is always prepended to the *user prompt* by the caller
+        (see :func:`prepend_system_prompt_prefix`) so that it appears at
+        the very beginning of the prompt regardless of whether the
+        provider supports a native system-prompt channel.
 
     Args:
         exec_script_path: Absolute path to the generated ``autoagent-exec``
@@ -156,17 +182,10 @@ def build_system_prompt_coding_agent(
             dedicated ``--append-system-prompt`` CLI parameter.  When
             *False*, the returned text is appended (not prepended) to
             the user prompt, with section headings for clarity.
-        task: Optional task configuration dict.  When provided, its
-            ``system_prompt_prefix`` field (if any) overrides the
-            global setting from config.yaml.
+        task: Optional task configuration dict.  Currently unused but
+            kept for API compatibility.
     """
     parts = []
-
-    # Append user-configured system_prompt_prefix first
-    # (task-level overrides global)
-    prefix = get_system_prompt_prefix(task)
-    if prefix:
-        parts.append(prefix)
 
     # For providers without native system-prompt support, add a heading
     # so the AI can distinguish instructions from the task description.

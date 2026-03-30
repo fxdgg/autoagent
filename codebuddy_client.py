@@ -778,7 +778,7 @@ class AIClientSDK:
             timeout: Override default timeout
             system_prompt: Optional system prompt.  The SDK does not
                 support a separate system prompt channel, so it is
-                prepended to the user prompt.
+                appended to the user prompt.
             
         Returns:
             str or dict: The AI response (parsed as JSON if expect_json=True)
@@ -788,9 +788,10 @@ class AIClientSDK:
         """
         effective_timeout = timeout or self.timeout
 
-        # SDK does not support a separate system prompt; prepend to user prompt
+        # SDK does not support a separate system prompt; append to user prompt
+        # so the AI sees the task description first and instructions second.
         if system_prompt:
-            prompt = system_prompt + "\n\n" + prompt
+            prompt = prompt + "\n\n" + system_prompt
 
         # Exponential backoff: wait before retrying after consecutive failures
         if self._consecutive_failures > 0:
@@ -905,7 +906,7 @@ class AIClientSDK:
 
             logger.debug(
                 f"[{self.context_id}] SDK options: model={options.model}, "
-                f"cwd={options.cwd}, continue={options.continue_conversation}, "
+                f"cwd={options.cwd}, "
                 f"session_id={options.session_id}"
             )
 

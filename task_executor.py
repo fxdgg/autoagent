@@ -16,7 +16,7 @@ import logging
 from typing import Optional, Tuple
 
 from codebuddy_client import AIClient, CodeBuddyClient, AICallError
-from prompts.shared import build_system_prompt_coding_agent, get_system_prompt_prefix
+from prompts.shared import build_system_prompt_coding_agent, prepend_system_prompt_prefix
 from prompts.simple_task import build_simple_task_prompt
 from prompts.long_running_task import (
     build_long_running_prompt as _build_lr_prompt,
@@ -203,18 +203,20 @@ class SimpleTaskExecutor:
                     supports_system_prompt=client.provider.supports_system_prompt,
                     task=task,
                 )
+                # Always prepend system_prompt_prefix to user prompt
+                effective_prompt = prepend_system_prompt_prefix(prompt, task)
                 if conv_logger:
                     conv_logger.log_prompt(
                         task_id=task_id,
                         task_name=task['name'],
-                        prompt=prompt,
+                        prompt=effective_prompt,
                         attempt=attempts,
                         parent_task_id=parent_task_id,
                         system_prompt=system_prompt,
                     )
                 
                 result = client.ask(
-                    prompt,
+                    effective_prompt,
                     system_prompt=system_prompt,
                 )
                 
@@ -818,9 +820,8 @@ class NestedTaskExecutor:
         )
         print(f"\n   🤖 [AI Decision Point 1: Failure Analysis]")
         
-        # Build a minimal system prompt with just the user-configured prefix
-        # (failure analysis calls don't need status markers or autoagent-exec notes)
-        prefix_system_prompt = get_system_prompt_prefix(task) or None
+        # Always prepend system_prompt_prefix to user prompt
+        effective_prompt = prepend_system_prompt_prefix(prompt, task)
 
         try:
             # Write prompt to log BEFORE calling AI (crash safety)
@@ -829,11 +830,11 @@ class NestedTaskExecutor:
                     task_id=str(task['id']),
                     task_name=task['name'],
                     call_type="failure_analysis",
-                    prompt=prompt,
+                    prompt=effective_prompt,
                     round_num=round_num,
                 )
             
-            decision = client.ask(prompt, expect_json=True, system_prompt=prefix_system_prompt)
+            decision = client.ask(effective_prompt, expect_json=True)
             print(f"      AI Analysis: {decision.get('analysis', 'N/A')[:200]}")
             print(f"      AI Decision: retry_from = {decision.get('retry_from', failed_id)}")
             print(f"      Suggested Fix: {decision.get('suggested_fix', 'N/A')[:200]}")            # Append response to log AFTER AI returns
@@ -947,8 +948,8 @@ class NestedTaskExecutor:
         
         print(f"\n   🤖 [AI Decision Point 2: Main Task Evaluation]")
         
-        # Build a minimal system prompt with just the user-configured prefix
-        prefix_system_prompt = get_system_prompt_prefix(task) or None
+        # Always prepend system_prompt_prefix to user prompt
+        effective_prompt = prepend_system_prompt_prefix(prompt, task)
 
         try:
             # Write prompt to log BEFORE calling AI (crash safety)
@@ -957,11 +958,11 @@ class NestedTaskExecutor:
                     task_id=str(task['id']),
                     task_name=task['name'],
                     call_type="main_task_evaluation",
-                    prompt=prompt,
+                    prompt=effective_prompt,
                     round_num=round_num,
                 )
             
-            evaluation = client.ask(prompt, expect_json=True, system_prompt=prefix_system_prompt)
+            evaluation = client.ask(effective_prompt, expect_json=True)
             completed = evaluation.get('main_task_completed', False)
             print(f"      AI Evaluation: {'✅ COMPLETED' if completed else '❌ NOT COMPLETED'}")
             print(f"      Analysis: {evaluation.get('analysis', 'N/A')[:200]}")
@@ -1314,8 +1315,8 @@ class LoopingTaskExecutor:
 
         print(f"\n   🤖 [AI: Failure Analysis (loop {loop_idx})]")
 
-        # Build a minimal system prompt with just the user-configured prefix
-        prefix_system_prompt = get_system_prompt_prefix(task) or None
+        # Always prepend system_prompt_prefix to user prompt
+        effective_prompt = prepend_system_prompt_prefix(prompt, task)
 
         try:
             if conv_logger:
@@ -1323,11 +1324,11 @@ class LoopingTaskExecutor:
                     task_id=task_id,
                     task_name=task['name'],
                     call_type="looping_failure_analysis",
-                    prompt=prompt,
+                    prompt=effective_prompt,
                     round_num=loop_idx,
                 )
 
-            decision = client.ask(prompt, expect_json=True, system_prompt=prefix_system_prompt)
+            decision = client.ask(effective_prompt, expect_json=True)
             print(f"      AI Analysis: {decision.get('analysis', 'N/A')[:200]}")
             print(f"      AI Decision: retry_from = {decision.get('retry_from', failed_id)}")
 
@@ -1526,18 +1527,20 @@ class SubtaskExecutor:
                     supports_system_prompt=client.provider.supports_system_prompt,
                     task=subtask,
                 )
+                # Always prepend system_prompt_prefix to user prompt
+                effective_prompt = prepend_system_prompt_prefix(prompt, subtask)
                 if conv_logger:
                     conv_logger.log_prompt(
                         task_id=subtask_id,
                         task_name=subtask['name'],
-                        prompt=prompt,
+                        prompt=effective_prompt,
                         attempt=attempt,
                         parent_task_id=parent_task_id,
                         system_prompt=system_prompt,
                     )
                 
                 result = client.ask(
-                    prompt,
+                    effective_prompt,
                     system_prompt=system_prompt,
                 )
                 
@@ -1868,11 +1871,13 @@ class SubtaskExecutor:
                 supports_system_prompt=client.provider.supports_system_prompt,
                 task=subtask,
             )
+            # Always prepend system_prompt_prefix to user prompt
+            effective_prompt = prepend_system_prompt_prefix(prompt, subtask)
             if conv_logger:
                 conv_logger.log_prompt(
                     task_id=subtask_id,
                     task_name=subtask['name'],
-                    prompt=prompt,
+                    prompt=effective_prompt,
                     attempt=1,
                     parent_task_id=parent_task_id,
                     metadata={"type": "long_running_analysis"},
@@ -1880,7 +1885,7 @@ class SubtaskExecutor:
                 )
             
             result = client.ask(
-                prompt,
+                effective_prompt,
                 system_prompt=system_prompt,
             )
             

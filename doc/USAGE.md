@@ -56,26 +56,30 @@ bash_timeout: 3600
 # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
 backoff_max_wait: 300
 
+# System prompt prefix (appended to the system prompt for all tasks)
+system_prompt_prefix: "You are an AI coding agent. ..."
+
+# Default AI model (used when no model is specified via CLI --model or preset)
+default_model: glm-5.0-ioa
+
 preset:
   - name: default
     ideas: ${workspace}/ideas.md
     config: ${workspace}/todos.yaml
-    provider: opencode
-    model: deepseek-v3.2
-    verbose: false
-  
-  - name: codebuddy
     provider: codebuddy
-    model: deepseek-v3.2
-  
-  - name: claude
-    provider: claude
-    model: claude-sonnet-4-6
-  
-  - name: debug
-    provider: codebuddy
+    use_cli: false
+    model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:claude-haiku-4.5"
+    human_review: true
     verbose: true
-    no_skip: true
+  
+  - name: test
+    ideas: ${workspace}/../ideas.md
+    config: ${workspace}/../todos.yaml
+    provider: codebuddy
+    use_cli: false
+    model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;simple:deepseek-v3-2-volc-ioa"
+    human_review: true
+    verbose: true
 ```
 
 使用 `--preset` 参数选择预设：
@@ -241,7 +245,7 @@ tasks:
 |------|------|------|------|
 | `id` | int/string | 是 | 任务 ID（唯一标识） |
 | `name` | string | 是 | 任务名称 |
-| `type` | string | 是 | 任务类型：`simple`、`nested`、`looping`、`long_running`、`simple_once`、`long_running_once` |
+| `type` | string | 是 | 顶层任务类型：`simple`、`nested`、`looping`；子任务类型：`simple`、`long_running`、`simple_once`、`long_running_once` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
 
 #### 简单任务 (type: simple)
@@ -426,7 +430,7 @@ tasks:
 通过 `config.yaml` 中的 preset 快速切换常用配置：
 
 ```bash
-# 使用 default 预设（opencode + deepseek-v3.2）
+# 使用 default 预设
 python orchestrator.py
 
 # 使用 codebuddy 预设
@@ -449,6 +453,9 @@ python orchestrator.py --preset default --model claude-sonnet-4-6
 - `verbose`: 是否启用详细日志
 - `no_skip`: 是否不跳过已完成任务
 - `no_idle`: 是否禁用 idle 模式
+- `use_cli`: 是否使用 CLI 模式
+- `ideas_only`: 是否仅处理 ideas
+- `human_review`: 是否启用人工审核
 - `timeout`: AI 调用超时时间
 - `log_dir`: 日志目录
 - `idle_interval`: idle 轮询间隔
@@ -468,7 +475,7 @@ python orchestrator.py
 支持多种 AI CLI 工具：
 
 ```bash
-# CodeBuddy（默认，默认模型 deepseek-v3.2）
+# CodeBuddy（默认，默认模型从 config.yaml 的 default_model 加载）
 python orchestrator.py
 
 # Claude Code（默认模型 claude-sonnet-4-6）
@@ -832,7 +839,7 @@ python orchestrator.py
 
 | Provider | 命令 | 默认模型 | 别名 |
 |----------|------|----------|------|
-| CodeBuddy | `codebuddy` | `deepseek-v3.2` | `cb` |
+| CodeBuddy | `codebuddy` | 从 config.yaml 的 `default_model` 加载 | `cb` |
 | Claude Code | `claude` | `claude-sonnet-4-6` | `claude-code`, `claude` |
 | Gemini CLI | `gemini` | `gemini-2.5-pro` | `gemini-cli`, `gemini` |
 | OpenCode | `opencode` | （使用自身配置默认） | `oc` |
