@@ -15,6 +15,23 @@ import logging
 import tempfile
 from typing import Optional, List
 
+
+class _BlockStyleDumper(yaml.SafeDumper):
+    """Custom YAML dumper that uses block scalar (|) style for multiline strings."""
+    pass
+
+
+def _str_representer(dumper, data):
+    """Represent strings with block scalar style when they contain newlines."""
+    if '\n' in data:
+        # Strip trailing whitespace on each line to avoid YAML issues,
+        # but preserve the overall structure.
+        return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
+    return dumper.represent_scalar('tag:yaml.org,2002:str', data)
+
+
+_BlockStyleDumper.add_representer(str, _str_representer)
+
 from codebuddy_client import AIClient, CodeBuddyClient, AICallError
 from conversation_logger import ConversationLogger
 from truncation_limits import limits
@@ -609,7 +626,7 @@ class IdeasWatcher:
         # from previous review rounds, which pollutes its judgment.
         review_client.reset_session()
 
-        tasks_yaml = yaml.dump(tasks, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        tasks_yaml = yaml.dump(tasks, Dumper=_BlockStyleDumper, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
         temp_tasks_path = self._get_temp_tasks_path()
         # Write current tasks to temp file so reviewer can modify it in-place
@@ -787,7 +804,7 @@ the issues have been addressed:
         while True:
             # Write current tasks to temp file so human can edit directly
             tasks_yaml = yaml.dump(
-                tasks, default_flow_style=False,
+                tasks, Dumper=_BlockStyleDumper, default_flow_style=False,
                 allow_unicode=True, sort_keys=False,
             )
             try:
@@ -887,7 +904,7 @@ the issues have been addressed:
 
                     # Build revision prompt with current tasks context
                     current_tasks_yaml = yaml.dump(
-                        tasks, default_flow_style=False,
+                        tasks, Dumper=_BlockStyleDumper, default_flow_style=False,
                         allow_unicode=True, sort_keys=False,
                     )
                     revision_prompt = build_human_feedback_revision_prompt(
@@ -1035,6 +1052,7 @@ the issues have been addressed:
             with open(self.todos_file, 'w', encoding='utf-8') as f:
                 yaml.dump(
                     config, f,
+                    Dumper=_BlockStyleDumper,
                     default_flow_style=False,
                     allow_unicode=True,
                     sort_keys=False,
