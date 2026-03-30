@@ -175,7 +175,7 @@ class TodoOrchestrator:
 
         self.state_manager = StateManager(resolved_state_file)
         self.conv_logger = ConversationLogger(self.session_dir)
-        self.simple_executor = SimpleTaskExecutor()
+        self.simple_executor = SimpleTaskExecutor(session_dir=self.session_dir)
         self.nested_executor = NestedTaskExecutor(session_dir=self.session_dir, model_roles=self.model_roles)
         self.looping_executor = LoopingTaskExecutor(session_dir=self.session_dir, model_roles=self.model_roles)
         

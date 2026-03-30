@@ -87,6 +87,9 @@ class SimpleTaskExecutor:
     until the criteria are met or max attempts are reached.
     """
 
+    def __init__(self, session_dir: str = None):
+        self.session_dir = session_dir
+
     def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, **kwargs) -> bool:
         """
         Execute a simple task.
@@ -244,9 +247,14 @@ class SimpleTaskExecutor:
             os.path.dirname(os.path.abspath(__file__)), "autoagent_exec.py"
         ).replace("\\", "/")
         log_session_dir = ""
-        subtask_exec = getattr(self, '_subtask_executor', None)
-        if subtask_exec and subtask_exec.session_dir:
-            log_session_dir = subtask_exec.session_dir.replace("\\", "/")
+        # Prefer own session_dir (set for top-level simple tasks by orchestrator),
+        # fall back to _subtask_executor.session_dir (set when running as a subtask).
+        if self.session_dir:
+            log_session_dir = self.session_dir.replace("\\", "/")
+        else:
+            subtask_exec = getattr(self, '_subtask_executor', None)
+            if subtask_exec and subtask_exec.session_dir:
+                log_session_dir = subtask_exec.session_dir.replace("\\", "/")
 
         return build_simple_task_prompt(
             task=task,
@@ -372,6 +380,17 @@ class SimpleTaskExecutor:
     _SIMPLE_TASK_MARKERS = "'✅ completed', '❌ not completed', or '⏳ LONG_RUNNING_IN_PROGRESS'"
     _LONG_RUNNING_MARKERS = "'✅ completed', '❌ not completed', or '⏳ LONG_RUNNING_IN_PROGRESS'"
 
+    @staticmethod
+    def _check_long_running_in_progress_static(response: str) -> bool:
+        """Check if AI reported that a long-running task has been submitted."""
+        response_lower = response.lower()
+        patterns = [
+            "long_running_in_progress",
+            "long running in progress",
+            "⏳ long_running_in_progress",
+        ]
+        return any(p in response_lower for p in patterns)
+
     def _handle_long_running_in_simple_task(
         self, response: str, task: dict, task_id: str, attempt: int,
         client, state_manager, conv_logger=None, parent_task_id: str = None,
@@ -387,19 +406,29 @@ class SimpleTaskExecutor:
             False otherwise (caller should continue the retry loop).
         """
         subtask_exec = getattr(self, '_subtask_executor', None)
-        if subtask_exec is None:
-            # No SubtaskExecutor reference — cannot handle long-running
+
+        # Determine the check function source
+        check_fn = subtask_exec._check_long_running_in_progress if subtask_exec else self._check_long_running_in_progress_static
+        if not check_fn(response):
             return False
-        
-        if not subtask_exec._check_long_running_in_progress(response):
-            return False
-        
-        if not subtask_exec.session_dir:
+
+        # Resolve session_dir: prefer _subtask_executor, fall back to self
+        log_session_dir = None
+        if subtask_exec and subtask_exec.session_dir:
+            log_session_dir = subtask_exec.session_dir
+        elif self.session_dir:
+            log_session_dir = self.session_dir
+
+        if not log_session_dir:
             logger.warning(
                 f"Task {task_id}: AI returned LONG_RUNNING_IN_PROGRESS in simple task "
                 f"but no session_dir is configured. Treating as not completed."
             )
             return False
+
+        # Ensure we have a SubtaskExecutor for poll + callback logic
+        if subtask_exec is None:
+            subtask_exec = SubtaskExecutor(session_dir=log_session_dir)
         
         print(f"   ⏳ AI submitted long-running task in simple task, waiting for completion...")
         
@@ -1275,7 +1304,7 @@ class SubtaskExecutor:
     """
 
     def __init__(self, session_dir: str = None, model_roles: dict = None):
-        self.simple_executor = SimpleTaskExecutor()
+        self.simple_executor = SimpleTaskExecutor(session_dir=session_dir)
         # Back-reference so SimpleTaskExecutor can delegate long-running
         # handling (poll + callback) when AI uses autoagent-exec in a simple task
         self.simple_executor._subtask_executor = self
