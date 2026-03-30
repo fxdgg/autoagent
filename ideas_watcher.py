@@ -13,6 +13,7 @@ import yaml
 import hashlib
 import logging
 import tempfile
+import threading
 from typing import Optional, List
 
 
@@ -54,14 +55,14 @@ class IdeasWatcher:
     2. Call AI to decompose each idea into structured TODO tasks
     3. Append the new tasks to todos.yaml
     4. Remove the processed idea from ideas.md
-    5. Archive the processed idea text into .ideas_processed.md
+    5. Record the processed idea in plans_state.yaml
     
     Ideas in ideas.md are separated by horizontal rules (---). Each section
     between separators is treated as one idea.
     """
 
-    # File to archive processed ideas
-    PROCESSED_STATE_FILE = ".ideas_processed.md"
+    # State file for tracking processed ideas (replaces .ideas_processed.md)
+    PLANS_STATE_FILE = "plans_state.yaml"
 
     # Temporary file for AI to write generated YAML tasks into
     TEMP_TASKS_FILE = ".ideas_tasks_temp.yaml"
@@ -70,7 +71,7 @@ class IdeasWatcher:
         self,
         ideas_file: str = "ideas.md",
         todos_file: str = "todos.yaml",
-        processed_state_file: str = None,
+        plans_state_file: str = None,
     ):
         """
         Initialize IdeasWatcher.
@@ -78,25 +79,80 @@ class IdeasWatcher:
         Args:
             ideas_file: Path to the ideas markdown file
             todos_file: Path to the todos YAML configuration file
-        processed_state_file: Path to track processed ideas (default: .ideas_processed.md)
+            plans_state_file: Path to the plans state YAML file
+                (default: plans_state.yaml in the same directory)
         """
         self.ideas_file = ideas_file
         self.todos_file = todos_file
-        self.processed_state_file = processed_state_file or self.PROCESSED_STATE_FILE
+        self.plans_state_file = plans_state_file or self.PLANS_STATE_FILE
+        self._lock = threading.Lock()
+        self._plans_state = self._load_plans_state()
         self._last_mtime = 0.0
 
-    def _archive_idea(self, idea: dict):
-        """Archive a processed idea by appending its original text to .ideas_processed.md."""
+    # ── Plans state management ──────────────────────────────────────────
+
+    def _load_plans_state(self) -> dict:
+        """Load plans state from YAML file."""
         try:
-            is_new = not os.path.exists(self.processed_state_file)
-            with open(self.processed_state_file, 'a', encoding='utf-8') as f:
-                if is_new:
-                    f.write("# Processed Ideas Archive\n\n")
-                f.write(idea['content'])
-                f.write("\n\n---\n\n")
-            logger.debug(f"Archived idea '{idea['title']}' to {self.processed_state_file}")
+            if os.path.exists(self.plans_state_file):
+                with open(self.plans_state_file, 'r', encoding='utf-8') as f:
+                    data = yaml.safe_load(f)
+                    if data and isinstance(data, dict):
+                        logger.info(f"Loaded plans state from {self.plans_state_file}")
+                        return data
         except Exception as e:
-            logger.error(f"Failed to archive idea: {e}")
+            logger.warning(f"Failed to load plans state file: {e}")
+        return {"ideas": {}}
+
+    def _save_plans_state(self):
+        """Save current plans state to YAML file (thread-safe)."""
+        with self._lock:
+            try:
+                with open(self.plans_state_file, 'w', encoding='utf-8') as f:
+                    yaml.dump(
+                        self._plans_state, f,
+                        default_flow_style=False,
+                        allow_unicode=True,
+                        sort_keys=False,
+                    )
+                logger.debug(f"Plans state saved to {self.plans_state_file}")
+            except Exception as e:
+                logger.error(f"Failed to save plans state: {e}")
+
+    def _is_idea_processed(self, idea_hash: str) -> bool:
+        """Check whether an idea (by hash) has already been processed."""
+        entry = self._plans_state.get("ideas", {}).get(idea_hash)
+        if entry is None:
+            return False
+        return entry.get("status") in ("completed", "failed")
+
+    def _record_idea_state(
+        self,
+        idea: dict,
+        status: str,
+        task_ids: Optional[List[int]] = None,
+    ):
+        """Record or update an idea's state in plans_state.yaml.
+
+        Args:
+            idea: Idea dict with 'hash', 'content', 'title' fields.
+            status: One of 'in_progress', 'completed', 'failed'.
+            task_ids: List of generated task IDs (for completed ideas).
+        """
+        idea_hash = idea['hash']
+        if "ideas" not in self._plans_state:
+            self._plans_state["ideas"] = {}
+
+        entry = self._plans_state["ideas"].get(idea_hash, {})
+        entry["status"] = status
+        entry["display_title"] = idea['title']
+        entry["content"] = idea['content']
+        entry["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        if status == "completed" and task_ids is not None:
+            entry["task_ids"] = task_ids
+        self._plans_state["ideas"][idea_hash] = entry
+        self._save_plans_state()
+        logger.debug(f"Recorded idea '{idea['title']}' as {status} in {self.plans_state_file}")
 
     def _remove_idea_from_file(self, idea: dict):
         """
@@ -153,15 +209,35 @@ class IdeasWatcher:
             pass
         return False
 
+    @staticmethod
+    def _make_display_title(content: str, max_len: int = 60) -> str:
+        """Derive a short display title from free-form idea content.
+
+        Takes the first non-empty line, strips leading ``#`` markers, and
+        truncates to *max_len* characters so it can be used in log messages
+        and console output.
+        """
+        for line in content.split('\n'):
+            line = line.strip()
+            if line:
+                line = re.sub(r'^#+\s*', '', line)
+                if len(line) > max_len:
+                    return line[:max_len] + '…'
+                return line
+        return '(untitled)'
+
     def parse_ideas(self) -> List[dict]:
         """
         Parse ideas.md and extract individual ideas.
         
         Ideas are delimited by horizontal rules (``---``). Each section
-        between separators is treated as one idea.
+        between separators is treated as one idea.  The format inside each
+        section is completely free-form; no specific structure is assumed.
         
         Returns:
-            List[dict]: List of ideas with 'title', 'content', 'body', and 'hash' fields.
+            List[dict]: List of ideas with 'title', 'content', and 'hash' fields.
+                ``title`` is a short display string derived from the content
+                (not stored persistently).
         """
         if not os.path.exists(self.ideas_file):
             return []
@@ -191,20 +267,12 @@ class IdeasWatcher:
             if not section:
                 continue
 
-            # Use first line as title, rest as body
-            lines = section.split('\n', 1)
-            title = lines[0].strip()
-            # Strip leading '#' characters from title for display
-            display_title = re.sub(r'^#+\s*', '', title)
-            body = lines[1].strip() if len(lines) > 1 else ""
-
             # Compute hash of the idea content for deduplication
             idea_hash = hashlib.sha256(section.encode('utf-8')).hexdigest()[:16]
 
             ideas.append({
-                'title': display_title,
+                'title': self._make_display_title(section),
                 'content': section,
-                'body': body,
                 'hash': idea_hash,
             })
 
@@ -366,7 +434,15 @@ class IdeasWatcher:
         processed_count = 0
 
         for idea in ideas:
+            # Skip already-processed ideas (deduplication by content hash)
+            if self._is_idea_processed(idea['hash']):
+                logger.info(f"Skipping already-processed idea '{idea['title']}' (hash={idea['hash']})")
+                # Still remove from ideas.md in case it was re-added
+                self._remove_idea_from_file(idea)
+                continue
+
             print(f"\n   💡 Processing idea: {idea['title']}")
+            self._record_idea_state(idea, "in_progress")
             try:
                 new_tasks = self._decompose_idea_to_tasks(
                     client, idea,
@@ -377,16 +453,19 @@ class IdeasWatcher:
                 )
                 if new_tasks:
                     self._append_tasks_to_todos(new_tasks)
+                    task_ids = [t.get('id') for t in new_tasks if t.get('id') is not None]
+                    self._record_idea_state(idea, "completed", task_ids=task_ids)
                     print(f"   ✅ Added {len(new_tasks)} task(s) from idea: {idea['title']}")
                 else:
+                    self._record_idea_state(idea, "completed", task_ids=[])
                     print(f"   ⚠️  No tasks generated from idea: {idea['title']}")
 
-                # Archive the idea and remove it from ideas.md
-                self._archive_idea(idea)
+                # Remove the processed idea from ideas.md
                 self._remove_idea_from_file(idea)
                 processed_count += 1
 
             except Exception as e:
+                self._record_idea_state(idea, "failed")
                 logger.error(f"Failed to process idea '{idea['title']}': {e}")
                 print(f"   ❌ Failed to process idea: {idea['title']} - {e}")
 
@@ -415,7 +494,7 @@ class IdeasWatcher:
         
         Args:
             client: CodeBuddyClient instance
-            idea: Idea dict with 'title', 'content', 'body' fields
+            idea: Idea dict with 'title', 'content', 'hash' fields
             review_client: Optional CodeBuddyClient with fresh context for review
             conv_logger: Optional ConversationLogger to record prompts/responses
             idea_index: 1-based index of the idea (for logging)
@@ -1067,7 +1146,7 @@ the issues have been addressed:
         """Mark all current ideas as processed without generating tasks."""
         ideas = self.parse_ideas()
         for idea in ideas:
-            self._archive_idea(idea)
+            self._record_idea_state(idea, "completed", task_ids=[])
         # Clear the ideas file
         try:
             with open(self.ideas_file, 'w', encoding='utf-8') as f:
@@ -1076,8 +1155,8 @@ the issues have been addressed:
             logger.error(f"Failed to clear ideas file: {e}")
 
     def reset(self):
-        """Reset all processed state (remove the archive file)."""
+        """Reset all processed state."""
         self._last_mtime = 0.0
-        if os.path.exists(self.processed_state_file):
-            os.remove(self.processed_state_file)
-        logger.info("Ideas processed state reset")
+        self._plans_state = {"ideas": {}}
+        self._save_plans_state()
+        logger.info("Plans state reset")
