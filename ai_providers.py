@@ -76,15 +76,15 @@ class AIProvider:
         self.model = model or self.default_model
         self.extra_args = extra_args
 
-    def build_command(self, continue_session: bool = False, session_id: str = None) -> str:
+    def build_command(self, session_id: str = None) -> str:
         """
         Build the CLI command string (without prompt).
 
         The prompt is always passed via stdin pipe.
 
         Args:
-            continue_session: Whether to continue an existing session
-            session_id: Specific session ID to resume (takes priority over generic --continue)
+            session_id: Session ID to resume. If provided, the CLI will
+                continue an existing conversation. If None, starts a new session.
 
         Returns:
             str: The command string
@@ -131,14 +131,14 @@ class CodeBuddyProvider(AIProvider):
     
     Command pattern:
         type prompt.txt | codebuddy --debug --verbose --max-turns 500 --print
-            --output-format stream-json [--continue] --model <model> -y -
+            --output-format stream-json [--resume <session_id>] --model <model> -y -
     """
 
     name = "codebuddy"
     default_executable = "codebuddy"
     default_model = DEFAULT_MODEL
 
-    def build_command(self, continue_session: bool = False, session_id: str = None) -> str:
+    def build_command(self, session_id: str = None) -> str:
         parts = [self.executable]
 
         parts.append("--debug --verbose --print")
@@ -146,8 +146,6 @@ class CodeBuddyProvider(AIProvider):
 
         if session_id:
             parts.extend(["--resume", session_id])
-        elif continue_session:
-            parts.append("--continue")
 
         parts.extend(["--model", self.model])
 
@@ -166,7 +164,7 @@ class ClaudeCodeProvider(AIProvider):
 
     Command pattern:
         type prompt.txt | claude --print --output-format stream-json
-            [--resume <session_id> | --continue] --model <model> --dangerously-skip-permissions -
+            [--resume <session_id>] --model <model> --dangerously-skip-permissions -
 
     Key differences from CodeBuddy:
     - Uses --dangerously-skip-permissions instead of -y
@@ -178,7 +176,7 @@ class ClaudeCodeProvider(AIProvider):
     default_executable = "claude"
     default_model = "claude-sonnet-4-6"
 
-    def build_command(self, continue_session: bool = False, session_id: str = None) -> str:
+    def build_command(self, session_id: str = None) -> str:
         parts = [self.executable]
 
         parts.append("--verbose --print")
@@ -186,8 +184,6 @@ class ClaudeCodeProvider(AIProvider):
 
         if session_id:
             parts.extend(["--resume", session_id])
-        elif continue_session:
-            parts.append("--continue")
 
         parts.extend(["--model", self.model])
         parts.append("--dangerously-skip-permissions")
@@ -213,7 +209,7 @@ class GeminiCLIProvider(AIProvider):
     Key differences from CodeBuddy:
     - Uses -p (--prompt) for non-interactive mode instead of --print
     - Uses --yolo or -y instead of -y for auto-accept
-    - Uses --resume latest for session continuation (not --continue)
+    - Uses --resume <session_id> for session continuation
     - Prompt is passed via -p with '-' to read from stdin
     - Supports --include-directories to allow access to directories outside workspace
     """
@@ -242,15 +238,13 @@ class GeminiCLIProvider(AIProvider):
         super().__init__(executable=executable, model=model, extra_args=extra_args)
         self.include_directories = include_directories or []
 
-    def build_command(self, continue_session: bool = False, session_id: str = None) -> str:
+    def build_command(self, session_id: str = None) -> str:
         parts = [self.executable]
 
         parts.extend(["--output-format", "stream-json"])
 
         if session_id:
             parts.extend(["--resume", session_id])
-        elif continue_session:
-            parts.extend(["--resume", "latest"])
         
         parts.extend(["--model", self.model])
         parts.append("--yolo")
@@ -284,7 +278,7 @@ class OpenCodeProvider(AIProvider):
 
     Key differences from other providers:
     - Prompt is passed as a positional argument, NOT via stdin
-    - Session continuation uses -s <session_id> (not --continue)
+    - Session continuation uses -s <session_id>
     - The session ID is extracted from the first JSON event
     - Output format uses line-delimited JSON with types:
       step_start, text, tool_call, tool_result, step_finish
@@ -295,7 +289,7 @@ class OpenCodeProvider(AIProvider):
     default_executable = "opencode"
     default_model = ""  # Uses opencode's configured default
 
-    def build_command(self, continue_session: bool = False, session_id: str = None) -> str:
+    def build_command(self, session_id: str = None) -> str:
         parts = [self.executable, "run"]
 
         parts.extend(["--format", "json"])
@@ -303,20 +297,17 @@ class OpenCodeProvider(AIProvider):
         if self.model:
             parts.extend(["-m", self.model])
 
+        if session_id:
+            parts.extend(["-s", session_id])
+
         if self.extra_args:
             parts.append(self.extra_args)
-
-        # Session continuation is handled separately by the AIClient
-        # (appends -s <session_id> to the command).
 
         return " ".join(parts)
 
     def get_stdin_command(self, prompt_file_path: str, cmd_args: str) -> str:
         """
         OpenCode supports stdin pipe for the message, just like other providers.
-
-        On session continuation, -s <session_id> is appended by the AIClient
-        (not here, since the provider doesn't track session state).
         """
         if os.name == 'nt':
             return f'type "{prompt_file_path}" | {cmd_args}'
@@ -446,7 +437,7 @@ class TestProvider(AIProvider):
         """Return the number of remaining unused rules."""
         return max(0, len(self._rules) - self._rule_index)
 
-    def build_command(self, continue_session: bool = False) -> str:
+    def build_command(self, session_id: str = None) -> str:
         # Not used for test provider
         return "echo test-provider"
 

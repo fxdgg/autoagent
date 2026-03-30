@@ -1,0 +1,570 @@
+# Task Design Guide for AI Agents
+
+This document is a comprehensive reference for AI agents that generate TODO
+tasks (via idea decomposition). Understanding how AutoAgent executes tasks
+will help you design tasks that are effective, robust, and easy to evaluate.
+
+---
+
+## 1. Execution Model Overview
+
+AutoAgent is an orchestrator that drives an AI coding agent (e.g., CodeBuddy)
+through a sequence of tasks defined in `todos.yaml`. The orchestrator does NOT
+execute tasks itself — it sends prompts to the AI agent, which reads/writes
+files, runs shell commands, and reports results.
+
+```
+┌─────────────┐     prompt      ┌──────────────┐     tools      ┌──────────┐
+│  AutoAgent  │ ──────────────► │  AI Agent    │ ─────────────► │ Codebase │
+│ Orchestrator│ ◄────────────── │ (CodeBuddy)  │ ◄───────────── │ & Shell  │
+└─────────────┘    response     └──────────────┘    results     └──────────┘
+```
+
+Key implications for task design:
+- The AI agent can do anything a developer can: edit code, run commands,
+  read logs, analyze outputs, install packages, use git, etc.
+- The AI agent has a **context window limit** — avoid tasks that require
+  reading extremely large files or outputs in a single step.
+- Each **simple** subtask runs in a single AI session (one prompt → one
+  response cycle, possibly with tool calls within that session).
+- The AI agent does NOT persist memory between separate subtask sessions
+  (but subtasks within the same parent task share context when they run
+  sequentially without resetting).
+
+---
+
+## 2. Task Types — Detailed Behavior
+
+### 2.1 `simple`
+
+**What happens at runtime:**
+1. AutoAgent sends a prompt containing the task name, completion_criteria,
+   initial_hint (if first attempt), and any retry context.
+2. The AI agent works autonomously — reading files, running commands, making
+   code changes — until it believes the task is done.
+3. The AI agent ends its response with a status marker:
+   - `✅ completed` — task is done
+   - `❌ not completed: <reason>` — task failed
+4. AutoAgent parses the marker to determine success/failure.
+
+**Scope:** Can be a top-level task OR a subtask inside nested/looping.
+
+**When to use:** Any task the AI can complete in a single session — code
+changes, running tests, file analysis, data processing, simple builds, etc.
+
+**Design tips:**
+- Keep each simple task focused on ONE logical objective.
+- The AI agent has access to `autoagent-exec` for commands that might take
+  more than a few minutes. You do NOT need to make those `long_running` —
+  the AI will use `autoagent-exec` automatically if needed. Use `long_running`
+  only when you KNOW the command will take a long time and want to specify
+  the command upfront.
+
+### 2.2 `nested`
+
+**What happens at runtime:**
+1. AutoAgent executes subtasks sequentially (id order).
+2. After ALL subtasks complete, AutoAgent asks the AI to evaluate whether
+   the **main task** completion_criteria are met.
+3. If not met, the AI decides which subtask to retry from (`retry_from`)
+   and provides a `suggested_fix` and `next_strategy`.
+4. AutoAgent resets subtasks from `retry_from` onward and re-executes them,
+   passing the `suggested_fix` to the retried subtask's prompt.
+5. This loop repeats up to `max_attempts` times.
+
+**Scope:** Top-level only.
+
+**When to use:** Multi-step workflows where the overall success depends on
+the combined result of all steps, and the AI should evaluate the final
+outcome holistically.
+
+**Design tips:**
+- The `completion_criteria` of the nested task is what gets evaluated after
+  all subtasks finish. Make it concrete and measurable.
+- Subtask completion_criteria are evaluated independently during execution.
+  The nested task's criteria is the "final exam."
+- Design subtasks so that retrying from a middle subtask makes sense (e.g.,
+  if step 3 fails, retrying from step 2 should produce a different input
+  for step 3).
+
+### 2.3 `looping`
+
+**What happens at runtime:**
+1. AutoAgent executes ALL subtasks sequentially — this is one "loop iteration."
+2. After one iteration completes, ALL subtask states are reset.
+3. Steps 1–2 repeat for `repeat_count` iterations.
+4. There is NO completion evaluation between iterations — the loop always
+   runs the full `repeat_count` times.
+5. Within a single iteration, if a subtask fails, the AI analyzes the failure
+   and decides retry strategy (same as nested).
+
+**Scope:** Top-level only.
+
+**When to use:** Iterative optimization cycles where you want to repeat the
+same workflow N times (e.g., profile → optimize → benchmark → commit).
+
+**Design tips:**
+- Each iteration should be self-contained and produce incremental progress.
+- Since there's no early termination, use looping when you want a fixed
+  number of optimization rounds regardless of intermediate results.
+- The last subtask in each iteration often handles "commit or rollback"
+  logic to preserve good changes.
+
+### 2.4 `long_running`
+
+**What happens at runtime:**
+1. AutoAgent sends a prompt telling the AI to use `autoagent-exec` to
+   launch the command in the background.
+2. The AI runs: `python autoagent_exec.py --log-dir <dir> --task-id <id> -- <command>`
+3. `autoagent-exec` implements a **10-second fast-fail** mechanism:
+   - If the command exits within 10s with an error → error shown immediately,
+     AI can fix and retry.
+   - If the command exits within 10s with success → treated as completed.
+   - If still running after 10s → detached to background, AI outputs
+     `⏳ LONG_RUNNING_IN_PROGRESS` and the session ends.
+4. AutoAgent monitors the background process via a signal file.
+5. When the process finishes, AutoAgent calls the AI back with the output
+   log path, exit code, and asks it to evaluate the results.
+
+**Scope:** Subtask only (inside nested or looping).
+
+**When to use:** Commands that are KNOWN to take a long time — model training,
+large-scale data processing, heavy profiling (e.g., `ncu`), long compilations.
+
+**Design tips:**
+- You do NOT need to specify the `command` field — the AI can decide what
+  command to run based on the task description and initial_hint.
+- If you DO specify `command`, it serves as a strong hint but the AI may
+  still modify it.
+- The AI will see the full output log after the command finishes, so
+  completion_criteria can reference specific output patterns.
+
+---
+
+## 3. Task Schema Reference
+
+### 3.1 Common Fields (all types)
+
+| Field                | Type   | Required | Description                                    |
+|----------------------|--------|----------|------------------------------------------------|
+| `id`                 | int/float | Yes   | Unique ID. Integer for top-level, dot notation for subtasks (e.g., `1.1`) |
+| `name`               | string | Yes      | Concise, descriptive task name                 |
+| `type`               | string | Yes      | `simple`, `nested`, `looping`, or `long_running` |
+| `completion_criteria` | string | Yes     | Clear, specific, measurable success criteria   |
+| `model`              | string | No       | `"default"` or `"simple"`. Default: `"default"` |
+
+### 3.2 Type-Specific Fields
+
+**simple:**
+
+| Field          | Type   | Required | Description                              |
+|----------------|--------|----------|------------------------------------------|
+| `initial_hint` | string | No       | Context/guidance for the AI on first attempt |
+
+**nested:**
+
+| Field          | Type   | Required | Description                              |
+|----------------|--------|----------|------------------------------------------|
+| `subtasks`     | list   | Yes      | Ordered list of subtasks (simple or long_running) |
+| `max_attempts` | int    | No       | Max retry rounds (default: 20)           |
+
+**looping:**
+
+| Field                   | Type | Required | Description                          |
+|-------------------------|------|----------|--------------------------------------|
+| `subtasks`              | list | Yes      | Ordered list of subtasks             |
+| `repeat_count`          | int  | Yes      | Number of loop iterations (≥ 1)      |
+| `max_attempts_per_loop` | int  | No       | Max retries per iteration (default: 20) |
+
+**long_running:**
+
+| Field     | Type   | Required | Description                              |
+|-----------|--------|----------|------------------------------------------|
+| `command` | string | No       | Command to run (AI can decide if omitted) |
+
+### 3.3 Hierarchy Rules
+
+```
+Top-level tasks:  simple | nested | looping
+                     │        │         │
+                     │    subtasks:   subtasks:
+                     │   simple or   simple or
+                     │  long_running long_running
+                     │
+              (no subtasks)
+```
+
+- `nested` and `looping` can ONLY be top-level.
+- `long_running` can ONLY be a subtask.
+- `simple` can be either top-level or subtask.
+
+### 3.4 The `model` Field
+
+The `model` field controls which AI model executes the task:
+
+- `"default"` (or omitted): Uses the default model, typically a more capable
+  model suited for complex reasoning, multi-step code changes, and analysis.
+- `"simple"`: Uses a lighter/faster model, suitable for straightforward tasks
+  like running a single command, simple file edits, or formatting.
+
+**Guidelines:**
+- Use `"simple"` for tasks like: "Run `make test`", "Format code with black",
+  "Copy file X to Y", "Run benchmark and save output".
+- Use `"default"` for tasks like: "Analyze profiling results and optimize
+  kernel code", "Debug failing test and fix root cause", "Refactor module
+  architecture".
+
+---
+
+## 4. How Completion Criteria Are Evaluated
+
+Understanding the evaluation mechanism is critical for writing good criteria.
+
+### 4.1 Simple Tasks — Self-Evaluation
+
+The AI agent evaluates its own work. After completing its actions, it decides
+whether the completion_criteria are met and outputs a status marker. This means:
+
+- **Criteria must be objectively verifiable by the AI** — the AI should be
+  able to check files, run commands, or read outputs to confirm.
+- **Avoid subjective criteria** — the AI has no way to verify "code quality
+  is good" or "performance is acceptable" without concrete metrics.
+
+### 4.2 Nested Tasks — AI Holistic Evaluation
+
+After all subtasks complete, a separate AI call evaluates the main task.
+The evaluator sees:
+- The main task's completion_criteria
+- Execution results from all subtasks (success/failure + summaries)
+- Relevant log file contents
+
+The evaluator responds with a JSON object including `main_task_completed`,
+`analysis`, `retry_from`, `next_strategy`, and `suggested_improvements`.
+
+This means:
+- **The nested task's criteria should describe the END STATE**, not the
+  process. The evaluator checks whether the final outcome is achieved.
+- **Subtask results are summarized** — the evaluator doesn't see full
+  details of each subtask's execution, only summaries.
+
+### 4.3 Looping Tasks — No Completion Evaluation
+
+Looping tasks run for exactly `repeat_count` iterations. There is no
+completion evaluation — the task is "done" when all iterations finish.
+Individual subtask failures within an iteration are handled by retry logic.
+
+---
+
+## 5. Retry and Failure Handling
+
+### 5.1 Simple Task Retries
+
+If a simple task fails (AI outputs `❌ not completed`), the orchestrator
+retries it with additional context:
+- **Previous Attempts**: Summary of what was tried and what happened.
+- **Suggested Fix**: If this is a subtask and the parent's failure analyzer
+  provided a fix, it's included in the prompt.
+
+### 5.2 Nested/Looping Failure Analysis
+
+When a subtask fails within a nested or looping task:
+1. AutoAgent calls an AI to analyze the failure.
+2. The AI sees: the failed subtask info, error output, all subtask statuses,
+   and previous retry decisions.
+3. The AI decides `retry_from` (which subtask to restart from) and provides
+   a `suggested_fix`.
+4. The `suggested_fix` is passed to the retried subtask's prompt.
+
+**Implications for task design:**
+- Design subtasks so that the failure of one can be diagnosed from its
+  error output.
+- Make subtask boundaries align with logical checkpoints — if step 3 fails,
+  it should be meaningful to retry from step 2 or step 3.
+- Avoid subtasks that silently fail — ensure errors are visible in output.
+
+---
+
+## 6. Writing Effective completion_criteria
+
+### 6.1 Rules
+
+1. **Be specific and measurable.** The AI must be able to verify the criteria
+   by reading files, checking command output, or running tests.
+
+2. **Reference concrete artifacts.** Mention file names, command outputs,
+   specific values, or patterns the AI can check.
+
+3. **Include both positive and negative conditions** when relevant (e.g.,
+   "tests pass AND no regressions").
+
+4. **Use numbered lists** for multiple conditions — this makes it clear that
+   ALL conditions must be met.
+
+### 6.2 Examples
+
+✅ **Good:**
+```yaml
+completion_criteria: |
+  1. The project builds successfully: cmake --build build --config Release
+  2. The executable runs and outputs "Score: 100/100"
+  3. Elapsed time is printed in format "Elapsed: XXX.XX ms"
+  4. baseline_timing.txt exists and contains the timing value
+```
+
+✅ **Good:**
+```yaml
+completion_criteria: |
+  All unit tests pass with 0 failures (pytest returns exit code 0).
+  Code coverage is at least 80% (check coverage report).
+```
+
+❌ **Bad:**
+```yaml
+completion_criteria: "Code is optimized"
+# Why bad: Not measurable. What does "optimized" mean?
+```
+
+❌ **Bad:**
+```yaml
+completion_criteria: "Performance is improved"
+# Why bad: No baseline, no metric, no threshold.
+```
+
+❌ **Bad:**
+```yaml
+completion_criteria: "The function works correctly"
+# Why bad: No way to verify without specific test cases or expected outputs.
+```
+
+### 6.3 Criteria for Different Task Types
+
+**For simple tasks (code changes):**
+- Reference the specific files to modify and what the changes should achieve.
+- Include a verification step (e.g., "compiles without errors", "tests pass").
+
+**For simple tasks (running commands):**
+- Specify the expected output pattern or exit code.
+- Mention where results should be saved.
+
+**For nested tasks (overall evaluation):**
+- Describe the desired end state, not the process.
+- Include quantitative thresholds when possible.
+
+**For long_running tasks:**
+- Reference patterns in the output log (the AI will read the log file).
+- Include exit code expectations (e.g., "exit code 0").
+
+---
+
+## 7. Writing Effective initial_hint
+
+The `initial_hint` field is shown to the AI ONLY on the first attempt. It
+provides context that helps the AI get started efficiently.
+
+### 7.1 What to Include
+
+- **Key file paths** the AI needs to know about.
+- **Specific commands** to run (especially if non-obvious).
+- **Architecture context** — how the codebase is structured.
+- **Constraints** — things the AI should NOT change.
+
+### 7.2 What NOT to Include
+
+- **Completion criteria** — that's a separate field.
+- **Obvious instructions** — the AI knows how to read files and run commands.
+- **Overly detailed step-by-step** — let the AI figure out the approach.
+
+### 7.3 Example
+
+```yaml
+initial_hint: |
+  The project uses CMake with a custom CUDA compilation setup.
+  Key files:
+    - CMakeLists.txt: Main build config
+    - cufftdx_dct3d.cuh: Kernel header (DCT/IDCT implementations)
+    - main.cpp: Benchmark program (100 iterations)
+  
+  Build commands:
+    cmake -B build -DCMAKE_BUILD_TYPE=Release
+    cmake --build build --config Release
+  
+  IMPORTANT: Do NOT modify the correctness test (Score calculation) logic.
+```
+
+---
+
+## 8. Task Decomposition Strategy
+
+### 8.1 When to Use a Single `simple` Task
+
+Use a single simple task when:
+- The idea can be completed in one logical step.
+- There's no need for background processes.
+- The AI doesn't need to evaluate intermediate results.
+
+Example ideas that should be a single simple task:
+- "Fix the bug in the login endpoint"
+- "Add input validation to the API"
+- "Run the test suite and fix any failures"
+
+### 8.2 When to Use `nested`
+
+Use nested when:
+- The idea requires multiple distinct steps.
+- The overall success depends on the combined result.
+- You want the AI to evaluate the final outcome and potentially retry.
+
+Example: "Optimize database query performance"
+```yaml
+- id: 1
+  name: "Optimize database query performance"
+  type: nested
+  completion_criteria: |
+    Average query response time < 100ms (measured by benchmark).
+    All existing tests still pass.
+  subtasks:
+    - id: 1.1
+      name: "Profile slow queries"
+      type: simple
+      completion_criteria: |
+        Identified top 3 slowest queries.
+        Analysis saved to query_analysis.txt.
+    - id: 1.2
+      name: "Add database indexes"
+      type: simple
+      completion_criteria: |
+        Appropriate indexes created.
+        Migration file generated.
+    - id: 1.3
+      name: "Run benchmark"
+      type: simple
+      completion_criteria: |
+        Benchmark completed.
+        Results show average response time < 100ms.
+```
+
+### 8.3 When to Use `looping`
+
+Use looping when:
+- The idea involves repeating an optimization cycle.
+- Each iteration should follow the same steps.
+- You want a fixed number of iterations (no early termination).
+
+Example: "Iteratively optimize CUDA kernel performance"
+```yaml
+- id: 1
+  name: "Iterative kernel optimization"
+  type: looping
+  repeat_count: 5
+  completion_criteria: |
+    5 rounds of profile-optimize-benchmark completed.
+  subtasks:
+    - id: 1.1
+      name: "Profile with ncu"
+      type: long_running
+      completion_criteria: "ncu profiling completed, output saved."
+    - id: 1.2
+      name: "Optimize based on profile"
+      type: simple
+      completion_criteria: "Code changes applied, compiles without errors."
+    - id: 1.3
+      name: "Benchmark and commit/rollback"
+      type: simple
+      completion_criteria: "Benchmark run. If improved, committed. If not, rolled back."
+```
+
+### 8.4 Decomposition Anti-Patterns
+
+❌ **Over-decomposition:** Breaking a simple task into 5 trivial subtasks.
+```yaml
+# BAD: These should be one simple task
+- id: 1.1
+  name: "Open the config file"
+- id: 1.2
+  name: "Change the port number"
+- id: 1.3
+  name: "Save the file"
+- id: 1.4
+  name: "Restart the server"
+```
+
+❌ **Under-decomposition:** Putting everything in one simple task when steps
+are logically independent and may need separate retry strategies.
+```yaml
+# BAD: Training + evaluation + deployment should be separate subtasks
+- id: 1
+  name: "Train, evaluate, and deploy the model"
+  type: simple
+```
+
+❌ **Wrong type choice:**
+```yaml
+# BAD: long_running as top-level
+- id: 1
+  type: long_running  # ERROR: long_running can only be a subtask
+
+# BAD: nested as subtask
+- id: 1
+  type: nested
+  subtasks:
+    - id: 1.1
+      type: nested  # ERROR: nested cannot be a subtask
+```
+
+❌ **Vague criteria with nested tasks:**
+```yaml
+# BAD: The evaluator can't verify "good performance"
+- id: 1
+  type: nested
+  completion_criteria: "The system performs well"
+```
+
+---
+
+## 9. ID Assignment Rules
+
+- **Top-level tasks**: Sequential integers starting from the next available ID.
+  Example: if existing tasks go up to id 5, new tasks start from 6.
+- **Subtasks**: Dot notation using parent ID as prefix.
+  Example: task 6's subtasks are 6.1, 6.2, 6.3, etc.
+- **IDs must be unique** across the entire todos.yaml file.
+- **Subtask IDs determine execution order** — they run in ascending order.
+
+---
+
+## 10. Context Sharing Between Subtasks
+
+Within a nested or looping task, subtasks execute sequentially in the same
+AI session context (the context is NOT reset between subtasks of the same
+parent). This means:
+
+- A later subtask can reference files created by an earlier subtask.
+- The AI remembers what it did in previous subtasks (within the same parent).
+- You can design subtasks that build on each other's outputs.
+
+However, when a **retry** happens (e.g., retry_from 1.2), the AI session
+is reset. The retried subtask gets:
+- Its own prompt with completion_criteria
+- The `suggested_fix` from the failure analysis
+- Previous attempt history (summaries only)
+
+**Implication:** Don't rely on the AI "remembering" details from a previous
+failed attempt. Important information should be in files, not just in the
+AI's memory.
+
+---
+
+## 11. Quick Reference Checklist
+
+Before finalizing your task decomposition, verify:
+
+- [ ] Every task has `id`, `name`, `type`, and `completion_criteria`
+- [ ] Top-level tasks use `simple`, `nested`, or `looping` (never `long_running`)
+- [ ] Subtasks use `simple` or `long_running` (never `nested` or `looping`)
+- [ ] `looping` tasks have `repeat_count` (positive integer)
+- [ ] `nested`/`looping` tasks have non-empty `subtasks` list
+- [ ] All `completion_criteria` are specific, measurable, and verifiable
+- [ ] Task IDs are unique and follow the correct notation
+- [ ] The decomposition matches the complexity of the idea (not over/under-decomposed)
+- [ ] `model: simple` is used only for straightforward tasks
+- [ ] `initial_hint` provides useful context without duplicating criteria

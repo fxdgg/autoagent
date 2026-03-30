@@ -432,7 +432,7 @@ class IdeasWatcher:
             if conv_logger:
                 conv_logger.log_ideas_prompt(idea['title'], idea_index, prompt)
 
-            result = client.ask(prompt, continue_session=True)
+            result = client.ask(prompt)
 
             # Log response after AI call
             if conv_logger:
@@ -640,7 +640,7 @@ the issues have been addressed:
             if conv_logger:
                 conv_logger.log_ideas_review_prompt(review_round, review_prompt)
 
-            review_result = review_client.ask(review_prompt, continue_session=False)
+            review_result = review_client.ask(review_prompt)
 
             if conv_logger:
                 conv_logger.log_ideas_review_response(review_result)
@@ -696,7 +696,7 @@ the issues have been addressed:
             if conv_logger:
                 conv_logger.log_ideas_revision_prompt(revision_round, revision_prompt)
 
-            result = client.ask(revision_prompt, continue_session=True)
+            result = client.ask(revision_prompt)
 
             if conv_logger:
                 conv_logger.log_ideas_revision_response(result)
@@ -891,7 +891,7 @@ the issues have been addressed:
                         temp_tasks_path=temp_tasks_path,
                     )
                     try:
-                        result = client.ask(revision_prompt, continue_session=True)
+                        result = client.ask(revision_prompt)
 
                         if conv_logger:
                             conv_logger.log_ideas_revision_response(result)

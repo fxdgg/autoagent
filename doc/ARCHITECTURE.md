@@ -59,7 +59,7 @@
 │  - TestProvider                          │
 │  - 提示词构造器                         │
 │  - 响应解析器（stream-json）             │  ← 实时解析 stream-json 输出
-│  - Context 管理（--continue 参数）       │  ← 保持对话上下文连续性
+│  - Context 管理（session_id 自动续接）   │  ← 保持对话上下文连续性
 │  - 指数退避（Exponential Backoff）       │  ← CLI 连续失败时自动等待
 └────────────────┬────────────────────────┘
                  │
@@ -207,7 +207,7 @@ PROVIDER_ALIASES = {
   - `user` 事件：工具执行结果
   - `result` 事件：最终结果摘要
 - 维护 `last_full_log` 属性，记录包含工具调用的完整对话日志
-- 通过 `_session_started` 标志管理 `--continue` 参数的使用
+- 通过 `session_id` 自动管理会话续接（`--resume <session_id>`）
 
 **stream-json 解析**：
 
@@ -454,11 +454,11 @@ class TodoOrchestrator:
         context_id = f"task_{task['id']}"
         client = CodeBuddyClient(context_id=context_id)
         
-        # 第一次调用，不使用 --continue（创建新的 context）
+        # 第一次调用，自动创建新 session
         initial_prompt = self._build_initial_prompt(task)
-        client.ask(initial_prompt, continue_session=False)
+        client.ask(initial_prompt)
         
-        # 后续所有子任务都使用 --continue（保持 context）
+        # 后续所有子任务自动通过 session_id 保持 context
         for subtask in task['subtasks']:
             result = self._execute_subtask(client, subtask)
             # ...
@@ -469,7 +469,7 @@ class TodoOrchestrator:
 - ✅ 避免 context 污染（比如任务1修改了代码，任务2不受影响）
 - ✅ 便于调试和分析（可以追溯特定任务的完整对话历史）
 
-> **注意**：由于 CodeBuddy CLI 的 `--continue` 只能继续最近一次对话，当前主任务必须串行执行。`context_id` 主要用于状态记录和日志追踪。
+> **注意**：每个主任务使用独立的 AIClient 实例，session_id 自动管理会话续接。`context_id` 主要用于状态记录和日志追踪。
 
 #### 2. 子任务级别的 Context 共享
 
@@ -478,20 +478,19 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
     """执行子任务，共享主任务的 context"""
     
     if subtask['type'] == 'simple':
-        # 简单任务：使用 --continue 保持上下文，AI 自主完成
+        # 简单任务：自动通过 session_id 保持上下文
         prompt = self._build_subtask_prompt(subtask)
-        result = client.ask(prompt, continue_session=True)
+        result = client.ask(prompt)
         
     elif subtask['type'] == 'long_running':
-        # 长时间任务：启动后台进程，使用 --continue 继续监控
+        # 长时间任务：启动后台进程，自动保持上下文
         command = self._build_nohup_command(subtask)
         self._start_background_task(command)
         
-        # 监控完成后，使用 --continue 让 AI 分析结果
+        # 监控完成后，AI 分析结果（自动续接 session）
         monitor_result = self._monitor_task(subtask)
         analysis = client.ask(
-            f"分析任务结果：\n{monitor_result}",
-            continue_session=True
+            f"分析任务结果：\n{monitor_result}"
         )
 ```
 
@@ -519,17 +518,17 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
     ↓
 创建新的 CodeBuddyClient (context_id="task_x")
     ↓
-第一次调用：continue_session=False
+第一次调用：自动创建新 session
     ↓
-执行子任务 1：continue_session=True
+执行子任务 1：自动通过 session_id 续接
     ↓
-执行子任务 2：continue_session=True
+执行子任务 2：自动通过 session_id 续接
     ↓
-执行子任务 3：continue_session=True
+执行子任务 3：自动通过 session_id 续接
     ↓
 所有子任务完成
     ↓
-调用 AI 评估主任务：continue_session=True
+调用 AI 评估主任务：自动通过 session_id 续接
     ↓
 主任务完成/失败
     ↓
@@ -561,20 +560,20 @@ tasks:
 codebuddy -m "glm-4.7" -y "请阅读 program.md 并开始执行任务 2"
 ```
 
-#### 后续调用（继续现有 context）
+#### 后续调用（继续现有 session）
 
 ```bash
-codebuddy --continue -m "glm-4.7" -y "检查子任务 2.1 的执行结果"
+codebuddy --resume <session_id> -m "glm-4.7" -y "检查子任务 2.1 的执行结果"
 ```
 
 #### 长时间任务的特殊处理
 
 ```bash
-# 启动后台训练（不使用 --continue，因为是独立的子进程）
+# 启动后台训练（独立的子进程）
 nohup python train.py --config config.yaml > logs/2.2.log 2>&1 &
 
-# 训练完成后，使用 --continue 继续 context 分析结果
-codebuddy --continue -m "glm-4.7" -y "分析训练日志并判断是否满足完成条件"
+# 训练完成后，通过 session_id 续接 context 分析结果
+codebuddy --resume <session_id> -m "glm-4.7" -y "分析训练日志并判断是否满足完成条件"
 ```
 
 ### 错误处理与 Context 恢复
@@ -598,12 +597,12 @@ for task in state['tasks']:
 1. **Context ID 生成规则**：
    - 使用任务 ID 作为 context ID：`task_{task_id}`
    - 确保唯一性：不同主任务的 context ID 不会冲突
-   - **注意**：`context_id` 是系统内部标识，用于状态记录和日志追踪。CodeBuddy CLI 的 `--continue` 参数只能继续**最近一次**对话，不支持指定某个 context ID 精确恢复。因此同一时刻只能有一个主任务在执行，或者需要额外的机制（如多用户隔离）来管理多 context。
+   - **注意**：`context_id` 是系统内部标识，用于状态记录和日志追踪。会话续接通过 `session_id` + `--resume` 实现，每个 AIClient 实例独立管理自己的 session_id。
 
-2. **--continue 参数的使用**：
-   - 第一次调用：`continue_session=False`
-   - 后续调用：`continue_session=True`
-   - 跨系统重启后：如果 context 仍然存在，使用 `continue_session=True`
+2. **session_id 的自动管理**：
+   - 首次调用：不传 session_id，CLI 创建新会话
+   - 后续调用：自动使用从 stream 事件中捕获的 session_id
+   - 跨系统重启后：从 `todos_state.yaml` 恢复 session_id，通过 `resume_session()` 设置
 
 3. **Context 清理策略**：
    - 主任务成功：保留 context 24小时（用于审计和分析）
@@ -611,9 +610,8 @@ for task in state['tasks']:
    - 超过最大尝试次数：清理 context 并记录日志
 
 4. **并发控制**：
-   - 由于 `--continue` 只能继续最近一次对话，主任务必须串行执行
-   - 同一个主任务的子任务必须串行执行（共享 context）
-   - 如果未来 CodeBuddy 支持指定 context ID，可以扩展为并发执行
+   - 每个主任务使用独立的 AIClient 实例和 session_id，理论上可以并发执行
+   - 同一个主任务的子任务必须串行执行（共享 session）
 
 ## 任务类型
 
@@ -1163,7 +1161,7 @@ def _ai_analyze_long_running_result(self, subtask, client, status, output_log):
     prompt = f"""Task completed with status: {status}
     Output log: {output_log}
     Please read the log and evaluate..."""
-    result = client.ask(prompt, continue_session=True)
+    result = client.ask(prompt)
     return result
 ```
 

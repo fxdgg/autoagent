@@ -59,7 +59,7 @@ class SimpleTaskExecutor:
     until the criteria are met or max attempts are reached.
     """
 
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, is_subtask: bool = False, conv_logger=None, parent_task_id: str = None, parent_context: dict = None) -> bool:
+    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, **kwargs) -> bool:
         """
         Execute a simple task.
         
@@ -67,7 +67,6 @@ class SimpleTaskExecutor:
             task: Task configuration dict
             client: CodeBuddyClient instance
             state_manager: State manager for persistence
-            is_subtask: Whether this is a subtask within a nested task
             conv_logger: Optional ConversationLogger instance
             parent_task_id: Parent task ID if this is a subtask (for log organization)
             parent_context: Optional context from parent task for prompt enrichment
@@ -107,10 +106,6 @@ class SimpleTaskExecutor:
             last_timeout_error = None  # Reset after injecting into prompt
             
             try:
-                # First attempt of a main task: don't continue session
-                # Subtasks and subsequent attempts: continue session
-                continue_session = is_subtask or (attempts > 1)
-                
                 # Write prompt to log BEFORE calling AI (crash safety)
                 if conv_logger:
                     conv_logger.log_prompt(
@@ -121,7 +116,7 @@ class SimpleTaskExecutor:
                         parent_task_id=parent_task_id,
                     )
                 
-                result = client.ask(prompt, continue_session=continue_session)
+                result = client.ask(prompt)
                 
                 # Append response to log AFTER AI returns
                 if conv_logger:
@@ -674,11 +669,10 @@ class NestedTaskExecutor:
                     round_num=round_num,
                 )
             
-            decision = client.ask(prompt, expect_json=True, continue_session=True)
+            decision = client.ask(prompt, expect_json=True)
             print(f"      AI Analysis: {decision.get('analysis', 'N/A')[:200]}")
             print(f"      AI Decision: retry_from = {decision.get('retry_from', failed_id)}")
-            print(f"      Suggested Fix: {decision.get('suggested_fix', 'N/A')[:200]}")
-            # Append response to log AFTER AI returns
+            print(f"      Suggested Fix: {decision.get('suggested_fix', 'N/A')[:200]}")            # Append response to log AFTER AI returns
             if conv_logger:
                 import json
                 response_for_log = client.last_full_log or json.dumps(decision, indent=2, ensure_ascii=False)
@@ -801,7 +795,7 @@ class NestedTaskExecutor:
                     round_num=round_num,
                 )
             
-            evaluation = client.ask(prompt, expect_json=True, continue_session=True)
+            evaluation = client.ask(prompt, expect_json=True)
             completed = evaluation.get('main_task_completed', False)
             print(f"      AI Evaluation: {'✅ COMPLETED' if completed else '❌ NOT COMPLETED'}")
             print(f"      Analysis: {evaluation.get('analysis', 'N/A')[:200]}")
@@ -1150,7 +1144,7 @@ class LoopingTaskExecutor:
                     round_num=loop_idx,
                 )
 
-            decision = client.ask(prompt, expect_json=True, continue_session=True)
+            decision = client.ask(prompt, expect_json=True)
             print(f"      AI Analysis: {decision.get('analysis', 'N/A')[:200]}")
             print(f"      AI Decision: retry_from = {decision.get('retry_from', failed_id)}")
 
@@ -1264,7 +1258,7 @@ class SubtaskExecutor:
     ) -> SubtaskResult:
         """Execute a simple subtask via AI."""
         success = self.simple_executor.execute(
-            subtask, client, state_manager, is_subtask=True,
+            subtask, client, state_manager,
             conv_logger=conv_logger, parent_task_id=parent_task_id,
             parent_context=parent_context,
         )
@@ -1333,11 +1327,6 @@ class SubtaskExecutor:
             )
             
             try:
-                # Long-running subtasks always run inside a parent task's context,
-                # so always continue the session (like other subtasks).
-                # Only the very first call of a main task should start a new session.
-                continue_session = True
-                
                 # Write prompt to log BEFORE calling AI (crash safety)
                 if conv_logger:
                     conv_logger.log_prompt(
@@ -1348,7 +1337,7 @@ class SubtaskExecutor:
                         parent_task_id=parent_task_id,
                     )
                 
-                result = client.ask(prompt, continue_session=continue_session)
+                result = client.ask(prompt)
                 
                 # Append response to log AFTER AI returns
                 if conv_logger:
@@ -1643,7 +1632,7 @@ class SubtaskExecutor:
                     metadata={"type": "long_running_analysis"},
                 )
             
-            result = client.ask(prompt, continue_session=True)
+            result = client.ask(prompt)
             
             # Append response to log AFTER AI returns
             if conv_logger:

@@ -179,10 +179,10 @@ class AIProvider:
 #### build_command
 
 ```python
-def build_command(self, continue_session: bool = False) -> str
+def build_command(self, session_id: str = None) -> str
 ```
 
-构造 CLI 命令字符串（不含 prompt）。Prompt 始终通过 stdin 管道传递。
+构造 CLI 命令字符串（不含 prompt）。Prompt 始终通过 stdin 管道传递。如果提供了 `session_id`，CLI 将恢复该会话；否则启动新会话。
 
 #### get_stdin_command
 
@@ -231,7 +231,7 @@ def parse_model_spec(model_str: str) -> dict
 
 **命令模式**：
 ```bash
-type prompt.txt | codebuddy --debug --verbose --print --output-format stream-json [--continue] --model <model> -y -
+type prompt.txt | codebuddy --debug --verbose --print --output-format stream-json [--resume <session_id>] --model <model> -y -
 ```
 
 #### ClaudeCodeProvider
@@ -244,7 +244,7 @@ type prompt.txt | codebuddy --debug --verbose --print --output-format stream-jso
 
 **命令模式**：
 ```bash
-type prompt.txt | claude --verbose --print --output-format stream-json [--continue] --model <model> --dangerously-skip-permissions -
+type prompt.txt | claude --verbose --print --output-format stream-json [--resume <session_id>] --model <model> --dangerously-skip-permissions -
 ```
 
 与 CodeBuddy 的关键差异：使用 `--dangerously-skip-permissions` 替代 `-y`。
@@ -259,10 +259,10 @@ type prompt.txt | claude --verbose --print --output-format stream-json [--contin
 
 **命令模式**：
 ```bash
-type prompt.txt | gemini --output-format stream-json [--resume latest] --model <model> --yolo -p -
+type prompt.txt | gemini --output-format stream-json [--resume <session_id>] --model <model> --yolo -p -
 ```
 
-与 CodeBuddy 的关键差异：使用 `-p` 指定非交互模式，使用 `--resume latest` 替代 `--continue`，使用 `--yolo` 替代 `-y`。
+与 CodeBuddy 的关键差异：使用 `-p` 指定非交互模式，使用 `--resume <session_id>` 恢复会话，使用 `--yolo` 替代 `-y`。
 
 #### OpenCodeProvider
 
@@ -283,7 +283,7 @@ type prompt.txt | opencode run --format json [-m <model>] -s <session_id>
 
 与 CodeBuddy 的关键差异：
 - 使用 `--format json` 替代 `--output-format stream-json`
-- 会话续接使用 `-s <session_id>`（不是 `--continue`），session ID 从首次 JSON 事件中提取
+- 会话续接使用 `-s <session_id>`，session ID 从首次 JSON 事件中提取
 - 输出格式使用行分隔 JSON，事件类型包括：`step_start`、`text`、`tool_call`、`tool_result`、`step_finish`
 - 不设默认模型，使用 opencode 自身配置
 
@@ -359,7 +359,7 @@ class AIClient:
 | `provider` | AIProvider | None | AI provider 实例（优先于 legacy 参数） |
 | `workspace` | str | "." | 工作目录 |
 | `timeout` | int | 3600 | 超时时间（秒）。实际使用中由 TodoOrchestrator 传入（来自 config.yaml 或 CLI `--timeout`） |
-| `context_id` | str | None | Context 标识符，用于状态记录和日志追踪（注意：`--continue` 只能继续最近一次对话，不支持指定 context ID） |
+| `context_id` | str | None | Context 标识符，用于状态记录和日志追踪 |
 | `codebuddy_path` | str | None | （Legacy）CodeBuddy 可执行文件路径 |
 | `model` | str | None | （Legacy）AI 模型名 |
 
@@ -370,8 +370,7 @@ class AIClient:
 | 属性 | 类型 | 说明 |
 |------|------|------|
 | `last_full_log` | str | 最近一次 `ask()` 的完整对话日志（包含工具调用），供 ConversationLogger 使用 |
-| `_session_started` | bool | 内部标志，控制是否使用 `--continue` 参数 |
-| `_opencode_session_id` | str | OpenCode 专用：追踪会话 ID，用于 `-s` 续接参数 |
+| `_session_id` | str | 会话 ID，用于 `--resume` 续接参数。首次调用后自动从 stream 事件中捕获 |
 | `_consecutive_failures` | int | 连续失败计数器，用于指数退避 |
 | `_backoff_base` | int | 退避基础等待时间（默认 5 秒） |
 | `_backoff_max` | int | 退避最大等待时间（默认 300 秒，由 `config.yaml` 的 `backoff_max_wait` 覆盖） |
@@ -381,7 +380,7 @@ class AIClient:
 | 层级 | 策略 | 说明 |
 |------|------|------|
 | 主任务 | 独立 context | 每个主任务创建独立的 AIClient，互不干扰 |
-| 子任务 | 共享 context | 同一主任务内的子任务使用 `--continue` 共享上下文 |
+| 子任务 | 共享 context | 同一主任务内的子任务通过 session_id 自动共享上下文 |
 
 ```python
 from ai_providers import get_provider
@@ -391,19 +390,19 @@ provider = get_provider("claude", model="claude-sonnet-4-6")
 
 # 主任务 1
 client1 = AIClient(provider=provider, context_id="task_1")
-client1.ask("修改模型代码", continue_session=False)   # 创建新 context
-client1.ask("检查修改结果", continue_session=True)    # 复用 context
+client1.ask("修改模型代码")   # 创建新 session
+client1.ask("检查修改结果")    # 自动通过 session_id 复用 context
 
 # 主任务 2（完全隔离）
 client2 = AIClient(provider=provider, context_id="task_2")
-client2.ask("修改另一个模型", continue_session=False)  # 独立 context
+client2.ask("修改另一个模型")  # 独立 session
 ```
 
 ### 方法
 
 #### ask
 
-向 AI 工具发送提示并获取响应。
+向 AI 工具发送提示并获取响应。会话续接通过 session_id 自动管理：首次调用创建新会话，后续调用自动通过 `--resume <session_id>` 复用会话。
 
 ```python
 def ask(
@@ -411,7 +410,6 @@ def ask(
     prompt: str,
     expect_json: bool = False,
     timeout: int = None,
-    continue_session: bool = False,
 ) -> Union[str, dict]
 ```
 
@@ -420,7 +418,6 @@ def ask(
 | `prompt` | str | - | 提示词 |
 | `expect_json` | bool | False | 是否期望 JSON 响应 |
 | `timeout` | int | None | 超时时间（覆盖默认值） |
-| `continue_session` | bool | False | 是否使用 `--continue` 保持上下文 |
 
 **执行流程**：
 1. 将 prompt 写入临时文件（避免 shell 转义问题）
@@ -438,14 +435,14 @@ from codebuddy_client import AIClient
 provider = get_provider("codebuddy")
 client = AIClient(provider=provider, context_id="task_2")
 
-# 第一次调用：创建新 context
-result = client.ask("请阅读 program.md 并开始执行任务 2", continue_session=False)
+# 第一次调用：创建新 session
+result = client.ask("请阅读 program.md 并开始执行任务 2")
 
-# 后续调用：复用 context
-result = client.ask("检查子任务 2.1 的结果", continue_session=True)
+# 后续调用：自动通过 session_id 复用 context
+result = client.ask("检查子任务 2.1 的结果")
 
 # 获取结构化 JSON 响应
-decision = client.ask("分析失败原因", expect_json=True, continue_session=True)
+decision = client.ask("分析失败原因", expect_json=True)
 print(decision['retry_from'])
 
 # 获取包含工具调用的完整日志
@@ -458,7 +455,7 @@ full_log = client.last_full_log
 def reset_session(self)
 ```
 
-重置会话状态，使下一次调用不使用 `--continue`。
+重置会话状态（清除 session_id），使下一次调用启动新会话。
 
 ### stream-json 解析
 
@@ -501,7 +498,7 @@ attempts = 0
 max_attempts = task.get('max_attempts', 20)
 
 while attempts < max_attempts:
-    result = client.ask(prompt, continue_session=(attempts > 0))
+    result = client.ask(prompt)
     if is_completed(result):
         return True
     attempts += 1

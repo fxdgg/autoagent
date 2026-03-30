@@ -5,7 +5,7 @@
 # Default AI model for providers that support model selection
 # This is used when no model is specified via CLI --model or preset
 # Supported models depend on the provider (e.g., codebuddy supports deepseek-v3.2, claude-*)
-default_model: deepseek-v3.2
+default_model: glm-5.0-ioa
 
 # Timeout for each AI call (in seconds).
 # If an AI call exceeds this limit, the session is killed and the next

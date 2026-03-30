@@ -121,11 +121,14 @@ def build_autoagent_exec_note(task_id: str, exec_path: str, log_session_dir: str
     This is appended to simple-task prompts on the first attempt so the AI
     knows how to handle long-running commands *before* hitting a timeout.
     """
+    log_dir_part = ""
+    if log_session_dir:
+        log_dir_part = f' --log-dir "{log_session_dir}"'
     return (
         "**Note on long-running commands:** If a Bash command may take more "
         "than a few minutes (e.g. compilation, benchmarking, profiling), do "
         "NOT run it directly. Instead use:\n"
-        f'  python "{exec_path}" --task-id {task_id} -- <your command>\n'
+        f'  python "{exec_path}"{log_dir_part} --task-id {task_id} -- <your command>\n'
         "The launcher will auto-detach after 10s and print \"TASK SUBMITTED\". "
         "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS"
     )

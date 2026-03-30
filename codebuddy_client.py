@@ -3,7 +3,7 @@ AI Client - Wraps AI CLI tool interactions with context management.
 
 This module provides the AIClient class that handles:
 - Calling AI tools (CodeBuddy, Claude Code, Gemini CLI) via subprocess
-- Managing conversation context (--continue flag)
+- Managing conversation context (session_id based resumption)
 - Parsing JSON responses from AI
 - Timeout handling
 
@@ -23,7 +23,7 @@ import time
 import asyncio
 from typing import Union, Optional, List
 
-from ai_providers import AIProvider, CodeBuddyProvider, OpenCodeProvider, get_provider
+from ai_providers import AIProvider, CodeBuddyProvider, get_provider
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class AIClient:
     - OpenCode (opencode)
     
     Each main task should create its own AIClient instance.
-    Subtasks within the same main task share context via --continue (or -s for opencode).
+    Subtasks within the same main task share context via session_id (--resume).
     """
 
     def __init__(
@@ -81,8 +81,7 @@ class AIClient:
         self.workspace = workspace
         self.timeout = timeout
         self.context_id = context_id
-        self._session_started = False
-        self._opencode_session_id = None  # Track OpenCode session ID for continuation
+        self._session_id = None  # Session ID for conversation continuity
         # Full conversation log including tool calls (set after each ask() call)
         self.last_full_log = ""
         # Callback to notify session_id changes (for state persistence)
@@ -104,7 +103,7 @@ class AIClient:
     @property
     def session_id(self) -> str:
         """Get the current session ID (for context persistence)."""
-        return self._opencode_session_id or ""
+        return self._session_id or ""
 
     def resume_session(self, session_id: str):
         """
@@ -114,8 +113,7 @@ class AIClient:
             session_id: The session ID to resume (e.g., from a previous run)
         """
         if session_id:
-            self._opencode_session_id = session_id
-            self._session_started = True  # Mark as started so continuation is enabled
+            self._session_id = session_id
             logger.info(f"[{self.context_id}] Resuming session: {session_id}")
 
     def ask(
@@ -123,16 +121,20 @@ class AIClient:
         prompt: str,
         expect_json: bool = False,
         timeout: int = None,
-        continue_session: bool = False,
+        **kwargs,
     ) -> Union[str, dict]:
         """
         Send a prompt to CodeBuddy and get a response.
+        
+        Session continuity is handled automatically via session_id:
+        - If a session_id exists (from a previous call or resume_session()),
+          the CLI will resume that session.
+        - Otherwise, a new session is started.
         
         Args:
             prompt: The prompt to send
             expect_json: Whether to parse the response as JSON
             timeout: Override default timeout
-            continue_session: Whether to use --continue flag
             
         Returns:
             str or dict: The AI response (parsed as JSON if expect_json=True)
@@ -156,11 +158,11 @@ class AIClient:
             time.sleep(delay)
 
         # Build command args (without prompt - prompt goes via stdin)
-        cmd_args = self._build_command(continue_session)
+        cmd_args = self._build_command()
         
         logger.info(
             f"[{self.context_id}] Calling {self.provider.name} "
-            f"(continue={continue_session}, session_id={self.session_id}, timeout={effective_timeout}s)"
+            f"(session_id={self.session_id or 'new'}, timeout={effective_timeout}s)"
         )
         logger.debug(f"[{self.context_id}] Prompt: {prompt[:200]}...")
         logger.debug(f"[{self.context_id}] Command: {cmd_args}")
@@ -175,12 +177,7 @@ class AIClient:
                 prompt_file_path = pf.name
 
             # Build full command: pipe the temp file content as stdin
-            if isinstance(self.provider, OpenCodeProvider) and self._opencode_session_id and self._session_started:
-                # For OpenCode continuation, append -s <session_id> to the command
-                session_cmd = f"{cmd_args} -s {self._opencode_session_id}"
-                full_cmd = self.provider.get_stdin_command(prompt_file_path, session_cmd)
-            else:
-                full_cmd = self.provider.get_stdin_command(prompt_file_path, cmd_args)
+            full_cmd = self.provider.get_stdin_command(prompt_file_path, cmd_args)
 
             logger.debug(f"[{self.context_id}] Full command: {full_cmd}")
 
@@ -266,7 +263,7 @@ class AIClient:
             if not self.last_full_log:
                 self.last_full_log = response
 
-            self._session_started = True
+            # Session is now active (session_id captured from stream events)
             self._consecutive_failures = 0  # Reset backoff on success
             logger.info(f"[{self.context_id}] Got response ({len(response)} chars)")
             logger.debug(f"[{self.context_id}] Response: {response[:200]}...")
@@ -294,27 +291,18 @@ class AIClient:
                 except OSError:
                     pass
 
-    def _build_command(self, continue_session: bool) -> str:
+    def _build_command(self) -> str:
         """
         Build the AI CLI command string (without prompt).
 
         Delegates to the provider to build the correct command for the
-        specific AI tool being used.
-
-        For non-OpenCode providers, passes saved session_id so the provider
-        can use --resume <session_id> instead of generic --continue.
-        OpenCode handles session_id separately (appended as -s <id> by ask()).
-
-        Args:
-            continue_session: Whether to continue existing session
+        specific AI tool being used. If a session_id exists, it is passed
+        to the provider so the CLI resumes that session.
 
         Returns:
             str: The command string (prompt will be piped via stdin)
         """
-        use_continue = continue_session and self._session_started
-        # For non-OpenCode providers, pass session_id to enable --resume <id>
-        sid = self._opencode_session_id if (use_continue and not isinstance(self.provider, OpenCodeProvider)) else None
-        return self.provider.build_command(continue_session=use_continue, session_id=sid)
+        return self.provider.build_command(session_id=self._session_id)
 
     def _handle_stream_line(self, line: str, assistant_text_parts: list, full_log_parts: list = None):
         """
@@ -472,8 +460,8 @@ class AIClient:
 
             # Extract session_id from result event (Claude Code / CodeBuddy)
             session_id = event.get("session_id", "")
-            if session_id and session_id != self._opencode_session_id:
-                self._opencode_session_id = session_id
+            if session_id and session_id != self._session_id:
+                self._session_id = session_id
                 if self._on_session_id_changed:
                     self._on_session_id_changed(session_id)
 
@@ -506,7 +494,7 @@ class AIClient:
                 if isinstance(data, dict):
                     session_id = data.get("sessionID", data.get("sessionId", ""))
             if session_id:
-                self._opencode_session_id = session_id
+                self._session_id = session_id
                 # Notify external listener for state persistence
                 if self._on_session_id_changed:
                     self._on_session_id_changed(session_id)
@@ -660,8 +648,8 @@ class AIClient:
         )
 
     def reset_session(self):
-        """Reset the session state, so next call won't use --continue."""
-        self._session_started = False
+        """Reset the session state, so next call starts a new session."""
+        self._session_id = None
         logger.info(f"[{self.context_id}] Session reset")
 
 
@@ -717,7 +705,6 @@ class AIClientSDK:
         self.timeout = timeout
         self.context_id = context_id
         self._session_id = None  # SDK session ID for conversation continuity
-        self._session_started = False
         self.last_full_log = ""
         # Callback to notify session_id changes (for state persistence)
         self._on_session_id_changed = None
@@ -749,7 +736,6 @@ class AIClientSDK:
         """
         if session_id:
             self._session_id = session_id
-            self._session_started = True  # Mark as started so continuation is enabled
             logger.info(f"[{self.context_id}] Resuming session: {session_id}")
 
     def ask(
@@ -757,18 +743,20 @@ class AIClientSDK:
         prompt: str,
         expect_json: bool = False,
         timeout: int = None,
-        continue_session: bool = False,
+        **kwargs,
     ) -> Union[str, dict]:
         """
         Send a prompt to CodeBuddy via SDK and get a response.
         
-        This is a synchronous wrapper around the async SDK query() call.
+        Session continuity is handled automatically via session_id:
+        - If a session_id exists (from a previous call or resume_session()),
+          the SDK will continue that session.
+        - Otherwise, a new session is started.
         
         Args:
             prompt: The prompt to send
             expect_json: Whether to parse the response as JSON
             timeout: Override default timeout
-            continue_session: Whether to continue the existing session
             
         Returns:
             str or dict: The AI response (parsed as JSON if expect_json=True)
@@ -793,13 +781,13 @@ class AIClientSDK:
 
         logger.info(
             f"[{self.context_id}] Calling CodeBuddy SDK "
-            f"(continue={continue_session}, timeout={effective_timeout}s)"
+            f"(session_id={self.session_id or 'new'}, timeout={effective_timeout}s)"
         )
         logger.debug(f"[{self.context_id}] Prompt: {prompt[:200]}...")
 
         try:
             response, full_log = self._run_query(
-                prompt, continue_session, effective_timeout
+                prompt, effective_timeout
             )
         except AICallError:
             self._consecutive_failures += 1
@@ -813,7 +801,7 @@ class AIClientSDK:
             raise AICallError("CodeBuddy SDK returned empty response")
 
         self.last_full_log = full_log or response
-        self._session_started = True
+        # Session is now active (session_id captured from ResultMessage)
         self._consecutive_failures = 0  # Reset backoff on success
 
         logger.info(f"[{self.context_id}] Got response ({len(response)} chars)")
@@ -824,7 +812,7 @@ class AIClientSDK:
         return response
 
     def _run_query(
-        self, prompt: str, continue_session: bool, timeout: int
+        self, prompt: str, timeout: int
     ) -> tuple:
         """
         Run the SDK query in an asyncio event loop.
@@ -869,9 +857,8 @@ class AIClientSDK:
             if self.provider.executable and self.provider.executable != "codebuddy":
                 options.codebuddy_code_path = self.provider.executable
 
-            # Session continuity
-            use_continue = continue_session and self._session_started
-            if use_continue and self._session_id:
+            # Session continuity: resume if we have a session_id
+            if self._session_id:
                 options.continue_conversation = True
                 options.session_id = self._session_id
 
@@ -964,7 +951,7 @@ class AIClientSDK:
                                     )
 
                 elif isinstance(message, ResultMessage):
-                    # Capture session_id for future --continue
+                    # Capture session_id for future resumption
                     if message.session_id:
                         self._session_id = message.session_id
                         # Notify external listener for state persistence
@@ -1115,8 +1102,7 @@ class AIClientSDK:
         )
 
     def reset_session(self):
-        """Reset the session state."""
-        self._session_started = False
+        """Reset the session state, so next call starts a new session."""
         self._session_id = None
         logger.info(f"[{self.context_id}] Session reset")
 
@@ -1166,8 +1152,7 @@ class AIClientTest:
         self.workspace = workspace
         self.timeout = timeout
         self.context_id = context_id
-        self._session_started = False
-        self._opencode_session_id = None  # Session ID for test client (not actually used)
+        self._session_id = None  # Session ID for test client (not actually used)
         self.last_full_log = ""
         # Fallback exec_path and log_dir for autoagent-exec commands
         # when the prompt doesn't contain them (e.g. simple tasks where
@@ -1189,7 +1174,7 @@ class AIClientTest:
     @property
     def session_id(self) -> str:
         """Get the current session ID (for context persistence)."""
-        return self._opencode_session_id or ""
+        return self._session_id or ""
 
     def resume_session(self, session_id: str):
         """
@@ -1199,8 +1184,7 @@ class AIClientTest:
             session_id: The session ID to resume (e.g., from a previous run)
         """
         if session_id:
-            self._opencode_session_id = session_id
-            self._session_started = True  # Mark as started so continuation is enabled
+            self._session_id = session_id
             logger.info(f"[{self.context_id}] Resuming session: {session_id}")
 
     def ask(
@@ -1208,7 +1192,7 @@ class AIClientTest:
         prompt: str,
         expect_json: bool = False,
         timeout: int = None,
-        continue_session: bool = False,
+        **kwargs,
     ) -> Union[str, dict]:
         """
         Return the next pre-defined response from the test rules.
@@ -1225,7 +1209,6 @@ class AIClientTest:
                     long_running tasks, otherwise logged only)
             expect_json: Whether to parse the response as JSON
             timeout: Ignored
-            continue_session: Ignored
             
         Returns:
             str or dict: The next test response
@@ -1249,7 +1232,6 @@ class AIClientTest:
         response = self._maybe_run_autoagent_exec(prompt, response)
 
         self.last_full_log = response
-        self._session_started = True
 
         if expect_json:
             return self._parse_json_response(response)
@@ -1419,5 +1401,5 @@ class AIClientTest:
 
     def reset_session(self):
         """Reset the session state."""
-        self._session_started = False
+        self._session_id = None
         logger.info(f"[{self.context_id}] Test session reset")

@@ -103,6 +103,7 @@ def build_simple_task_prompt(
             build_autoagent_exec_note(
                 task_id=str(task['id']),
                 exec_path=exec_path,
+                log_session_dir=log_session_dir,
             )
         )
 

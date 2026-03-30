@@ -43,7 +43,19 @@ def _ensure_utf8_stdio():
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="AutoAgent long-running task launcher",
+        description="AutoAgent long-running task launcher.\n\n"
+            "Runs a command with fast-fail detection:\n"
+            "  - If the command exits within 10s with an error, the error is shown immediately.\n"
+            "  - If the command is still running after 10s, it is detached to the background\n"
+            "    and a signal file is created for the orchestrator to monitor.\n\n"
+            "Examples:\n"
+            "  python autoagent_exec.py --log-dir /path/to/logs --task-id 1.2 -- make -j8\n"
+            "  python autoagent_exec.py --log-dir /path/to/logs --task-id 2.1 -- python train.py --epochs 100\n"
+            "  python autoagent_exec.py --log-dir /path/to/logs --task-id 1.3 -- ncu --set full ./main.exe\n\n"
+            "Output files (created under <log-dir>/lr_tasks/):\n"
+            "  lr_<task-id>_signal.json  - Status signal file (running/finished/error)\n"
+            "  lr_<task-id>_output.log   - Full stdout+stderr output of the command",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         usage="autoagent_exec.py --log-dir <dir> --task-id <id> -- <command...>",
     )
     parser.add_argument(
