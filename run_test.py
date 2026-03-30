@@ -224,7 +224,7 @@ def run_orchestrator(
         "--provider", provider_name,
         "--workspace", project_root,
         "--preset", "none",  # Disable preset to avoid injecting ideas/model from config.yaml
-        # "--verbose",
+        "--verbose",
     ]
 
     if model:

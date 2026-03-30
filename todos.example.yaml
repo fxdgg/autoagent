@@ -159,6 +159,9 @@ tasks:
       - id: 5.1
         name: "Profile kernel with Nsight Compute"
         type: long_running_once
+        system_prompt_prefix: |
+          You are a GPU performance engineer. Focus on memory throughput,
+          occupancy, and warp efficiency metrics when analyzing profiles.
         completion_criteria: |
           1. ncu profiling exits with code 0.
           2. Profile output saved to profile/baseline.ncu-rep.
@@ -170,6 +173,13 @@ tasks:
       - id: 5.2
         name: "Analyze profile and optimize kernel code"
         type: simple
+        # Per-task system_prompt_prefix: customizes the AI persona for this
+        # specific subtask. Different subtasks can have different personas.
+        system_prompt_prefix: |
+          You are a senior C++/CUDA engineer. Follow these rules:
+          - Prefer modern C++17 features.
+          - Always check CUDA error codes with a macro.
+          - Write concise comments for non-obvious logic.
         completion_criteria: |
           1. At least one optimization applied to src/kernel.cu.
           2. cmake --build build --config Release completes without errors.
@@ -237,7 +247,8 @@ tasks:
 #   simple_once      — Like simple, but never re-executed once completed. Subtask only.
 #   long_running_once — Like long_running, but never re-executed once completed. Subtask only.
 #
-# Common fields:  id, name, type, completion_criteria, model (optional)
+# Common fields:  id, name, type, completion_criteria, model (optional),
+#                 system_prompt_prefix (optional)
 # simple:         + initial_hint (optional)
 # nested:         + subtasks, max_attempts (optional, default 20)
 # looping:        + subtasks, repeat_count, max_attempts_per_loop (optional, default 20)
@@ -250,9 +261,13 @@ tasks:
 #   - Use model: simple for trivial tasks (run a command, simple file edit)
 #   - Don't over-decompose: if one step suffices, use a single simple task
 #
-# AI persona (config.yaml):
-#   Set system_prompt_prefix in config.yaml to customize the AI's role/persona.
-#   Example: system_prompt_prefix: "You are a senior CUDA engineer."
-#   This text is prepended to ALL AI prompts (execution, decomposition, review, etc.).
+# Per-task AI persona (system_prompt_prefix):
+#   Set system_prompt_prefix on any task to customize the AI's role/persona.
+#   Example:
+#     - id: 1
+#       name: "Optimize kernel"
+#       type: simple
+#       system_prompt_prefix: "You are a senior CUDA engineer."
+#   Each task can have its own prefix — different tasks can have different personas.
 #   See TASK_DESIGN_GUIDE.md §12 for details.
 # ==========================================================================

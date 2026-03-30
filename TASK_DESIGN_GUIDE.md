@@ -31,8 +31,8 @@ Key implications for task design:
 - The AI session is NOT reset between subtasks, between retry rounds, or
   between loop iterations. The AI always retains the full conversation
   history within a parent task.
-- The AI's persona/role can be customized via `system_prompt_prefix` in
-  `config.yaml` (see §12 below).
+- The AI's persona/role can be customized per-task via the
+  `system_prompt_prefix` field in `todos.yaml` (see §12 below).
 
 ---
 
@@ -190,6 +190,7 @@ When a reset or new iteration would normally set a subtask back to "pending",
 | `type`               | string | Yes      | `simple`, `nested`, `looping`, `long_running`, `simple_once`, or `long_running_once` |
 | `completion_criteria` | string | Yes     | Clear, specific, measurable success criteria   |
 | `model`              | string | No       | `"default"` or `"simple"`. Default: `"default"` |
+| `system_prompt_prefix` | string | No    | Custom AI persona/instructions for this task (see §12) |
 
 ### 3.2 Type-Specific Fields
 
@@ -615,48 +616,75 @@ Before finalizing your task decomposition, verify:
 - [ ] The decomposition matches the complexity of the idea (not over/under-decomposed)
 - [ ] `model: simple` is used only for straightforward tasks
 - [ ] `initial_hint` provides useful context without duplicating criteria
+- [ ] `system_prompt_prefix` is set on tasks that need a specific AI persona or constraints
 
 ---
 
 ## 12. Customizing the AI Persona — `system_prompt_prefix`
 
-By default, AutoAgent uses built-in role definitions for the AI agent (e.g.,
-"You are a coding agent"). You can override or augment this by setting
-`system_prompt_prefix` in `config.yaml`:
+You can set a `system_prompt_prefix` field on any task (top-level or
+subtask) in `todos.yaml` to customize the AI's persona, role, or add
+global instructions for that specific task.
 
 ```yaml
-system_prompt_prefix: "You are a senior CUDA engineer specializing in GPU optimization."
+- id: 1
+  name: "Optimize CUDA kernel"
+  type: simple
+  system_prompt_prefix: "You are a senior CUDA engineer specializing in GPU optimization."
+  completion_criteria: |
+    Kernel performance improved by at least 10%.
 ```
 
 ### How It Works
 
-- The prefix text is **prepended to ALL AI prompts** — task execution,
-  ideas decomposition, review, failure analysis, and main evaluation.
-- If the prefix is empty (default), the built-in role definitions are used.
-- If the prefix is set, it **replaces** the default role line in ideas
-  decomposition and review prompts, and is **prepended** to task execution
-  prompts (before the built-in coding agent role).
+- The prefix text is **appended to the system prompt** for that task's AI
+  calls (task execution and failure analysis).
+- If the prefix is empty or omitted, no extra persona text is added.
+- Each task can have its own prefix — different tasks can have different
+  AI personas.
+
+### Where to Set It
+
+- **On a top-level `simple` task:** The prefix applies to that task's
+  execution.
+- **On subtasks inside `nested` or `looping`:** Each subtask can have its
+  own prefix. This is useful when different steps require different
+  expertise (e.g., a profiling step vs. an optimization step).
+- **On a top-level `nested` or `looping` task:** Not directly supported —
+  set the prefix on individual subtasks instead.
 
 ### When to Use
 
-- **Domain expertise:** Set the AI's persona to match your project domain
+- **Domain expertise:** Set the AI's persona to match the task's domain
   (e.g., "You are a machine learning engineer" or "You are a backend
   developer specializing in distributed systems").
-- **Global constraints:** Add instructions that should apply to every task
-  (e.g., "Always write code in Python 3.12+" or "Never modify files in
-  the vendor/ directory").
+- **Task-specific constraints:** Add instructions that should apply to a
+  particular task (e.g., "Always write code in Python 3.12+" or "Never
+  modify files in the vendor/ directory").
 - **Coding style:** Enforce conventions (e.g., "Follow Google C++ style
   guide" or "Use type hints in all Python functions").
 
 ### Example
 
 ```yaml
-system_prompt_prefix: |
-  You are a senior C++/CUDA engineer. Follow these rules:
-  - Prefer modern C++17 features.
-  - Always check CUDA error codes with a macro.
-  - Write concise comments for non-obvious logic.
-```
+subtasks:
+  - id: 1.1
+    name: "Profile kernel with Nsight Compute"
+    type: long_running
+    system_prompt_prefix: |
+      You are a GPU performance engineer. Focus on memory throughput,
+      occupancy, and warp efficiency metrics.
+    completion_criteria: |
+      ncu profiling completed and output saved.
 
-This prefix will appear at the very beginning of every prompt sent to the
-AI agent, ensuring consistent behavior across all tasks.
+  - id: 1.2
+    name: "Optimize kernel code"
+    type: simple
+    system_prompt_prefix: |
+      You are a senior C++/CUDA engineer. Follow these rules:
+      - Prefer modern C++17 features.
+      - Always check CUDA error codes with a macro.
+      - Write concise comments for non-obvious logic.
+    completion_criteria: |
+      Optimization applied, builds without errors, correctness preserved.
+```
