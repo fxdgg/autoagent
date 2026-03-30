@@ -360,14 +360,30 @@ def _wait_for_process_windows(pid: int) -> 'int | None':
 
 
 def _wait_for_process_unix(pid: int) -> 'int | None':
-    """Wait for a Unix process by polling os.kill."""
+    """Wait for a Unix process by polling /proc status.
+
+    Uses /proc/<pid>/status to detect zombie processes (State: Z),
+    which os.kill(pid, 0) cannot distinguish from running processes.
+    Falls back to os.kill if /proc is unavailable (e.g. macOS).
+    """
     while True:
         try:
-            os.kill(pid, 0)  # Check if alive
-            time.sleep(2)
-        except OSError:
-            # Process no longer exists
+            with open(f"/proc/{pid}/status") as f:
+                for line in f:
+                    if line.startswith("State:"):
+                        if "Z" in line:  # zombie — process finished
+                            return None
+                        break
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            # /proc entry gone → process exited, or /proc not available
             break
+        except OSError:
+            # Fallback: try os.kill for platforms without /proc
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                break
+        time.sleep(2)
     return None  # Can't determine exit code from another process on Unix
 
 

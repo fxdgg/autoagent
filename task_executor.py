@@ -1816,12 +1816,22 @@ class SubtaskExecutor:
             kernel32.CloseHandle(handle)
             return alive
         else:
-            # Unix: os.kill with signal 0
+            # Unix: check /proc status to detect zombies (os.kill can't)
             try:
-                os.kill(pid, 0)
-                return True
-            except OSError:
+                with open(f"/proc/{pid}/status") as f:
+                    for line in f:
+                        if line.startswith("State:"):
+                            return "Z" not in line  # zombie = not alive
                 return False
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                return False
+            except OSError:
+                # Fallback for platforms without /proc (e.g. macOS)
+                try:
+                    os.kill(pid, 0)
+                    return True
+                except OSError:
+                    return False
 
     def _ai_analyze_long_running_result(
         self, subtask, client, state_manager, status, output_log,
