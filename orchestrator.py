@@ -24,7 +24,7 @@ import yaml
 from typing import Optional, List
 
 from codebuddy_client import AIClient, AIClientSDK, AIClientTest, CodeBuddyClient, AICallError
-from ai_providers import get_provider, list_providers, AIProvider, TestProvider
+from ai_providers import get_provider, list_providers, AIProvider, TestProvider, parse_model_spec
 from task_executor import (
     SimpleTaskExecutor,
     NestedTaskExecutor,
@@ -108,6 +108,8 @@ class TodoOrchestrator:
         ideas_file: str = None,
         idle_interval: int = 30,
         use_cli: bool = False,
+        backoff_max_wait: int = 300,
+        model_roles: dict = None,
         # Legacy parameters for backward compatibility
         codebuddy_path: str = None,
         model: str = None,
@@ -137,6 +139,12 @@ class TodoOrchestrator:
         self.timeout = timeout
         self.idle_interval = idle_interval
         self.use_cli = use_cli
+        self.backoff_max_wait = backoff_max_wait
+        self.model_roles = model_roles or {
+            "plan": self.provider.model if provider else "",
+            "default": self.provider.model if provider else "",
+            "simple": self.provider.model if provider else "",
+        }
         
         # Store provider (or create from legacy params)
         if provider is not None:
@@ -145,7 +153,7 @@ class TodoOrchestrator:
             from ai_providers import CodeBuddyProvider
             self.provider = CodeBuddyProvider(
                 executable=codebuddy_path or "codebuddy",
-                model=model or "glm-5.0-ioa",
+                model=model,  # Use provider's default_model if not specified
             )
         else:
             from ai_providers import CodeBuddyProvider
@@ -168,8 +176,8 @@ class TodoOrchestrator:
         self.state_manager = StateManager(resolved_state_file)
         self.conv_logger = ConversationLogger(self.session_dir)
         self.simple_executor = SimpleTaskExecutor()
-        self.nested_executor = NestedTaskExecutor(session_dir=self.session_dir)
-        self.looping_executor = LoopingTaskExecutor(session_dir=self.session_dir)
+        self.nested_executor = NestedTaskExecutor(session_dir=self.session_dir, model_roles=self.model_roles)
+        self.looping_executor = LoopingTaskExecutor(session_dir=self.session_dir, model_roles=self.model_roles)
         
         # Ideas watcher (optional)
         if ideas_file:
@@ -304,6 +312,14 @@ class TodoOrchestrator:
         # Note: long_running tasks no longer require a 'command' field.
         # The AI decides the command at runtime via autoagent-exec.
 
+        # Validate optional model field
+        model = task.get('model')
+        if model is not None and model not in ('default', 'simple'):
+            raise ConfigError(
+                f"Task {task['id']} has invalid model: '{model}'. "
+                f"Allowed values: 'default', 'simple'"
+            )
+
     def validate_config(self) -> bool:
         """
         Validate the loaded configuration.
@@ -417,9 +433,19 @@ class TodoOrchestrator:
         """
         task_id = str(task['id'])
         task_type = task['type']
+
+        # Switch model based on task's model field (default/simple)
+        task_model_role = task.get('model', 'default')
+        task_model = self.model_roles.get(task_model_role, self.model_roles.get('default', self.provider.model))
+        self.provider.set_model(task_model)
         
         # Create a new CodeBuddyClient for this main task (context isolation)
         context_id = f"task_{task_id}"
+        
+        # Check if this task was interrupted and has a saved session_id
+        task_state = self.state_manager.get_task_state(task_id)
+        saved_session_id = task_state.get("session_id", "")
+        
         if isinstance(self.provider, TestProvider):
             client = AIClientTest(
                 provider=self.provider,
@@ -441,6 +467,7 @@ class TodoOrchestrator:
                 timeout=self.timeout,
                 context_id=context_id,
             )
+            client._backoff_max = self.backoff_max_wait
         else:
             client = AIClientSDK(
                 provider=self.provider,
@@ -448,6 +475,18 @@ class TodoOrchestrator:
                 timeout=self.timeout,
                 context_id=context_id,
             )
+            client._backoff_max = self.backoff_max_wait
+        
+        # Resume session if we have a saved session_id
+        if saved_session_id:
+            client.resume_session(saved_session_id)
+            print(f"   🔄 Resuming session: {saved_session_id}")
+        
+        # Set up callback to save session_id when it changes
+        def on_session_id_changed(new_session_id: str):
+            self.state_manager.update_task_field(task_id, "session_id", new_session_id)
+        
+        client._on_session_id_changed = on_session_id_changed
         
         # Record context info in state
         self.state_manager.mark_task_status(
@@ -570,6 +609,11 @@ class TodoOrchestrator:
         print(f"\n{'─' * 60}")
         print(f"💡 New ideas detected, processing...")
         print(f"{'─' * 60}")
+
+        # Switch to plan model for ideas processing
+        original_model = self.provider.model
+        plan_model = self.model_roles.get("plan", original_model)
+        self.provider.set_model(plan_model)
         
         # Create a client for ideas processing
         if isinstance(self.provider, TestProvider):
@@ -593,12 +637,14 @@ class TodoOrchestrator:
                 timeout=self.timeout,
                 context_id="ideas_processor",
             )
+            client._backoff_max = self.backoff_max_wait
             review_client = AIClient(
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
                 context_id="ideas_reviewer",
             )
+            review_client._backoff_max = self.backoff_max_wait
         else:
             client = AIClientSDK(
                 provider=self.provider,
@@ -606,12 +652,14 @@ class TodoOrchestrator:
                 timeout=self.timeout,
                 context_id="ideas_processor",
             )
+            client._backoff_max = self.backoff_max_wait
             review_client = AIClientSDK(
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
                 context_id="ideas_reviewer",
             )
+            review_client._backoff_max = self.backoff_max_wait
         
         count = self.ideas_watcher.process_new_ideas(
             client,
@@ -619,6 +667,9 @@ class TodoOrchestrator:
             conv_logger=self.conv_logger,
             human_review=human_review,
         )
+
+        # Restore original model after ideas processing
+        self.provider.set_model(original_model)
         
         if count > 0:
             print(f"\n   📝 Processed {count} new idea(s), reloading task list...")
@@ -808,6 +859,113 @@ def _load_config():
     return {}
 
 
+def _expand_workspace_vars(value, workspace):
+    """Expand ${workspace} variable in configuration values.
+    
+    Args:
+        value: The value to expand (string or other type)
+        workspace: The workspace path to substitute
+        
+    Returns:
+        Expanded value with ${workspace} replaced by actual path
+    """
+    if isinstance(value, str):
+        return value.replace('${workspace}', workspace)
+    return value
+
+
+def _load_preset(config, preset_name, workspace):
+    """Load preset configuration from config.
+    
+    Args:
+        config: The loaded config dict
+        preset_name: Name of the preset to load
+        workspace: Current workspace path for variable expansion
+        
+    Returns:
+        dict: Preset configuration values, empty dict if not found
+    """
+    presets = config.get('preset', [])
+    
+    # Convert list to dict for easier lookup
+    preset_dict = {}
+    for p in presets:
+        if isinstance(p, dict) and 'name' in p:
+            preset_dict[p['name']] = p
+    
+    if preset_name not in preset_dict:
+        if preset_name != 'default':
+            print(f"⚠️  Warning: Preset '{preset_name}' not found in config.yaml")
+        return {}
+    
+    preset = preset_dict[preset_name].copy()
+    preset.pop('name', None)  # Remove name field
+    
+    # Expand ${workspace} variables
+    for key, value in preset.items():
+        preset[key] = _expand_workspace_vars(value, workspace)
+    
+    logger.debug(f"Loaded preset '{preset_name}': {preset}")
+    return preset
+
+
+def _merge_preset_with_args(args, preset):
+    """Merge preset values with command-line arguments.
+    
+    Command-line arguments take precedence over preset values.
+    Only applies preset values when the arg wasn't explicitly set on CLI.
+    
+    Args:
+        args: Parsed argparse Namespace
+        preset: Preset configuration dict
+        
+    Returns:
+        Updated args Namespace
+    """
+    # Map of preset keys to args attributes
+    preset_to_arg_map = {
+        'config': 'config',
+        'ideas': 'ideas',
+        'provider': 'provider',
+        'model': 'model',
+        'executable': 'executable',
+        'workspace': 'workspace',
+        'timeout': 'timeout',
+        'log_dir': 'log_dir',
+        'idle_interval': 'idle_interval',
+        'include_directories': 'include_directories',
+        'test_rules': 'test_rules',
+        'verbose': 'verbose',
+        'no_skip': 'no_skip',
+        'no_idle': 'no_idle',
+        'use_cli': 'use_cli',
+        'ideas_only': 'ideas_only',
+    }
+    
+    # Default values that indicate "not set by user"
+    defaults_not_set = {
+        'config': 'todos.yaml',
+        'provider': 'codebuddy',
+        'workspace': '.',
+        'idle_interval': 30,
+    }
+    
+    for preset_key, arg_key in preset_to_arg_map.items():
+        if preset_key in preset:
+            preset_value = preset[preset_key]
+            current_value = getattr(args, arg_key)
+            default_value = defaults_not_set.get(arg_key)
+            
+            # Apply preset if:
+            # 1. Current value is None, or
+            # 2. Current value equals the argparse default (meaning user didn't override)
+            if current_value is None or (default_value is not None and current_value == default_value):
+                setattr(args, arg_key, preset_value)
+                logger.debug(f"Applied preset '{preset_key}': {preset_value}")
+    
+    return args
+
+
 def main():
     """CLI entry point."""
     _ensure_utf8_stdio()
@@ -822,7 +980,7 @@ def main():
         epilog="""
 Examples:
   python orchestrator.py                                # Run all tasks (CodeBuddy default)
-  python orchestrator.py --provider claude               # Use Claude Code Internal
+  python orchestrator.py --provider claude               # Use Claude Code
   python orchestrator.py --provider gemini --model gemini-2.5-pro  # Use Gemini CLI
   python orchestrator.py --config my_tasks.yaml          # Use custom config
   python orchestrator.py --task 2                        # Run only task 2
@@ -876,8 +1034,10 @@ Examples:
     parser.add_argument(
         '--model', '-m',
         default=None,
-        help='AI model to use (default depends on provider: '
-             'codebuddy=glm-5.0-ioa, claude=claude-sonnet-4-6, gemini=gemini-2.5-pro)',
+        help='AI model to use. Supports single model (e.g. "glm-5") or '
+             'multi-role format: "plan:model1;default:model2;simple:model3". '
+             'Roles: plan (idea decomposition), default (task execution), '
+             'simple (lightweight tasks). Missing roles inherit from default.',
     )
     parser.add_argument(
         '--workspace', '-w',
@@ -966,8 +1126,40 @@ Examples:
              'Each rule is separated by "---RULE---" delimiter. '
              'Rules are consumed in order, one per ask() call.',
     )
+    parser.add_argument(
+        '--preset',
+        default='default',
+        help='Preset configuration name from config.yaml (default: default). '
+             'Preset values can be overridden by command-line arguments.',
+    )
     
     args = parser.parse_args()
+    
+    # Resolve workspace early for preset loading
+    _workspace_abs = os.path.abspath(args.workspace)
+    
+    # Load and apply preset configuration
+    preset = _load_preset(config, args.preset, _workspace_abs)
+    if preset:
+        print(f"✓ Loaded preset: {args.preset}")
+        args = _merge_preset_with_args(args, preset)
+    
+    # Ensure required files exist (create empty if not present)
+    if args.ideas:
+        ideas_path = os.path.abspath(args.ideas)
+        if not os.path.exists(ideas_path):
+            os.makedirs(os.path.dirname(ideas_path) if os.path.dirname(ideas_path) else '.', exist_ok=True)
+            with open(ideas_path, 'w', encoding='utf-8') as f:
+                f.write('')  # Create empty file
+            print(f"✓ Created empty ideas file: {ideas_path}")
+    
+    if args.config:
+        config_path = os.path.abspath(args.config)
+        if not os.path.exists(config_path):
+            os.makedirs(os.path.dirname(config_path) if os.path.dirname(config_path) else '.', exist_ok=True)
+            with open(config_path, 'w', encoding='utf-8') as f:
+                f.write('')  # Create empty file
+            print(f"✓ Created empty config file: {config_path}")
     
     # Resolve log_dir early so we can point orchestrator.log there too.
     # The actual session sub-directory is determined later by the
@@ -1038,6 +1230,12 @@ Examples:
                     "--codebuddy-path is deprecated when using --provider. "
                     "Use --executable instead."
                 )
+
+        # Parse model spec into role→model dict
+        model_roles = parse_model_spec(args.model or "")
+
+        # Use the 'default' role model for the provider
+        provider_model = model_roles["default"] if model_roles["default"] else args.model
         
         # Parse --include-directories into a list
         include_dirs = None
@@ -1065,7 +1263,7 @@ Examples:
         provider = get_provider(
             name=args.provider,
             executable=executable,
-            model=args.model,
+            model=provider_model,
             extra_args=args.extra_args,
             test_rules_file=getattr(args, 'test_rules', None),
             include_directories=include_dirs,
@@ -1076,7 +1274,8 @@ Examples:
         # Create orchestrator
         # Resolve timeout: CLI arg > config.yaml > fallback 300
         effective_timeout = args.timeout if args.timeout is not None else default_timeout
-        
+        backoff_max = config.get('backoff_max_wait', 300)
+
         orchestrator = TodoOrchestrator(
             todos_file=args.config,
             provider=provider,
@@ -1086,6 +1285,8 @@ Examples:
             ideas_file=args.ideas,
             idle_interval=args.idle_interval,
             use_cli=args.use_cli,
+            backoff_max_wait=backoff_max,
+            model_roles=model_roles,
         )
         
         # Handle special commands
@@ -1144,10 +1345,15 @@ Examples:
         print(f"❌ Configuration error: {e}")
         sys.exit(1)
     except KeyboardInterrupt:
-        # Finalize conversation logs even on interrupt
-        if 'orchestrator' in dir() and orchestrator.conv_logger:
-            orchestrator.conv_logger.finalize()
-            print(f"\n📝 Conversation logs saved to: {orchestrator.session_dir}")
+        # Record interrupt for in-progress tasks before exiting
+        if 'orchestrator' in dir() and orchestrator:
+            in_progress = orchestrator.state_manager.get_in_progress_tasks()
+            for tid in in_progress:
+                orchestrator.state_manager.record_interrupt(tid)
+            # Finalize conversation logs even on interrupt
+            if orchestrator.conv_logger:
+                orchestrator.conv_logger.finalize()
+                print(f"\n📝 Conversation logs saved to: {orchestrator.session_dir}")
         print(f"\n\n⚠️  Interrupted by user. State has been saved.")
         print(f"    Run again to resume from where you left off.")
         sys.exit(130)

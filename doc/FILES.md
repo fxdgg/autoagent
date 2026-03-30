@@ -27,11 +27,23 @@ autoagent/
 ├── state_manager.py             # 状态持久化管理
 ├── conversation_logger.py       # 对话日志记录
 ├── ideas_watcher.py             # Ideas 文件监控与任务分解
+├── truncation_limits.py         # 提示词截断限制（从 config.yaml 加载）
 ├── run_test.py                  # 测试运行脚本
+│
+├── prompts/                     # AI Prompt 模板
+│   ├── __init__.py              # 包初始化，导出所有 prompt 构造函数
+│   ├── shared.py                # 共享常量：角色定义、状态标记、工具函数
+│   ├── simple_task.py           # 简单任务执行 prompt 构造
+│   ├── long_running_task.py     # 长时间任务启动与结果分析 prompt 构造
+│   ├── failure_analysis.py      # 子任务失败分析 prompt（nested + looping）
+│   ├── main_evaluation.py       # 主任务完成评估 prompt
+│   ├── ideas_decompose.py       # Idea 拆解为任务的 prompt
+│   └── ideas_review.py          # 任务审查与修订 prompt
 │
 ├── sample/                      # 示例项目目录
 │   ├── auto_run.bat             # 自动运行脚本
 │   ├── manual_run.bat           # 手动运行脚本
+│   ├── opencode_sample.bat      # OpenCode 示例运行脚本
 │   ├── reset.bat                # 重置脚本
 │   ├── ideas.md                 # 示例 ideas 文件
 │   ├── todos.yaml               # 示例任务配置
@@ -91,13 +103,54 @@ autoagent/
 ### 配置文件
 
 #### config.yaml
+
 - **作用**：全局配置文件
 - **内容**：
   ```yaml
   # Timeout for each AI call (in seconds).
   bash_timeout: 3600
+
+  # Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
+  # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
+  backoff_max_wait: 300
+
+  # Truncation limits for auto-built prompts (in characters)
+  truncation_limits:
+    suggested_fix: 1500
+    history_summary: 300
+    nested_latest_fix: 2000
+    looping_latest_fix: 1500
+    log_section: 6000
+    execution_results: 4000
+    idea_content: 8000
+    tasks_yaml: 10000
+    review_feedback: 3000
+    human_feedback: 3000
+    error_text: 2000
+    log_file: 2000
+
+  # Preset configurations
+  preset:
+    - name: default
+      ideas: ${workspace}/ideas.md
+      config: ${workspace}/todos.yaml
+      provider: opencode
+      model: model-scope/ZhipuAI/GLM-5
+      verbose: false
+
+    - name: claude
+      ideas: ${workspace}/ideas.md
+      config: ${workspace}/todos.yaml
+      provider: claude
+      model: claude-opus-4-6
+      verbose: false
   ```
-- **用途**：提供默认配置值，CLI 参数（如 `--timeout`）会覆盖此文件中的值
+- **用途**：
+  - `bash_timeout`: 提供默认超时配置值
+  - `backoff_max_wait`: AI CLI 连续失败时的最大退避等待时间（指数退避：5s→10s→20s→...→上限）
+  - `truncation_limits`: 控制各类提示词字段的最大字符数，防止上下文过长
+  - `preset`: 定义常用参数预设，通过 `--preset <name>` 快速切换配置
+- **变量替换**：Preset 中支持 `${workspace}` 变量，会被替换为当前工作目录
 
 #### requirements.txt
 - **作用**：Python 依赖列表
@@ -126,18 +179,23 @@ autoagent/
 #### ai_providers.py
 - **作用**：AI Provider 抽象层
 - **核心类**：
-  - `AIProvider`：基类
-  - `CodeBuddyProvider`：CodeBuddy CLI（默认模型 `glm-5.0-ioa`）
-  - `ClaudeCodeProvider`：Claude Code Internal（默认模型 `claude-sonnet-4-6`）
-  - `GeminiCLIProvider`：Gemini CLI Internal（默认模型 `gemini-2.5-pro`）
+  - `AIProvider`：基类，提供 `set_model(model_name)` 方法用于运行时切换模型
+  - `CodeBuddyProvider`：CodeBuddy CLI（默认模型 `deepseek-v3.2`）
+  - `ClaudeCodeProvider`：Claude Code（默认模型 `claude-sonnet-4-6`）
+  - `GeminiCLIProvider`：Gemini Cli（默认模型 `gemini-2.5-pro`）
+  - `OpenCodeProvider`：OpenCode CLI（使用自身配置默认模型）
   - `TestProvider`：测试用 Provider（从规则文件读取预定义响应）
+- **核心函数**：
+  - `get_provider(name, model)`：工厂函数，根据名称创建 provider 实例
+  - `parse_model_spec(model_str)`：解析多模型规格字符串，支持 `"plan:X;default:Y;simple:Z"` 格式和单模型 `"glm-5"` 格式，返回 `{"plan": ..., "default": ..., "simple": ...}` 字典
 
 #### task_executor.py
 - **作用**：任务执行器
 - **核心类**：
   - `SimpleTaskExecutor`：简单任务执行
-  - `NestedTaskExecutor`：嵌套任务执行（含 AI 失败分析和主任务评估）
-  - `LoopingTaskExecutor`：循环任务执行（固定 N 次迭代）
+  - `NestedTaskExecutor`：嵌套任务执行（含 AI 失败分析和主任务评估），接收 `model_roles` 参数
+  - `LoopingTaskExecutor`：循环任务执行（固定 N 次迭代），接收 `model_roles` 参数
+  - `SubtaskExecutor`：子任务执行，根据子任务的 `model` 字段切换 provider 模型
 
 #### autoagent_exec.py
 - **作用**：long_running 任务启动器
@@ -152,7 +210,7 @@ autoagent/
 
 #### state_manager.py
 - **作用**：状态持久化管理
-- **核心类**：`StateManager` — 管理任务状态的加载、保存、更新
+- **核心类**：`StateManager` — 管理任务状态的加载、保存、更新，写入操作通过 `threading.Lock` 保证线程安全
 
 #### conversation_logger.py
 - **作用**：对话日志记录
@@ -162,9 +220,44 @@ autoagent/
 - **作用**：Ideas 文件监控与任务分解
 - **核心类**：`IdeasWatcher` — 监控 ideas.md 变更，调用 AI 分解为 TODO 任务，支持人工审核
 
+#### truncation_limits.py
+- **作用**：提示词截断限制的集中管理
+- **核心类**：`_Limits` — 从 `config.yaml` 的 `truncation_limits` 段加载截断阈值，带默认值兜底
+- **用途**：所有 prompt 构造器和 task_executor 通过 `from truncation_limits import limits` 获取截断阈值，避免硬编码
+
 #### run_test.py
 - **作用**：测试运行脚本
 - **用途**：提供便捷的测试运行入口，支持模拟测试和集成测试
+
+### Prompt 模板（prompts/ 目录）
+
+#### prompts/shared.py
+- **作用**：共享常量和工具函数
+- **内容**：角色定义（coding agent、task planner、task reviewer）、状态标记指令（✅/❌ completed/not completed）、通用辅助函数（构建历史记录、兄弟任务上下文、autoagent-exec 说明等）
+
+#### prompts/simple_task.py
+- **作用**：简单任务执行 prompt 构造器
+- **用途**：为 SimpleTaskExecutor 构造包含任务描述、完成标准、历史记录等信息的 prompt
+
+#### prompts/long_running_task.py
+- **作用**：长时间任务相关 prompt 构造器
+- **用途**：构造启动 long_running 任务的 prompt 和结果分析 prompt
+
+#### prompts/failure_analysis.py
+- **作用**：子任务失败分析 prompt 构造器
+- **用途**：为 nested 和 looping 任务的子任务失败场景构造分析 prompt
+
+#### prompts/main_evaluation.py
+- **作用**：主任务完成评估 prompt 构造器
+- **用途**：在所有子任务完成后，构造主任务完成度评估 prompt
+
+#### prompts/ideas_decompose.py
+- **作用**：Idea 拆解 prompt 构造器
+- **用途**：将自然语言想法拆解为结构化 YAML 任务定义的 prompt
+
+#### prompts/ideas_review.py
+- **作用**：任务审查与修订 prompt 构造器
+- **用途**：构造 AI 审查、修订和人工反馈修订的 prompt
 
 ### 用户文件
 
@@ -239,6 +332,7 @@ tasks:
 | `name` | string | 是 | 任务名称 |
 | `type` | string | 是 | 任务类型：`simple`、`nested`、`looping`、`long_running` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
+| `model` | string | 否 | 模型选择：`"default"` 或 `"simple"`（默认 `"default"`） |
 
 #### 简单任务 (type: simple)
 

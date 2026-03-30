@@ -1,0 +1,131 @@
+"""
+Prompt builders for long-running task execution and result analysis.
+
+Corresponds to ``SubtaskExecutor._build_long_running_prompt()`` and
+``SubtaskExecutor._ai_analyze_long_running_result()`` in task_executor.py.
+"""
+
+from prompts.shared import (
+    ROLE_CODING_AGENT,
+    STATUS_MARKER_INSTRUCTION,
+    build_sibling_context,
+    build_history_section,
+    build_suggested_fix_section,
+)
+
+
+def build_long_running_prompt(
+    subtask: dict,
+    exec_path: str,
+    log_session_dir: str,
+    attempt: int,
+    state: dict,
+    extract_summary_fn,
+    parent_context: dict = None,
+) -> str:
+    """Build the prompt that tells AI to use autoagent-exec for long-running tasks.
+
+    Args:
+        subtask: Subtask configuration dict.
+        exec_path: Absolute path to ``autoagent_exec.py`` (raw, will be
+            normalised internally).
+        log_session_dir: Log session directory path (raw).
+        attempt: Current attempt number (1-based).
+        state: Current subtask state from state_manager.
+        extract_summary_fn: Callable(ai_response: str) -> str.
+        parent_context: Optional context from the parent task.
+    """
+    subtask_id = str(subtask['id'])
+    parts = [
+        ROLE_CODING_AGENT,
+        f"Task: {subtask['name']}",
+        f"Type: long_running (\u26a0\ufe0f This task may take a long time)",
+        f"Completion Criteria: {subtask['completion_criteria']}",
+    ]
+
+    # Show main task goal if this is a subtask
+    if parent_context and parent_context.get('main_task_criteria'):
+        parts.append(f"Main Task Goal: {parent_context['main_task_criteria']}")
+
+    if subtask.get('initial_hint') and attempt == 1:
+        parts.append(f"Initial Hint: {subtask['initial_hint']}")
+
+    # Sibling subtask orientation
+    sibling = build_sibling_context(subtask, parent_context)
+    if sibling:
+        parts.append(sibling)
+
+    # Retry context
+    if attempt > 1:
+        history = state.get('history', [])
+        history_section = build_history_section(history, extract_summary_fn)
+        if history_section:
+            parts.append(history_section)
+
+        fallback = (
+            "The previous attempt failed. Please analyze what went wrong "
+            "and adjust your command or approach."
+        )
+        parts.append(build_suggested_fix_section(parent_context, fallback_msg=fallback))
+
+    # Escape backslashes in paths for display in prompt
+    exec_display = exec_path.replace("\\", "/")
+    log_dir_display = log_session_dir.replace("\\", "/")
+
+    parts.append(f"""\n**Long-Running Task Instructions**
+
+Use the `autoagent-exec` launcher to run your command:
+
+python "{exec_display}" --log-dir "{log_dir_display}" --task-id {subtask_id} -- <your command here>
+
+- If the command fails within 10s, the error is shown immediately \u2014 fix and retry.
+- If the command is still running after 10s, it will be detached and you will see "TASK SUBMITTED".
+- When you see "TASK SUBMITTED", output: \u23f3 LONG_RUNNING_IN_PROGRESS
+  AutoAgent will call you back with the results.
+- If the task cannot be done, output: \u274c not completed: <reason>""")
+
+    return "\n\n".join(parts)
+
+
+def build_long_running_analysis_prompt(
+    subtask: dict,
+    status: str,
+    output_log: str,
+    command_info: str = "",
+    exit_code_info: str = "",
+    parent_context: dict = None,
+) -> str:
+    """Build the prompt for AI to analyse a completed long-running task.
+
+    Args:
+        subtask: Subtask configuration dict.
+        status: Task status string (e.g. "completed", "failed").
+        output_log: Path to the output log file (raw, will be normalised).
+        command_info: Optional formatted string like ``"\\nCommand: ..."``
+        exit_code_info: Optional formatted string like ``"\\nExit Code: 0"``
+        parent_context: Optional context from the parent task.
+    """
+    output_log_display = output_log.replace("\\", "/")
+
+    # Build sibling subtask list for orientation
+    sibling_info = ""
+    if parent_context and parent_context.get('subtasks'):
+        sibling_info = "\n\n" + build_sibling_context(subtask, parent_context)
+
+    return f"""You previously launched this task using autoagent-exec.{command_info}
+The task has now finished.
+
+Subtask: {subtask['name']}
+Completion Criteria: {subtask['completion_criteria']}
+Task Status: {status}{exit_code_info}{sibling_info}
+
+The task output has been saved to:
+  {output_log_display}
+
+Please:
+1. Read the output log file above to understand what happened
+2. Evaluate whether the task completed successfully
+3. Check if the results meet the completion criteria
+4. If the task produced output files, you may examine them as needed
+
+{STATUS_MARKER_INSTRUCTION}"""

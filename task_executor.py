@@ -16,6 +16,17 @@ import logging
 from typing import Optional, Tuple
 
 from codebuddy_client import AIClient, CodeBuddyClient, AICallError
+from prompts.simple_task import build_simple_task_prompt
+from prompts.long_running_task import (
+    build_long_running_prompt as _build_lr_prompt,
+    build_long_running_analysis_prompt as _build_lr_analysis_prompt,
+)
+from prompts.failure_analysis import (
+    build_nested_failure_analysis_prompt,
+    build_looping_failure_analysis_prompt,
+)
+from prompts.main_evaluation import build_main_evaluation_prompt
+from truncation_limits import limits
 
 logger = logging.getLogger(__name__)
 
@@ -204,120 +215,26 @@ class SimpleTaskExecutor:
     def _build_prompt(self, task: dict, attempt: int, state: dict, parent_context: dict = None, timeout_feedback: str = None) -> str:
         """Build the prompt for AI.
         
-        Args:
-            task: Task configuration dict
-            attempt: Current attempt number
-            state: Current task state from state_manager
-            parent_context: Optional context from parent task, containing:
-                - subtasks: list of all sibling subtasks (for orientation)
-                - suggested_fix: AI's suggested fix from failure analysis
-                - ai_decisions: list of past AI decisions
-            timeout_feedback: If set, the previous AI call timed out.
-                This string contains the error message. The prompt will
-                include guidance on using autoagent-exec for long-running
-                commands.
+        Delegates to ``prompts.simple_task.build_simple_task_prompt``.
         """
-        parts = [
-            "You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.",
-            f"Task: {task['name']}",
-            f"Completion Criteria: {task['completion_criteria']}",
-        ]
-        
-        # Show main task goal if this is a subtask
-        if parent_context and parent_context.get('main_task_criteria'):
-            parts.append(f"Main Task Goal: {parent_context['main_task_criteria']}")
-        
-        if task.get('initial_hint') and attempt == 1:
-            parts.append(f"Initial Hint: {task['initial_hint']}")
+        exec_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "autoagent_exec.py"
+        ).replace("\\", "/")
+        log_session_dir = ""
+        subtask_exec = getattr(self, '_subtask_executor', None)
+        if subtask_exec and subtask_exec.session_dir:
+            log_session_dir = subtask_exec.session_dir.replace("\\", "/")
 
-        # Show sibling subtasks for orientation (so AI knows where this task fits)
-        if parent_context and parent_context.get('subtasks'):
-            subtask_lines = []
-            current_id = str(task['id'])
-            for st in parent_context['subtasks']:
-                st_id = str(st['id'])
-                marker = "→" if st_id == current_id else " "
-                subtask_lines.append(f"  {marker} {st_id}. {st['name']}")
-            parts.append(f"This task is part of a larger workflow:\n" + "\n".join(subtask_lines))
-        
-        if attempt > 1:
-            history = state.get('history', [])
-            if history:
-                recent = history[-3:]  # Last 3 attempts
-                history_lines = []
-                for h in recent:
-                    result_str = h.get('result', 'unknown')
-                    summary = h.get('summary', '')
-                    if not summary:
-                        # Fallback: extract meaningful part from ai_response
-                        summary = self._extract_summary(h.get('ai_response', ''))
-                    history_lines.append(f"  - Attempt {h.get('attempt', '?')}: {result_str}")
-                    if summary:
-                        history_lines.append(f"    Summary: {summary}")
-                parts.append(f"Previous Attempts:\n" + "\n".join(history_lines))
-            
-            # Inject suggested_fix from AI failure analysis if available
-            if parent_context and parent_context.get('suggested_fix'):
-                parts.append(
-                    f"**AI Analysis from previous failure:**\n"
-                    f"{parent_context['suggested_fix']}\n\n"
-                    f"Please take this analysis into account and try a different approach."
-                )
-            else:
-                parts.append(
-                    "Please analyze what went wrong and try a different approach."
-                )
-        
-        # Inject timeout feedback with autoagent-exec guidance
-        if timeout_feedback:
-            # Resolve autoagent-exec path for the guidance
-            exec_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "autoagent_exec.py"
-            ).replace("\\", "/")
-            # Resolve log session dir from SubtaskExecutor if available
-            log_session_dir = ""
-            subtask_exec = getattr(self, '_subtask_executor', None)
-            if subtask_exec and subtask_exec.session_dir:
-                log_session_dir = subtask_exec.session_dir.replace("\\", "/")
-            
-            timeout_guidance = (
-                f"**⏰ TIMEOUT WARNING:** Your previous Bash command timed out ({timeout_feedback}). "
-                f"The session was terminated before completion.\n\n"
-                f"If your task requires running a command that takes more than a few minutes "
-                f"(e.g. compilation, benchmarking, data processing), you MUST use the "
-                f"`autoagent-exec` launcher to run it as a background task:\n\n"
-                f'python "{exec_path}" --log-dir "{log_session_dir}" --task-id {str(task["id"])} -- <your command here>\n\n'
-                f"- If the command fails within 10s, the error is shown immediately — fix and retry.\n"
-                f"- If the command is still running after 10s, it will be detached and you will see \"TASK SUBMITTED\".\n"
-                f"- When you see \"TASK SUBMITTED\", output: ⏳ LONG_RUNNING_IN_PROGRESS\n"
-                f"  AutoAgent will call you back with the results.\n\n"
-                f"**Do NOT run long-running commands directly via Bash.** Use autoagent-exec instead."
-            )
-            parts.append(timeout_guidance)
-        
-        parts.append(
-            "\nWhen finished, end your response with EXACTLY one of these status lines (on its own line):\n"
-            "  ✅ completed\n"
-            "  ❌ not completed: <reason>\n"
-            "This status line is MANDATORY and must be the LAST line of your response."
+        return build_simple_task_prompt(
+            task=task,
+            attempt=attempt,
+            state=state,
+            extract_summary_fn=self._extract_summary,
+            parent_context=parent_context,
+            timeout_feedback=timeout_feedback,
+            exec_path=exec_path,
+            log_session_dir=log_session_dir,
         )
-
-        # On the first attempt, briefly explain autoagent-exec so the AI
-        # knows how to handle long-running commands *before* hitting a timeout.
-        if attempt == 1:
-            exec_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "autoagent_exec.py"
-            ).replace("\\", "/")
-            parts.append(
-                "**Note on long-running commands:** If a Bash command may take more than a few minutes "
-                "(e.g. compilation, benchmarking, profiling), do NOT run it directly. Instead use:\n"
-                f'  python "{exec_path}" --task-id {str(task["id"])} -- <your command>\n'
-                "The launcher will auto-detach after 10s and print \"TASK SUBMITTED\". "
-                "When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS"
-            )
-
-        
-        return "\n\n".join(parts)
 
     @staticmethod
     def _extract_summary(ai_response: str) -> str:
@@ -506,15 +423,16 @@ class SimpleTaskExecutor:
 class NestedTaskExecutor:
     """
     Executes nested tasks with subtasks and AI decision points.
-    
+
     Two AI decision points:
     1. When a subtask fails: AI analyzes and decides retry_from
     2. When all subtasks complete: AI evaluates if main task is done
     """
 
-    def __init__(self, session_dir: str = None):
-        self.subtask_executor = SubtaskExecutor(session_dir=session_dir)
+    def __init__(self, session_dir: str = None, model_roles: dict = None):
+        self.subtask_executor = SubtaskExecutor(session_dir=session_dir, model_roles=model_roles)
         self.session_dir = session_dir
+        self.model_roles = model_roles or {}
 
     def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None) -> bool:
         """
@@ -578,6 +496,10 @@ class NestedTaskExecutor:
                 if eval_context_parts:
                     eval_context = "\n".join(eval_context_parts)
                     latest_fix = f"{latest_fix}\n\n{eval_context}".strip() if latest_fix else eval_context
+
+            # Cap composite fix context to avoid oversized prompts
+            if latest_fix and len(latest_fix) > limits.get('nested_latest_fix'):
+                latest_fix = "(truncated)\n..." + latest_fix[-limits.get('nested_latest_fix'):]
             
             parent_context = {
                 'subtasks': subtasks,
@@ -730,41 +652,15 @@ class NestedTaskExecutor:
                 )
             prev_decisions_text = f"\nPrevious Failure Analyses:\n" + "\n".join(decision_lines)
         
-        prompt = f"""A subtask has failed. Please analyze the failure and decide the retry strategy.
-
-Main Task: {task['name']}
-Main Task Completion Criteria: {task['completion_criteria']}
-
-Failed Subtask:
-  ID: {failed_id}
-  Name: {failed_subtask['name']}
-  Type: {failed_subtask['type']}
-  Completion Criteria: {failed_subtask.get('completion_criteria', 'N/A')}
-  Error: {self._truncate_error(result.logs or result.output)}
-  Error Type: {result.error_type or 'unknown'}
-
-All Subtasks Status:
-{self._format_task_history(task_history)}
-{prev_decisions_text}
-
-You MUST respond with a JSON object in the following format:
-```json
-{{
-    "analysis": "Description of why the failure occurred",
-    "retry_from": "<subtask_id to restart from>",
-    "reasoning": "Why retry from this subtask",
-    "suggested_fix": "Specific fix to try \u2014 this will be passed to the AI executing the retried subtask",
-    "confidence": "high/medium/low"
-}}
-```
-
-Important: 
-- retry_from should be the ID of the subtask to restart from.
-- It can be the failed subtask itself, or an earlier subtask if the root cause is there.
-- The suggested_fix will be shown to the AI that retries the subtask, so be specific and actionable.
-- Do NOT suggest the same fix that was already tried in previous rounds. Try a fundamentally different approach.
-- Available subtask IDs: {[str(s['id']) for s in all_subtasks]}
-"""        
+        prompt = build_nested_failure_analysis_prompt(
+            task=task,
+            failed_subtask=failed_subtask,
+            all_subtasks=all_subtasks,
+            error_text=self._truncate_error(result.logs or result.output),
+            error_type=result.error_type or 'unknown',
+            task_history_text=self._format_task_history(task_history),
+            prev_decisions_text=prev_decisions_text,
+        )
         print(f"\n   🤖 [AI Decision Point 1: Failure Analysis]")
         
         try:
@@ -852,7 +748,8 @@ Important:
                         if output_log and os.path.exists(output_log):
                             with open(output_log, 'r', encoding='utf-8', errors='replace') as f:
                                 content = f.read()
-                            log_contents[st_id] = content[-2000:] if len(content) > 2000 else content
+                            _lf = limits.get('log_file')
+                            log_contents[st_id] = content[-_lf:] if len(content) > _lf else content
                 except Exception:
                     pass
         
@@ -861,6 +758,10 @@ Important:
             log_section = "\nRelevant Log Files:\n"
             for st_id, content in log_contents.items():
                 log_section += f"\n--- lr_{st_id}_output.log (last part) ---\n{content}\n"
+            # Cap total log section to prevent oversized prompts with many subtasks
+            _ls = limits.get('log_section')
+            if len(log_section) > _ls:
+                log_section = log_section[:200] + "\n...(log section truncated)...\n" + log_section[-(_ls - 200):]
         
         # Build previous evaluations section for context
         parent_state = state_manager.get_task_state(task_id)
@@ -879,34 +780,13 @@ Important:
                     eval_lines.append(f"    Improvements: {', '.join(improvements[:5])}")
             prev_eval_section = "\nPrevious Evaluations:\n" + "\n".join(eval_lines)
         
-        prompt = f"""All subtasks are completed. Please evaluate whether the main task is finished.
-
-Main Task: {task['name']}
-Completion Criteria: {task['completion_criteria']}
-
-Execution Results:
-{self._format_execution_results(execution_results)}
-{log_section}
-{prev_eval_section}
-
-Please respond in the following JSON format:
-```json
-{{
-    "main_task_completed": true/false,
-    "analysis": "Detailed analysis of results vs criteria",
-    "retry_from": "<subtask_id to restart from>",
-    "next_strategy": "Strategy for next round if not completed",
-    "suggested_improvements": ["improvement 1", "improvement 2"],
-    "confidence": "high/medium/low"
-}}
-```
-
-Important: 
-- Set main_task_completed to true ONLY if ALL completion criteria are met.
-- If not completed, retry_from should be the subtask ID to restart from.
-- If not completed, next_strategy and suggested_improvements will be passed to the AI executing the next round, so be specific.
-- Available subtask IDs: {[str(s['id']) for s in subtasks]}
-"""
+        prompt = build_main_evaluation_prompt(
+            task=task,
+            subtasks=subtasks,
+            execution_results_text=self._format_execution_results(execution_results),
+            log_section=log_section,
+            prev_eval_section=prev_eval_section,
+        )
         
         print(f"\n   🤖 [AI Decision Point 2: Main Task Evaluation]")
         
@@ -950,12 +830,19 @@ Important:
     def _reset_subtasks_from(self, retry_from: str, subtasks: list, state_manager):
         """
         Reset subtask states starting from retry_from.
-        
+
         All subtasks from retry_from onwards are reset to 'pending'.
+        Falls back to first subtask if retry_from ID is not found.
         """
-        should_reset = False
         retry_from = str(retry_from)
-        
+
+        # Validate retry_from exists
+        valid_ids = {str(s['id']) for s in subtasks}
+        if retry_from not in valid_ids:
+            logger.warning(f"retry_from '{retry_from}' not found in subtasks {valid_ids}, falling back to first subtask")
+            retry_from = str(subtasks[0]['id']) if subtasks else retry_from
+
+        should_reset = False
         for subtask in subtasks:
             st_id = str(subtask['id'])
             if st_id == retry_from:
@@ -979,8 +866,10 @@ Important:
         return "\n".join(lines)
 
     @staticmethod
-    def _truncate_error(error_text: str, max_chars: int = 2000) -> str:
+    def _truncate_error(error_text: str, max_chars: int = None) -> str:
         """Truncate error text to avoid wasting tokens on overly long errors."""
+        if max_chars is None:
+            max_chars = limits.get('error_text')
         if not error_text:
             return "(no error output)"
         error_text = str(error_text)
@@ -1000,7 +889,11 @@ Important:
                 lines.append(f"    Criteria: {r['completion_criteria'][:200]}")
             if r.get('ai_reasoning'):
                 lines.append(f"    Result: {r['ai_reasoning'][:300]}")
-        return "\n".join(lines)
+        result = "\n".join(lines)
+        _er = limits.get('execution_results')
+        if len(result) > _er:
+            result = result[:200] + "\n  ...(execution results truncated)...\n" + result[-(_er - 200):]
+        return result
 
 
 class LoopingTaskExecutor:
@@ -1018,9 +911,10 @@ class LoopingTaskExecutor:
     ``max_attempts_per_loop``.
     """
 
-    def __init__(self, session_dir: str = None):
-        self.subtask_executor = SubtaskExecutor(session_dir=session_dir)
+    def __init__(self, session_dir: str = None, model_roles: dict = None):
+        self.subtask_executor = SubtaskExecutor(session_dir=session_dir, model_roles=model_roles)
         self.session_dir = session_dir
+        self.model_roles = model_roles or {}
 
     def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None) -> bool:
         """
@@ -1121,14 +1015,17 @@ class LoopingTaskExecutor:
             parent_state = state_manager.get_task_state(task_id)
             ai_decisions = parent_state.get('ai_decisions', [])
             latest_fix = ai_decisions[-1].get('suggested_fix', '') if ai_decisions else ''
-            
+            # Cap fix context to avoid oversized prompts
+            if latest_fix and len(latest_fix) > limits.get('looping_latest_fix'):
+                latest_fix = "(truncated)\n..." + latest_fix[-limits.get('looping_latest_fix'):]
+
             parent_context = {
                 'subtasks': subtasks,
                 'suggested_fix': latest_fix,
                 'ai_decisions': ai_decisions,
                 'main_task_criteria': task.get('completion_criteria', ''),
             }
-            
+
             for subtask in subtasks:
                 subtask_id = str(subtask['id'])
                 subtask_state = state_manager.get_task_state(subtask_id)
@@ -1230,39 +1127,16 @@ class LoopingTaskExecutor:
                 )
             prev_decisions_text = f"\nPrevious Failure Analyses:\n" + "\n".join(decision_lines)
 
-        prompt = f"""A subtask has failed during loop iteration {loop_idx}. Please analyze the failure and decide the retry strategy.
-
-Main Task: {task['name']}
-Task Type: looping (iteration {loop_idx}/{task.get('repeat_count', 1)})
-
-Failed Subtask:
-  ID: {failed_id}
-  Name: {failed_subtask['name']}
-  Type: {failed_subtask['type']}
-  Completion Criteria: {failed_subtask.get('completion_criteria', 'N/A')}
-  Error: {self._truncate_error(result.logs or result.output)}
-  Error Type: {result.error_type or 'unknown'}
-
-All Subtasks Status:
-{history_text}
-{prev_decisions_text}
-
-You MUST respond with a JSON object in the following format:
-```json
-{{
-    "analysis": "Description of why the failure occurred",
-    "retry_from": "<subtask_id to restart from>",
-    "reasoning": "Why retry from this subtask",
-    "suggested_fix": "Specific fix to try — this will be passed to the AI executing the retried subtask"
-}}
-```
-
-Important:
-- retry_from should be the ID of the subtask to restart from.
-- The suggested_fix will be shown to the AI that retries the subtask, so be specific and actionable.
-- Do NOT suggest the same fix that was already tried in previous rounds. Try a fundamentally different approach.
-- Available subtask IDs: {[str(s['id']) for s in all_subtasks]}
-"""
+        prompt = build_looping_failure_analysis_prompt(
+            task=task,
+            failed_subtask=failed_subtask,
+            all_subtasks=all_subtasks,
+            error_text=self._truncate_error(result.logs or result.output),
+            error_type=result.error_type or 'unknown',
+            loop_idx=loop_idx,
+            history_text=history_text,
+            prev_decisions_text=prev_decisions_text,
+        )
 
         print(f"\n   🤖 [AI: Failure Analysis (loop {loop_idx})]")
 
@@ -1300,10 +1174,17 @@ Important:
             }
 
     def _reset_subtasks_from(self, retry_from: str, subtasks: list, state_manager):
-        """Reset subtask states starting from retry_from onwards."""
-        should_reset = False
+        """Reset subtask states starting from retry_from onwards.
+        Falls back to first subtask if retry_from ID is not found."""
         retry_from = str(retry_from)
 
+        # Validate retry_from exists
+        valid_ids = {str(s['id']) for s in subtasks}
+        if retry_from not in valid_ids:
+            logger.warning(f"retry_from '{retry_from}' not found in subtasks {valid_ids}, falling back to first subtask")
+            retry_from = str(subtasks[0]['id']) if subtasks else retry_from
+
+        should_reset = False
         for subtask in subtasks:
             st_id = str(subtask['id'])
             if st_id == retry_from:
@@ -1313,8 +1194,10 @@ Important:
                 logger.info(f"Reset subtask {st_id} to pending")
 
     @staticmethod
-    def _truncate_error(error_text: str, max_chars: int = 2000) -> str:
+    def _truncate_error(error_text: str, max_chars: int = None) -> str:
         """Truncate error text to avoid wasting tokens on overly long errors."""
+        if max_chars is None:
+            max_chars = limits.get('error_text')
         if not error_text:
             return "(no error output)"
         error_text = str(error_text)
@@ -1328,12 +1211,13 @@ class SubtaskExecutor:
     Dispatches subtask execution based on type (simple or long_running).
     """
 
-    def __init__(self, session_dir: str = None):
+    def __init__(self, session_dir: str = None, model_roles: dict = None):
         self.simple_executor = SimpleTaskExecutor()
         # Back-reference so SimpleTaskExecutor can delegate long-running
         # handling (poll + callback) when AI uses autoagent-exec in a simple task
         self.simple_executor._subtask_executor = self
         self.session_dir = session_dir
+        self.model_roles = model_roles or {}
 
     def execute(self, subtask: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None) -> SubtaskResult:
         """
@@ -1351,6 +1235,13 @@ class SubtaskExecutor:
             SubtaskResult: Result of execution
         """
         subtask_type = subtask.get('type', 'simple')
+
+        # Switch model based on subtask's model field (default/simple)
+        subtask_model_role = subtask.get('model', 'default')
+        if self.model_roles and hasattr(client, 'provider') and client.provider:
+            target_model = self.model_roles.get(subtask_model_role, self.model_roles.get('default', ''))
+            if target_model:
+                client.provider.set_model(target_model)
         
         if subtask_type == 'simple':
             return self._execute_simple_subtask(
@@ -1564,78 +1455,21 @@ class SubtaskExecutor:
     ) -> str:
         """
         Build the prompt that tells AI to use autoagent-exec for long-running tasks.
+
+        Delegates to ``prompts.long_running_task.build_long_running_prompt``.
         """
         subtask_id = str(subtask['id'])
-        parts = [
-            "You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.",
-            f"Task: {subtask['name']}",
-            f"Type: long_running (⚠️ This task may take a long time)",
-            f"Completion Criteria: {subtask['completion_criteria']}",
-        ]
-        
-        # Show main task goal if this is a subtask
-        if parent_context and parent_context.get('main_task_criteria'):
-            parts.append(f"Main Task Goal: {parent_context['main_task_criteria']}")
-        
-        if subtask.get('initial_hint') and attempt == 1:
-            parts.append(f"Initial Hint: {subtask['initial_hint']}")
+        state = state_manager.get_task_state(subtask_id) if attempt > 1 else {}
 
-        # Show sibling subtasks for orientation
-        if parent_context and parent_context.get('subtasks'):
-            subtask_lines = []
-            current_id = str(subtask['id'])
-            for st in parent_context['subtasks']:
-                st_id = str(st['id'])
-                marker = "→" if st_id == current_id else " "
-                subtask_lines.append(f"  {marker} {st_id}. {st['name']}")
-            parts.append(f"This task is part of a larger workflow:\n" + "\n".join(subtask_lines))
-        
-        if attempt > 1:
-            state = state_manager.get_task_state(subtask_id)
-            history = state.get('history', [])
-            if history:
-                recent = history[-3:]
-                history_lines = []
-                for h in recent:
-                    result_str = h.get('result', 'unknown')
-                    summary = h.get('summary', '')
-                    if not summary:
-                        summary = SimpleTaskExecutor._extract_summary(h.get('ai_response', ''))
-                    history_lines.append(f"  - Attempt {h.get('attempt', '?')}: {result_str}")
-                    if summary:
-                        history_lines.append(f"    Summary: {summary}")
-                parts.append(f"Previous Attempts:\n" + "\n".join(history_lines))
-            
-            # Inject suggested_fix from AI failure analysis if available
-            if parent_context and parent_context.get('suggested_fix'):
-                parts.append(
-                    f"**AI Analysis from previous failure:**\n"
-                    f"{parent_context['suggested_fix']}\n\n"
-                    f"Please take this analysis into account and adjust your approach."
-                )
-            else:
-                parts.append(
-                    "The previous attempt failed. Please analyze what went wrong "
-                    "and adjust your command or approach."
-                )
-        
-        # Escape backslashes in paths for display in prompt
-        exec_display = exec_path.replace("\\", "/")
-        log_dir_display = log_session_dir.replace("\\", "/")
-        
-        parts.append(f"""\n**Long-Running Task Instructions**
-
-Use the `autoagent-exec` launcher to run your command:
-
-python "{exec_display}" --log-dir "{log_dir_display}" --task-id {subtask_id} -- <your command here>
-
-- If the command fails within 10s, the error is shown immediately — fix and retry.
-- If the command is still running after 10s, it will be detached and you will see "TASK SUBMITTED".
-- When you see "TASK SUBMITTED", output: ⏳ LONG_RUNNING_IN_PROGRESS
-  AutoAgent will call you back with the results.
-- If the task cannot be done, output: ❌ not completed: <reason>""")
-        
-        return "\n\n".join(parts)
+        return _build_lr_prompt(
+            subtask=subtask,
+            exec_path=exec_path,
+            log_session_dir=log_session_dir,
+            attempt=attempt,
+            state=state,
+            extract_summary_fn=SimpleTaskExecutor._extract_summary,
+            parent_context=parent_context,
+        )
 
     def _check_long_running_in_progress(self, response: str) -> bool:
         """
@@ -1665,13 +1499,16 @@ python "{exec_display}" --log-dir "{log_dir_display}" --task-id {subtask_id} -- 
         """
         elapsed = 0
         pid = None  # Will be read from signal file
-        
+        consecutive_errors = 0
+        max_consecutive_errors = 10  # After 10 consecutive read failures, escalate
+
         while elapsed < max_wait:
             if os.path.exists(signal_file):
                 try:
                     with open(signal_file, "r", encoding="utf-8") as f:
                         signal_data = json.load(f)
-                    
+
+                    consecutive_errors = 0  # Reset on successful read
                     status = signal_data.get("status", "unknown")
                     
                     if status == "finished":
@@ -1707,7 +1544,15 @@ python "{exec_display}" --log-dir "{log_dir_display}" --task-id {subtask_id} -- 
                         return "finished"
                     
                 except (json.JSONDecodeError, IOError) as e:
-                    logger.debug(f"Signal file read error (will retry): {e}")
+                    consecutive_errors += 1
+                    logger.debug(f"Signal file read error ({consecutive_errors}/{max_consecutive_errors}): {e}")
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.warning(
+                            f"Signal file for {subtask_id} unreadable after "
+                            f"{consecutive_errors} consecutive attempts, treating as error"
+                        )
+                        print(f"      [WARNING] Signal file corrupted after {consecutive_errors} retries, treating as finished")
+                        return "finished"
             
             time.sleep(check_interval)
             elapsed += check_interval
@@ -1778,38 +1623,14 @@ python "{exec_display}" --log-dir "{log_dir_display}" --task-id {subtask_id} -- 
             except Exception:
                 pass
         
-        # Build sibling subtask list for orientation
-        sibling_info = ""
-        if parent_context and parent_context.get('subtasks'):
-            subtask_lines = []
-            current_id = str(subtask['id'])
-            for st in parent_context['subtasks']:
-                st_id = str(st['id'])
-                marker = "\u2192" if st_id == current_id else " "
-                subtask_lines.append(f"  {marker} {st_id}. {st['name']}")
-            sibling_info = "\n\nThis task is part of a larger workflow:\n" + "\n".join(subtask_lines)
-        
-        prompt = f"""You previously launched this task using autoagent-exec.{command_info}
-The task has now finished.
-
-Subtask: {subtask['name']}
-Completion Criteria: {subtask['completion_criteria']}
-Task Status: {status}{exit_code_info}{sibling_info}
-
-The task output has been saved to:
-  {output_log_display}
-
-Please:
-1. Read the output log file above to understand what happened
-2. Evaluate whether the task completed successfully
-3. Check if the results meet the completion criteria
-4. If the task produced output files, you may examine them as needed
-
-When finished, end your response with EXACTLY one of these status lines (on its own line):
-  \u2705 completed
-  \u274c not completed: <reason>
-This status line is MANDATORY and must be the LAST line of your response.
-"""        
+        prompt = _build_lr_analysis_prompt(
+            subtask=subtask,
+            status=status,
+            output_log=output_log,
+            command_info=command_info,
+            exit_code_info=exit_code_info,
+            parent_context=parent_context,
+        )
         try:
             # Write prompt to log BEFORE calling AI (crash safety)
             if conv_logger:
@@ -1842,7 +1663,8 @@ This status line is MANDATORY and must be the LAST line of your response.
                 try:
                     with open(output_log, 'r', encoding='utf-8', errors='replace') as f:
                         content = f.read()
-                    log_content = content[-2000:] if len(content) > 2000 else content
+                    _lf = limits.get('log_file')
+                    log_content = content[-_lf:] if len(content) > _lf else content
                 except Exception:
                     log_content = "(failed to read log file)"
             

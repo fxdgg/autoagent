@@ -17,6 +17,7 @@ tasks:
   - id: 2
     name: "运行代码检查"
     type: simple
+    model: simple
     completion_criteria: "pylint 评分 >= 9.0 且无严重错误"
     initial_hint: "运行 pylint src/"
     
@@ -229,6 +230,9 @@ tasks:
 #   - name: 任务名称
 #   - type: 任务类型（simple / nested / looping / long_running）
 #   - completion_criteria: 完成标准（自然语言描述）
+#   - model: 模型选择（可选，"default" 或 "simple"，默认 "default"）
+#     使用 "simple" 指定轻量模型执行简单任务（如运行命令、简单文件编辑）
+#     使用 "default" 或省略此字段以使用默认模型
 #
 # simple 类型额外字段：
 #   - initial_hint: 初始提示（给 AI 的参考信息，可选）

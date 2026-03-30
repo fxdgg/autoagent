@@ -23,7 +23,7 @@ import time
 import asyncio
 from typing import Union, Optional, List
 
-from ai_providers import AIProvider, CodeBuddyProvider, get_provider
+from ai_providers import AIProvider, CodeBuddyProvider, OpenCodeProvider, get_provider
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +39,12 @@ class AIClient:
     
     Supports multiple AI backends through the provider abstraction:
     - CodeBuddy (codebuddy)
-    - Claude Code Internal (claude-internal)
-    - Gemini CLI Internal (gemini-internal)
+    - Claude Code (claude)
+    - Gemini Cli (gemini)
+    - OpenCode (opencode)
     
     Each main task should create its own AIClient instance.
-    Subtasks within the same main task share context via --continue.
+    Subtasks within the same main task share context via --continue (or -s for opencode).
     """
 
     def __init__(
@@ -74,15 +75,22 @@ class AIClient:
             # Legacy: create a CodeBuddyProvider from old-style params
             self.provider = CodeBuddyProvider(
                 executable=codebuddy_path or "codebuddy",
-                model=model or "glm-5.0-ioa",
+                model=model,  # Use provider's default_model if not specified
             )
         
         self.workspace = workspace
         self.timeout = timeout
         self.context_id = context_id
         self._session_started = False
+        self._opencode_session_id = None  # Track OpenCode session ID for continuation
         # Full conversation log including tool calls (set after each ask() call)
         self.last_full_log = ""
+        # Callback to notify session_id changes (for state persistence)
+        self._on_session_id_changed = None
+        # Exponential backoff state
+        self._consecutive_failures = 0
+        self._backoff_base = 5  # seconds
+        self._backoff_max = 300  # default max wait, overridden by config
     
     # Legacy property accessors for backward compatibility
     @property
@@ -92,6 +100,23 @@ class AIClient:
     @property
     def model(self):
         return self.provider.model
+
+    @property
+    def session_id(self) -> str:
+        """Get the current session ID (for context persistence)."""
+        return self._opencode_session_id or ""
+
+    def resume_session(self, session_id: str):
+        """
+        Resume a previous session by setting the session ID.
+        
+        Args:
+            session_id: The session ID to resume (e.g., from a previous run)
+        """
+        if session_id:
+            self._opencode_session_id = session_id
+            self._session_started = True  # Mark as started so continuation is enabled
+            logger.info(f"[{self.context_id}] Resuming session: {session_id}")
 
     def ask(
         self,
@@ -117,12 +142,25 @@ class AIClient:
         """
         effective_timeout = timeout or self.timeout
 
+        # Exponential backoff: wait before retrying after consecutive failures
+        if self._consecutive_failures > 0:
+            delay = min(
+                self._backoff_base * (2 ** (self._consecutive_failures - 1)),
+                self._backoff_max,
+            )
+            logger.info(
+                f"[{self.context_id}] Backoff: waiting {delay}s before retry "
+                f"(consecutive failures: {self._consecutive_failures})"
+            )
+            print(f"   ⏳ Waiting {delay}s before retry (attempt after {self._consecutive_failures} consecutive failure(s))")
+            time.sleep(delay)
+
         # Build command args (without prompt - prompt goes via stdin)
         cmd_args = self._build_command(continue_session)
         
         logger.info(
             f"[{self.context_id}] Calling {self.provider.name} "
-            f"(continue={continue_session}, timeout={effective_timeout}s)"
+            f"(continue={continue_session}, session_id={self.session_id}, timeout={effective_timeout}s)"
         )
         logger.debug(f"[{self.context_id}] Prompt: {prompt[:200]}...")
         logger.debug(f"[{self.context_id}] Command: {cmd_args}")
@@ -137,7 +175,12 @@ class AIClient:
                 prompt_file_path = pf.name
 
             # Build full command: pipe the temp file content as stdin
-            full_cmd = self.provider.get_stdin_command(prompt_file_path, cmd_args)
+            if isinstance(self.provider, OpenCodeProvider) and self._opencode_session_id and self._session_started:
+                # For OpenCode continuation, append -s <session_id> to the command
+                session_cmd = f"{cmd_args} -s {self._opencode_session_id}"
+                full_cmd = self.provider.get_stdin_command(prompt_file_path, session_cmd)
+            else:
+                full_cmd = self.provider.get_stdin_command(prompt_file_path, cmd_args)
 
             logger.debug(f"[{self.context_id}] Full command: {full_cmd}")
 
@@ -183,7 +226,15 @@ class AIClient:
                 process.kill()
                 raise
 
-            process.wait()
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                logger.warning("Process did not exit within 30s after stdout closed, killing")
+                process.kill()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    logger.error("Process still alive after kill, abandoning")
             stderr_thread.join(timeout=5)
 
             stdout_text = "".join(stdout_chunks)
@@ -216,6 +267,7 @@ class AIClient:
                 self.last_full_log = response
 
             self._session_started = True
+            self._consecutive_failures = 0  # Reset backoff on success
             logger.info(f"[{self.context_id}] Got response ({len(response)} chars)")
             logger.debug(f"[{self.context_id}] Response: {response[:200]}...")
 
@@ -224,12 +276,15 @@ class AIClient:
             return response
 
         except subprocess.TimeoutExpired:
+            self._consecutive_failures += 1
             raise AICallError(
                 f"{self.provider.name} timed out after {effective_timeout}s"
             )
         except AICallError:
+            self._consecutive_failures += 1
             raise
         except Exception as e:
+            self._consecutive_failures += 1
             raise AICallError(f"Failed to call {self.provider.name}: {e}")
         finally:
             # Clean up temp file
@@ -242,24 +297,30 @@ class AIClient:
     def _build_command(self, continue_session: bool) -> str:
         """
         Build the AI CLI command string (without prompt).
-        
+
         Delegates to the provider to build the correct command for the
         specific AI tool being used.
-        
+
+        For non-OpenCode providers, passes saved session_id so the provider
+        can use --resume <session_id> instead of generic --continue.
+        OpenCode handles session_id separately (appended as -s <id> by ask()).
+
         Args:
             continue_session: Whether to continue existing session
-            
+
         Returns:
             str: The command string (prompt will be piped via stdin)
         """
         use_continue = continue_session and self._session_started
-        return self.provider.build_command(continue_session=use_continue)
+        # For non-OpenCode providers, pass session_id to enable --resume <id>
+        sid = self._opencode_session_id if (use_continue and not isinstance(self.provider, OpenCodeProvider)) else None
+        return self.provider.build_command(continue_session=use_continue, session_id=sid)
 
     def _handle_stream_line(self, line: str, assistant_text_parts: list, full_log_parts: list = None):
         """
         Parse a single line of stream-json output and display relevant info in real-time.
         
-        Supports two stream-json dialects:
+        Supports three stream-json dialects:
         
         **CodeBuddy / Claude Code format:**
           - "assistant": AI message with message.content[] array (text blocks and/or tool_use)
@@ -273,6 +334,13 @@ class AIClient:
           - "result": Final result with "status", "stats.duration_ms", "stats.tool_calls"
           - "init": Session init (ignored)
           - "message" + role="user": Echo of user prompt (ignored)
+        
+        **OpenCode format:**
+          - "step_start": Session start, contains "sessionID" (at top level or in data)
+          - "text": AI text in data.text
+          - "tool_call": Tool invocation with data.name (tool name) and data.input (JSON string)
+          - "tool_result": Tool result (handled by existing tool_result branch)
+          - "step_finish": Step finished with data.reason (and optional data.tokens, data.cost)
         
         Args:
             line: A single line of stream-json output
@@ -292,8 +360,10 @@ class AIClient:
             sys.stdout.write(line + "\n")
             sys.stdout.flush()
             return
-        
+
         event_type = event.get("type", "")
+        # DEBUG: Log the stream json (disabled currently)
+        # logger.debug(f"[{self.context_id}] Event content: {json.dumps(event, ensure_ascii=False)[:500]}")
         
         if event_type == "assistant":
             # CodeBuddy/Claude format: AI message with content[] array
@@ -328,9 +398,24 @@ class AIClient:
             # role="user" is just an echo of the prompt — ignore it
         
         elif event_type == "tool_use":
-            # Gemini format: top-level tool_use event
-            tool_name = event.get("tool_name", event.get("name", "unknown"))
-            tool_input = event.get("parameters", event.get("input", {}))
+            # Handle both Gemini and OpenCode formats
+            if "part" in event:
+                # OpenCode format: tool info in part.tool and part.state.input
+                part = event.get("part", {})
+                tool_name = part.get("tool", part.get("name", "unknown"))
+                state = part.get("state", {})
+                tool_input_raw = state.get("input", part.get("input", {}))
+                if isinstance(tool_input_raw, str):
+                    try:
+                        tool_input = json.loads(tool_input_raw)
+                    except json.JSONDecodeError:
+                        tool_input = {"raw": tool_input_raw}
+                else:
+                    tool_input = tool_input_raw if isinstance(tool_input_raw, dict) else {}
+            else:
+                # Gemini format: top-level tool_name and parameters
+                tool_name = event.get("tool_name", event.get("name", "unknown"))
+                tool_input = event.get("parameters", event.get("input", {}))
             self._display_tool_use(tool_name, tool_input)
             tool_log = self._format_tool_use_for_log(tool_name, tool_input)
             full_log_parts.append(tool_log)
@@ -384,7 +469,14 @@ class AIClient:
             result_text = event.get("result", "")
             if result_text:
                 assistant_text_parts.append(result_text)
-            
+
+            # Extract session_id from result event (Claude Code / CodeBuddy)
+            session_id = event.get("session_id", "")
+            if session_id and session_id != self._opencode_session_id:
+                self._opencode_session_id = session_id
+                if self._on_session_id_changed:
+                    self._on_session_id_changed(session_id)
+
             # CodeBuddy/Claude fields
             is_error = event.get("is_error", False)
             duration_ms = event.get("duration_ms", 0)
@@ -405,20 +497,58 @@ class AIClient:
             sys.stdout.flush()
             full_log_parts.append(f"\n{summary}")
         
+        elif event_type == "step_start":
+            # OpenCode format: session start event — extract session ID
+            # sessionID may be at top level or in data
+            session_id = event.get("sessionID", "")
+            if not session_id:
+                data = event.get("data", {})
+                if isinstance(data, dict):
+                    session_id = data.get("sessionID", data.get("sessionId", ""))
+            if session_id:
+                self._opencode_session_id = session_id
+                # Notify external listener for state persistence
+                if self._on_session_id_changed:
+                    self._on_session_id_changed(session_id)
+
+        elif event_type == "text":
+            # OpenCode format: text event with part.text
+            part = event.get("part", {})
+            text = part.get("text", "")
+            if text:
+                assistant_text_parts.append(text)
+                full_log_parts.append(text)
+                sys.stdout.write(text)
+                sys.stdout.flush()
+        
+        elif event_type == "step_finish":
+            # OpenCode format: step finished — extract token info from part
+            part = event.get("part", {})
+            tokens = part.get("tokens", {})
+            total_tokens = tokens.get("total", 0) if isinstance(tokens, dict) else 0
+            cost = part.get("cost", 0)
+            reason = part.get("reason", "stop")
+            status = "❌ Error" if reason == "error" else "✅ Done"
+            summary = f"\n--- {status} (tokens: {total_tokens}, cost: ${cost:.4f}) ---\n"
+            sys.stdout.write(summary)
+            sys.stdout.flush()
+            full_log_parts.append(f"\n{summary}")
+
         # Silently ignore: "init", "system", "topic", etc.
 
     def _display_tool_use(self, tool_name: str, tool_input: dict):
         """Display a tool use event with a readable summary."""
-        if tool_name == "Bash":
+        tool_name_lower = tool_name.lower()
+        if tool_name_lower == "bash":
             cmd = tool_input.get("command", "")
             sys.stdout.write(f"\n🔧 [{tool_name}] {cmd}\n")
-        elif tool_name in ("Edit", "Write", "MultiEdit"):
+        elif tool_name_lower in ("edit", "write", "multiedit"):
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             sys.stdout.write(f"\n📝 [{tool_name}] {path}\n")
-        elif tool_name == "Read":
+        elif tool_name_lower == "read":
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             sys.stdout.write(f"\n📖 [{tool_name}] {path}\n")
-        elif tool_name in ("Glob", "Grep"):
+        elif tool_name_lower in ("glob", "grep"):
             pattern = tool_input.get("pattern", tool_input.get("regex", ""))
             sys.stdout.write(f"\n🔍 [{tool_name}] {pattern}\n")
         else:
@@ -436,10 +566,11 @@ class AIClient:
         Returns:
             str: Formatted markdown string for the tool call
         """
-        if tool_name == "Bash":
+        tool_name_lower = tool_name.lower()
+        if tool_name_lower == "bash":
             cmd = tool_input.get("command", "")
             return f"\n🔧 **[Bash]**\n```bash\n{cmd}\n```\n"
-        elif tool_name in ("Edit", "Write"):
+        elif tool_name_lower in ("edit", "write"):
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             content = tool_input.get("content", tool_input.get("new_string", ""))
             result = f"\n📝 **[{tool_name}]** `{path}`\n"
@@ -450,19 +581,19 @@ class AIClient:
                     preview += f"\n... ({len(content)} chars total)"
                 result += f"```\n{preview}\n```\n"
             return result
-        elif tool_name == "MultiEdit":
+        elif tool_name_lower == "multiEdit":
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             edits = tool_input.get("edits", [])
             return f"\n📝 **[MultiEdit]** `{path}` ({len(edits)} edits)\n"
-        elif tool_name == "Read":
+        elif tool_name_lower == "read":
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             return f"\n📖 **[Read]** `{path}`\n"
-        elif tool_name in ("Glob", "Grep"):
+        elif tool_name_lower in ("glob", "grep"):
             pattern = tool_input.get("pattern", tool_input.get("regex", ""))
             return f"\n🔍 **[{tool_name}]** `{pattern}`\n"
-        elif tool_name == "TodoRead":
+        elif tool_name_lower == "todoread":
             return f"\n📋 **[TodoRead]**\n"
-        elif tool_name in ("TaskCreate", "TaskUpdate"):
+        elif tool_name_lower in ("taskcreate", "taskupdate"):
             task_desc = tool_input.get("description", tool_input.get("task", ""))
             if isinstance(task_desc, str) and task_desc:
                 return f"\n🔧 **[{tool_name}]** {task_desc[:200]}\n"
@@ -579,7 +710,7 @@ class AIClientSDK:
         else:
             self.provider = CodeBuddyProvider(
                 executable=codebuddy_path or "codebuddy",
-                model=model or "glm-5.0-ioa",
+                model=model,  # Use provider's default_model if not specified
             )
 
         self.workspace = workspace
@@ -588,6 +719,12 @@ class AIClientSDK:
         self._session_id = None  # SDK session ID for conversation continuity
         self._session_started = False
         self.last_full_log = ""
+        # Callback to notify session_id changes (for state persistence)
+        self._on_session_id_changed = None
+        # Exponential backoff state
+        self._consecutive_failures = 0
+        self._backoff_base = 5  # seconds
+        self._backoff_max = 300  # default max wait, overridden by config
 
     # Legacy property accessors for backward compatibility
     @property
@@ -597,6 +734,23 @@ class AIClientSDK:
     @property
     def model(self):
         return self.provider.model
+
+    @property
+    def session_id(self) -> str:
+        """Get the current session ID (for context persistence)."""
+        return self._session_id or ""
+
+    def resume_session(self, session_id: str):
+        """
+        Resume a previous session by setting the session ID.
+        
+        Args:
+            session_id: The session ID to resume (e.g., from a previous run)
+        """
+        if session_id:
+            self._session_id = session_id
+            self._session_started = True  # Mark as started so continuation is enabled
+            logger.info(f"[{self.context_id}] Resuming session: {session_id}")
 
     def ask(
         self,
@@ -624,6 +778,19 @@ class AIClientSDK:
         """
         effective_timeout = timeout or self.timeout
 
+        # Exponential backoff: wait before retrying after consecutive failures
+        if self._consecutive_failures > 0:
+            delay = min(
+                self._backoff_base * (2 ** (self._consecutive_failures - 1)),
+                self._backoff_max,
+            )
+            logger.info(
+                f"[{self.context_id}] Backoff: waiting {delay}s before retry "
+                f"(consecutive failures: {self._consecutive_failures})"
+            )
+            print(f"   ⏳ Waiting {delay}s before retry (attempt after {self._consecutive_failures} consecutive failure(s))")
+            time.sleep(delay)
+
         logger.info(
             f"[{self.context_id}] Calling CodeBuddy SDK "
             f"(continue={continue_session}, timeout={effective_timeout}s)"
@@ -635,15 +802,19 @@ class AIClientSDK:
                 prompt, continue_session, effective_timeout
             )
         except AICallError:
+            self._consecutive_failures += 1
             raise
         except Exception as e:
+            self._consecutive_failures += 1
             raise AICallError(f"Failed to call CodeBuddy SDK: {e}")
 
         if not response:
+            self._consecutive_failures += 1
             raise AICallError("CodeBuddy SDK returned empty response")
 
         self.last_full_log = full_log or response
         self._session_started = True
+        self._consecutive_failures = 0  # Reset backoff on success
 
         logger.info(f"[{self.context_id}] Got response ({len(response)} chars)")
         logger.debug(f"[{self.context_id}] Response: {response[:200]}...")
@@ -796,6 +967,9 @@ class AIClientSDK:
                     # Capture session_id for future --continue
                     if message.session_id:
                         self._session_id = message.session_id
+                        # Notify external listener for state persistence
+                        if self._on_session_id_changed:
+                            self._on_session_id_changed(message.session_id)
 
                     result_text = message.result or ""
                     if result_text:
@@ -844,16 +1018,17 @@ class AIClientSDK:
 
     def _display_tool_use(self, tool_name: str, tool_input: dict):
         """Display a tool use event with a readable summary."""
-        if tool_name == "Bash":
+        tool_name_lower = tool_name.lower()
+        if tool_name_lower == "bash":
             cmd = tool_input.get("command", "")
             sys.stdout.write(f"\n🔧 [{tool_name}] {cmd}\n")
-        elif tool_name in ("Edit", "Write", "MultiEdit"):
+        elif tool_name_lower in ("edit", "write", "multiEdit"):
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             sys.stdout.write(f"\n📝 [{tool_name}] {path}\n")
-        elif tool_name == "Read":
+        elif tool_name_lower == "read":
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             sys.stdout.write(f"\n📖 [{tool_name}] {path}\n")
-        elif tool_name in ("Glob", "Grep"):
+        elif tool_name_lower in ("glob", "grep"):
             pattern = tool_input.get("pattern", tool_input.get("regex", ""))
             sys.stdout.write(f"\n🔍 [{tool_name}] {pattern}\n")
         else:
@@ -862,10 +1037,11 @@ class AIClientSDK:
 
     def _format_tool_use_for_log(self, tool_name: str, tool_input: dict) -> str:
         """Format a tool use event as a Markdown string for the conversation log."""
-        if tool_name == "Bash":
+        tool_name_lower = tool_name.lower()
+        if tool_name_lower == "bash":
             cmd = tool_input.get("command", "")
             return f"\n🔧 **[Bash]**\n```bash\n{cmd}\n```\n"
-        elif tool_name in ("Edit", "Write"):
+        elif tool_name_lower in ("edit", "write"):
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             content = tool_input.get("content", tool_input.get("new_string", ""))
             result = f"\n📝 **[{tool_name}]** `{path}`\n"
@@ -875,19 +1051,19 @@ class AIClientSDK:
                     preview += f"\n... ({len(content)} chars total)"
                 result += f"```\n{preview}\n```\n"
             return result
-        elif tool_name == "MultiEdit":
+        elif tool_name_lower == "multiedit":
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             edits = tool_input.get("edits", [])
             return f"\n📝 **[MultiEdit]** `{path}` ({len(edits)} edits)\n"
-        elif tool_name == "Read":
+        elif tool_name_lower == "read":
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             return f"\n📖 **[Read]** `{path}`\n"
-        elif tool_name in ("Glob", "Grep"):
+        elif tool_name_lower in ("glob", "grep"):
             pattern = tool_input.get("pattern", tool_input.get("regex", ""))
             return f"\n🔍 **[{tool_name}]** `{pattern}`\n"
-        elif tool_name == "TodoRead":
+        elif tool_name_lower == "todoread":
             return f"\n📋 **[TodoRead]**\n"
-        elif tool_name in ("TaskCreate", "TaskUpdate"):
+        elif tool_name_lower in ("taskcreate", "taskupdate"):
             task_desc = tool_input.get("description", tool_input.get("task", ""))
             if isinstance(task_desc, str) and task_desc:
                 return f"\n🔧 **[{tool_name}]** {task_desc[:200]}\n"
@@ -991,6 +1167,7 @@ class AIClientTest:
         self.timeout = timeout
         self.context_id = context_id
         self._session_started = False
+        self._opencode_session_id = None  # Session ID for test client (not actually used)
         self.last_full_log = ""
         # Fallback exec_path and log_dir for autoagent-exec commands
         # when the prompt doesn't contain them (e.g. simple tasks where
@@ -998,6 +1175,8 @@ class AIClientTest:
         # These are set by the orchestrator (run_test.py) after client creation.
         self._fallback_exec_path = None
         self._fallback_log_dir = None
+        # Callback to notify session_id changes (for state persistence)
+        self._on_session_id_changed = None
 
     @property
     def codebuddy_path(self):
@@ -1006,6 +1185,23 @@ class AIClientTest:
     @property
     def model(self):
         return self.provider.model
+
+    @property
+    def session_id(self) -> str:
+        """Get the current session ID (for context persistence)."""
+        return self._opencode_session_id or ""
+
+    def resume_session(self, session_id: str):
+        """
+        Resume a previous session by setting the session ID.
+        
+        Args:
+            session_id: The session ID to resume (e.g., from a previous run)
+        """
+        if session_id:
+            self._opencode_session_id = session_id
+            self._session_started = True  # Mark as started so continuation is enabled
+            logger.info(f"[{self.context_id}] Resuming session: {session_id}")
 
     def ask(
         self,
