@@ -2,6 +2,14 @@
 # This file provides default settings for the orchestrator.
 # Command-line arguments (e.g. --timeout) will override these values.
 
+# System prompt prefix
+# This text is prepended to ALL AI prompts (task execution, ideas decomposition,
+# review, failure analysis, etc.). Use it to set the AI's persona, role, or
+# any global instructions you want applied consistently.
+# Example: "You are a senior CUDA engineer specializing in GPU optimization."
+# Leave empty or remove to use default role definitions.
+system_prompt_prefix: ""
+
 # Default AI model for providers that support model selection
 # This is used when no model is specified via CLI --model or preset
 # Supported models depend on the provider (e.g., codebuddy supports deepseek-v3.2, claude-*)

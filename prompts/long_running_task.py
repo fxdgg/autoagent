@@ -8,6 +8,7 @@ Corresponds to ``SubtaskExecutor._build_long_running_prompt()`` and
 from prompts.shared import (
     SYSTEM_PROMPT_CODING_AGENT,
     STATUS_MARKER_INSTRUCTION,
+    apply_system_prompt_prefix,
     build_sibling_context,
     build_history_section,
     build_suggested_fix_section,
@@ -39,6 +40,7 @@ def build_long_running_prompt(
         f"Type: long_running (\u26a0\ufe0f This task may take a long time)",
         f"Completion Criteria: {subtask['completion_criteria']}",
     ]
+    apply_system_prompt_prefix(parts)
 
     # Show main task goal if this is a subtask
     if parent_context and parent_context.get('main_task_criteria'):
@@ -109,7 +111,13 @@ def build_long_running_analysis_prompt(
     if parent_context and parent_context.get('subtasks'):
         sibling_info = "\n\n" + build_sibling_context(subtask, parent_context)
 
-    return f"""You previously launched this task using autoagent-exec.{command_info}
+    prefix = ""
+    _parts = []
+    apply_system_prompt_prefix(_parts)
+    if _parts:
+        prefix = _parts[0] + "\n\n"
+
+    return f"""{prefix}You previously launched this task using autoagent-exec.{command_info}
 The task has now finished.
 
 Subtask: {subtask['name']}

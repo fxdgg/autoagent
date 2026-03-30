@@ -7,7 +7,7 @@ in ideas_watcher.py.
 """
 
 from truncation_limits import limits
-from prompts.shared import load_task_design_guide
+from prompts.shared import load_task_design_guide, load_system_prompt_prefix
 
 
 def build_ideas_review_prompt(
@@ -27,7 +27,10 @@ def build_ideas_review_prompt(
     """
     task_design_guide = load_task_design_guide()
 
-    return f"""You are a task review expert. Review the following TODO task decomposition
+    prefix = load_system_prompt_prefix()
+    role_line = prefix if prefix else "You are a task review expert."
+
+    return f"""{role_line} Review the following TODO task decomposition
 for quality, completeness, and correctness.
 
 These tasks will be executed by an AI coding agent that can read/modify files, run shell
@@ -100,7 +103,10 @@ def build_ideas_revision_prompt(
         review_feedback: Feedback text from the reviewer AI.
         temp_tasks_path: File path where revised YAML should be written.
     """
-    return f"""Your previous task decomposition was reviewed and needs revision.
+    prefix = load_system_prompt_prefix()
+    prefix_block = prefix + "\n\n" if prefix else ""
+
+    return f"""{prefix_block}Your previous task decomposition was reviewed and needs revision.
 
 ## Reviewer Feedback
 
@@ -128,7 +134,10 @@ def build_human_feedback_revision_prompt(
         human_feedback: Free-form feedback text from the human user.
         temp_tasks_path: File path where revised YAML should be written.
     """
-    return f"""Your task decomposition needs revision based on human feedback.
+    prefix = load_system_prompt_prefix()
+    prefix_block = prefix + "\n\n" if prefix else ""
+
+    return f"""{prefix_block}Your task decomposition needs revision based on human feedback.
 
 ## Current Tasks
 

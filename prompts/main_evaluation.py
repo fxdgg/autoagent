@@ -7,6 +7,8 @@ in task_executor.py.
 
 from typing import List
 
+from prompts.shared import apply_system_prompt_prefix
+
 
 def build_main_evaluation_prompt(
     task: dict,
@@ -28,7 +30,13 @@ def build_main_evaluation_prompt(
     """
     available_ids = [str(s['id']) for s in subtasks]
 
-    return f"""All subtasks are completed. Please evaluate whether the main task is finished.
+    prefix = ""
+    _parts = []
+    apply_system_prompt_prefix(_parts)
+    if _parts:
+        prefix = _parts[0] + "\n\n"
+
+    return f"""{prefix}All subtasks are completed. Please evaluate whether the main task is finished.
 
 Main Task: {task['name']}
 Completion Criteria: {task['completion_criteria']}

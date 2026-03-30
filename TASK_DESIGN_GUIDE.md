@@ -31,6 +31,8 @@ Key implications for task design:
 - The AI session is NOT reset between subtasks, between retry rounds, or
   between loop iterations. The AI always retains the full conversation
   history within a parent task.
+- The AI's persona/role can be customized via `system_prompt_prefix` in
+  `config.yaml` (see §12 below).
 
 ---
 
@@ -613,3 +615,48 @@ Before finalizing your task decomposition, verify:
 - [ ] The decomposition matches the complexity of the idea (not over/under-decomposed)
 - [ ] `model: simple` is used only for straightforward tasks
 - [ ] `initial_hint` provides useful context without duplicating criteria
+
+---
+
+## 12. Customizing the AI Persona — `system_prompt_prefix`
+
+By default, AutoAgent uses built-in role definitions for the AI agent (e.g.,
+"You are a coding agent"). You can override or augment this by setting
+`system_prompt_prefix` in `config.yaml`:
+
+```yaml
+system_prompt_prefix: "You are a senior CUDA engineer specializing in GPU optimization."
+```
+
+### How It Works
+
+- The prefix text is **prepended to ALL AI prompts** — task execution,
+  ideas decomposition, review, failure analysis, and main evaluation.
+- If the prefix is empty (default), the built-in role definitions are used.
+- If the prefix is set, it **replaces** the default role line in ideas
+  decomposition and review prompts, and is **prepended** to task execution
+  prompts (before the built-in coding agent role).
+
+### When to Use
+
+- **Domain expertise:** Set the AI's persona to match your project domain
+  (e.g., "You are a machine learning engineer" or "You are a backend
+  developer specializing in distributed systems").
+- **Global constraints:** Add instructions that should apply to every task
+  (e.g., "Always write code in Python 3.12+" or "Never modify files in
+  the vendor/ directory").
+- **Coding style:** Enforce conventions (e.g., "Follow Google C++ style
+  guide" or "Use type hints in all Python functions").
+
+### Example
+
+```yaml
+system_prompt_prefix: |
+  You are a senior C++/CUDA engineer. Follow these rules:
+  - Prefer modern C++17 features.
+  - Always check CUDA error codes with a macro.
+  - Write concise comments for non-obvious logic.
+```
+
+This prefix will appear at the very beginning of every prompt sent to the
+AI agent, ensuring consistent behavior across all tasks.

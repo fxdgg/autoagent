@@ -249,4 +249,10 @@ tasks:
 #   - Use simple_once / long_running_once for one-time setup that shouldn't repeat on retry
 #   - Use model: simple for trivial tasks (run a command, simple file edit)
 #   - Don't over-decompose: if one step suffices, use a single simple task
+#
+# AI persona (config.yaml):
+#   Set system_prompt_prefix in config.yaml to customize the AI's role/persona.
+#   Example: system_prompt_prefix: "You are a senior CUDA engineer."
+#   This text is prepended to ALL AI prompts (execution, decomposition, review, etc.).
+#   See TASK_DESIGN_GUIDE.md §12 for details.
 # ==========================================================================

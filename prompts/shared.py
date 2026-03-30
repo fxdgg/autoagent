@@ -8,10 +8,53 @@ formatting utilities.
 
 import os
 import logging
+import yaml
 
 from truncation_limits import limits
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# System prompt prefix loader (cached)
+# ---------------------------------------------------------------------------
+
+_system_prompt_prefix_cache: str | None = None
+
+
+def load_system_prompt_prefix() -> str:
+    """Load and cache the system_prompt_prefix from config.yaml.
+
+    Returns:
+        The prefix string, or empty string if not configured.
+    """
+    global _system_prompt_prefix_cache
+    if _system_prompt_prefix_cache is not None:
+        return _system_prompt_prefix_cache
+
+    config_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "config.yaml"
+    )
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+        _system_prompt_prefix_cache = config.get("system_prompt_prefix", "") or ""
+    except OSError as e:
+        logger.warning(f"Failed to load config.yaml for system_prompt_prefix: {e}")
+        _system_prompt_prefix_cache = ""
+    return _system_prompt_prefix_cache
+
+
+def apply_system_prompt_prefix(parts: list) -> None:
+    """Prepend the user-configured system prompt prefix to a parts list.
+
+    If ``system_prompt_prefix`` is configured (non-empty) in config.yaml,
+    it is inserted at position 0 of *parts*.  Otherwise *parts* is left
+    unchanged.
+    """
+    prefix = load_system_prompt_prefix()
+    if prefix:
+        parts.insert(0, prefix)
+
 
 # ---------------------------------------------------------------------------
 # Task Design Guide loader (cached)

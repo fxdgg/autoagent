@@ -6,7 +6,7 @@ in ideas_watcher.py.
 """
 
 from truncation_limits import limits
-from prompts.shared import load_task_design_guide
+from prompts.shared import load_task_design_guide, load_system_prompt_prefix
 
 
 def build_ideas_decompose_prompt(
@@ -23,7 +23,10 @@ def build_ideas_decompose_prompt(
     """
     task_design_guide = load_task_design_guide()
 
-    return f"""You are a task planner. Your job is to decompose a given idea into concrete, actionable
+    prefix = load_system_prompt_prefix()
+    role_line = prefix if prefix else "You are a task planner."
+
+    return f"""{role_line} Your job is to decompose a given idea into concrete, actionable
 TODO tasks in YAML format.
 
 These tasks will be executed by an AI coding agent that can read/modify files, run shell
