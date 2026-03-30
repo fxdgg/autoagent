@@ -5,7 +5,6 @@ Corresponds to ``SimpleTaskExecutor._build_prompt()`` in task_executor.py.
 """
 
 from prompts.shared import (
-    apply_system_prompt_prefix,
     build_sibling_context,
     build_history_section,
     build_suggested_fix_section,
@@ -44,7 +43,6 @@ def build_simple_task_prompt(
         f"Task: {task['name']}",
         f"Completion Criteria: {task['completion_criteria']}",
     ]
-    apply_system_prompt_prefix(parts)
 
     # Show main task goal if this is a subtask
     if parent_context and parent_context.get('main_task_criteria'):

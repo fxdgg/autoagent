@@ -3,11 +3,13 @@
 # Command-line arguments (e.g. --timeout) will override these values.
 
 # System prompt prefix
-# This text is prepended to ALL AI prompts (task execution, ideas decomposition,
-# review, failure analysis, etc.). Use it to set the AI's persona, role, or
-# any global instructions you want applied consistently.
+# This text is appended to the system prompt (after the "# Task Description"
+# heading for providers without native system-prompt support, or at the end
+# of the system prompt for providers that support --append-system-prompt).
+# Use it to set the AI's persona, role, or any global instructions.
 # Example: "You are a senior CUDA engineer specializing in GPU optimization."
-# Leave empty or remove to use default role definitions.
+# This can be overridden per-task in todos.yaml via the system_prompt_prefix field.
+# Leave empty or remove to skip.
 system_prompt_prefix: ""
 
 # Default AI model for providers that support model selection

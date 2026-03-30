@@ -44,14 +44,40 @@ def load_system_prompt_prefix() -> str:
     return _system_prompt_prefix_cache
 
 
-def apply_system_prompt_prefix(parts: list) -> None:
+def get_system_prompt_prefix(task: dict = None) -> str:
+    """Return the effective system prompt prefix for a task.
+
+    If the *task* dict contains a ``system_prompt_prefix`` key, that
+    value takes precedence.  Otherwise the global value from
+    config.yaml is used.
+
+    Args:
+        task: Optional task configuration dict.  When provided, its
+            ``system_prompt_prefix`` field (if any) overrides the
+            global setting.
+
+    Returns:
+        The prefix string, or empty string if not configured.
+    """
+    if task and task.get('system_prompt_prefix'):
+        return task['system_prompt_prefix']
+    return load_system_prompt_prefix()
+
+
+def apply_system_prompt_prefix(parts: list, task: dict = None) -> None:
     """Prepend the user-configured system prompt prefix to a parts list.
 
-    If ``system_prompt_prefix`` is configured (non-empty) in config.yaml,
-    it is inserted at position 0 of *parts*.  Otherwise *parts* is left
-    unchanged.
+    If ``system_prompt_prefix`` is configured (non-empty) — either at the
+    task level or globally in config.yaml — it is inserted at position 0
+    of *parts*.  Otherwise *parts* is left unchanged.
+
+    Args:
+        parts: Mutable list of prompt sections.
+        task: Optional task configuration dict.  When provided, its
+            ``system_prompt_prefix`` field (if any) overrides the
+            global setting.
     """
-    prefix = load_system_prompt_prefix()
+    prefix = get_system_prompt_prefix(task)
     if prefix:
         parts.insert(0, prefix)
 
@@ -101,21 +127,46 @@ ROLE_CODING_AGENT = (
     "commands, and analyze outputs. Complete the following task."
 )
 
-def build_system_prompt_coding_agent(exec_script_path: str = "") -> str:
+def build_system_prompt_coding_agent(
+    exec_script_path: str = "",
+    supports_system_prompt: bool = True,
+    task: dict = None,
+) -> str:
     """Build the system prompt for coding-agent tasks.
 
-    Includes role definition, status-marker instructions, and — when
-    *exec_script_path* is provided — the autoagent-exec usage note so
-    the AI knows how to handle long-running commands.
+    Includes status-marker instructions and — when *exec_script_path*
+    is provided — the autoagent-exec usage note so the AI knows how to
+    handle long-running commands.
+
+    For providers that do **not** support a dedicated system-prompt
+    channel (``supports_system_prompt=False``), the returned text is
+    wrapped with section headings so it can be prepended to the user
+    prompt without ambiguity.
+
+    The user-configured ``system_prompt_prefix`` (from the *task* dict
+    or from config.yaml) is appended after the ``# Task Description``
+    heading (or at the end for providers with native system-prompt
+    support).
 
     Args:
         exec_script_path: Absolute path to the generated ``autoagent-exec``
             convenience script.  When empty, the long-running-command
             section is omitted.
+        supports_system_prompt: Whether the AI provider supports a
+            dedicated ``--append-system-prompt`` CLI parameter.  When
+            *False*, section headings are added for clarity.
+        task: Optional task configuration dict.  When provided, its
+            ``system_prompt_prefix`` field (if any) overrides the
+            global setting from config.yaml.
     """
-    base = (
-        "You are an AI coding agent. You can read/write files, run shell "
-        "commands, and analyze outputs.\n\n"
+    parts = []
+
+    # For providers without native system-prompt support, add a heading
+    # so the AI can distinguish instructions from the task description.
+    if not supports_system_prompt:
+        parts.append("# Instructions")
+
+    parts.append(
         "## Status Markers\n"
         "When you finish a task, you MUST end your response with EXACTLY one of "
         "these status lines (on its own line):\n"
@@ -127,23 +178,37 @@ def build_system_prompt_coding_agent(exec_script_path: str = "") -> str:
         "  ⏳ LONG_RUNNING_IN_PROGRESS\n\n"
         "These markers are MANDATORY. Your response MUST end with one of them."
     )
-    if not exec_script_path:
-        return base
 
-    exec_note = (
-        "\n\n"
-        "**Note on long-running commands:** If a Bash command may take more "
-        "than a few minutes (e.g. compilation, benchmarking, profiling), do "
-        "NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:\n"
-        f'  "{exec_script_path}" <your command>\n'
-        "The launcher will auto-detach after 10s and print \"TASK SUBMITTED\". "
-        "When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS\n\n"
-        "**⚠️ IMPORTANT: You MUST always use autoagent-exec for long-running "
-        "commands. Running them directly in Bash will cause the session to hang "
-        "and be killed. Even if autoagent-exec fails, fix the command arguments "
-        "and retry with autoagent-exec — NEVER fall back to running directly in Bash.**"
-    )
-    return base + exec_note
+    if exec_script_path:
+        parts.append(
+            "## Note on long-running commands\n"
+            "If a Bash command may take more than a few minutes "
+            "(e.g. compilation, benchmarking, profiling), do "
+            "NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:\n"
+            f'  "{exec_script_path}" <your command>\n'
+            "The launcher will auto-detach after 10s and print \"TASK SUBMITTED\". "
+            "When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS"
+        )
+        parts.append(
+            "## ⚠️ IMPORTANT\n"
+            "You MUST always use autoagent-exec for long-running "
+            "commands. Running them directly in Bash will cause the session to hang "
+            "and be killed. Even if autoagent-exec fails, fix the command arguments "
+            "and retry with autoagent-exec — NEVER fall back to running directly in Bash."
+        )
+
+    # For providers without native system-prompt support, add a
+    # "Task Description" heading so the subsequent user prompt is
+    # clearly separated from the instructions above.
+    if not supports_system_prompt:
+        parts.append("# Task Description")
+
+    # Append user-configured system_prompt_prefix (task-level overrides global)
+    prefix = get_system_prompt_prefix(task)
+    if prefix:
+        parts.append(prefix)
+
+    return "\n\n".join(parts)
 
 ROLE_TASK_PLANNER = (
     "You are a task planner. Your job is to decompose a given idea into "

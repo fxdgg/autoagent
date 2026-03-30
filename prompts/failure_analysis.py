@@ -8,8 +8,6 @@ Covers both *nested* and *looping* task types.  Corresponds to
 
 from typing import List
 
-from prompts.shared import apply_system_prompt_prefix
-
 
 def build_nested_failure_analysis_prompt(
     task: dict,
@@ -36,13 +34,7 @@ def build_nested_failure_analysis_prompt(
     failed_id = str(failed_subtask['id'])
     available_ids = [str(s['id']) for s in all_subtasks]
 
-    prefix = ""
-    _parts = []
-    apply_system_prompt_prefix(_parts)
-    if _parts:
-        prefix = _parts[0] + "\n\n"
-
-    return f"""{prefix}A subtask has failed. Please analyze the failure and decide the retry strategy.
+    return f"""A subtask has failed. Please analyze the failure and decide the retry strategy.
 
 Main Task: {task['name']}
 Main Task Completion Criteria: {task['completion_criteria']}
@@ -105,13 +97,7 @@ def build_looping_failure_analysis_prompt(
     available_ids = [str(s['id']) for s in all_subtasks]
     repeat_count = task.get('repeat_count', 1)
 
-    prefix = ""
-    _parts = []
-    apply_system_prompt_prefix(_parts)
-    if _parts:
-        prefix = _parts[0] + "\n\n"
-
-    return f"""{prefix}A subtask has failed during loop iteration {loop_idx}. Please analyze the failure and decide the retry strategy.
+    return f"""A subtask has failed during loop iteration {loop_idx}. Please analyze the failure and decide the retry strategy.
 
 Main Task: {task['name']}
 Task Type: looping (iteration {loop_idx}/{repeat_count})

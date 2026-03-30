@@ -16,7 +16,7 @@ import logging
 from typing import Optional, Tuple
 
 from codebuddy_client import AIClient, CodeBuddyClient, AICallError
-from prompts.shared import build_system_prompt_coding_agent
+from prompts.shared import build_system_prompt_coding_agent, get_system_prompt_prefix
 from prompts.simple_task import build_simple_task_prompt
 from prompts.long_running_task import (
     build_long_running_prompt as _build_lr_prompt,
@@ -198,7 +198,11 @@ class SimpleTaskExecutor:
             last_timeout_error = None  # Reset after injecting into prompt            
             try:
                 # Write prompt to log BEFORE calling AI (crash safety)
-                system_prompt = build_system_prompt_coding_agent(exec_script_path)
+                system_prompt = build_system_prompt_coding_agent(
+                    exec_script_path,
+                    supports_system_prompt=client.provider.supports_system_prompt,
+                    task=task,
+                )
                 if conv_logger:
                     conv_logger.log_prompt(
                         task_id=task_id,
@@ -814,6 +818,10 @@ class NestedTaskExecutor:
         )
         print(f"\n   🤖 [AI Decision Point 1: Failure Analysis]")
         
+        # Build a minimal system prompt with just the user-configured prefix
+        # (failure analysis calls don't need status markers or autoagent-exec notes)
+        prefix_system_prompt = get_system_prompt_prefix(task) or None
+
         try:
             # Write prompt to log BEFORE calling AI (crash safety)
             if conv_logger:
@@ -825,7 +833,7 @@ class NestedTaskExecutor:
                     round_num=round_num,
                 )
             
-            decision = client.ask(prompt, expect_json=True)
+            decision = client.ask(prompt, expect_json=True, system_prompt=prefix_system_prompt)
             print(f"      AI Analysis: {decision.get('analysis', 'N/A')[:200]}")
             print(f"      AI Decision: retry_from = {decision.get('retry_from', failed_id)}")
             print(f"      Suggested Fix: {decision.get('suggested_fix', 'N/A')[:200]}")            # Append response to log AFTER AI returns
@@ -939,6 +947,9 @@ class NestedTaskExecutor:
         
         print(f"\n   🤖 [AI Decision Point 2: Main Task Evaluation]")
         
+        # Build a minimal system prompt with just the user-configured prefix
+        prefix_system_prompt = get_system_prompt_prefix(task) or None
+
         try:
             # Write prompt to log BEFORE calling AI (crash safety)
             if conv_logger:
@@ -950,7 +961,7 @@ class NestedTaskExecutor:
                     round_num=round_num,
                 )
             
-            evaluation = client.ask(prompt, expect_json=True)
+            evaluation = client.ask(prompt, expect_json=True, system_prompt=prefix_system_prompt)
             completed = evaluation.get('main_task_completed', False)
             print(f"      AI Evaluation: {'✅ COMPLETED' if completed else '❌ NOT COMPLETED'}")
             print(f"      Analysis: {evaluation.get('analysis', 'N/A')[:200]}")
@@ -1303,6 +1314,9 @@ class LoopingTaskExecutor:
 
         print(f"\n   🤖 [AI: Failure Analysis (loop {loop_idx})]")
 
+        # Build a minimal system prompt with just the user-configured prefix
+        prefix_system_prompt = get_system_prompt_prefix(task) or None
+
         try:
             if conv_logger:
                 conv_logger.log_nested_prompt(
@@ -1313,7 +1327,7 @@ class LoopingTaskExecutor:
                     round_num=loop_idx,
                 )
 
-            decision = client.ask(prompt, expect_json=True)
+            decision = client.ask(prompt, expect_json=True, system_prompt=prefix_system_prompt)
             print(f"      AI Analysis: {decision.get('analysis', 'N/A')[:200]}")
             print(f"      AI Decision: retry_from = {decision.get('retry_from', failed_id)}")
 
@@ -1507,7 +1521,11 @@ class SubtaskExecutor:
             
             try:
                 # Write prompt to log BEFORE calling AI (crash safety)
-                system_prompt = build_system_prompt_coding_agent(exec_script_path)
+                system_prompt = build_system_prompt_coding_agent(
+                    exec_script_path,
+                    supports_system_prompt=client.provider.supports_system_prompt,
+                    task=subtask,
+                )
                 if conv_logger:
                     conv_logger.log_prompt(
                         task_id=subtask_id,
@@ -1845,7 +1863,11 @@ class SubtaskExecutor:
         )
         try:
             # Write prompt to log BEFORE calling AI (crash safety)
-            system_prompt = build_system_prompt_coding_agent(exec_script_path)
+            system_prompt = build_system_prompt_coding_agent(
+                exec_script_path,
+                supports_system_prompt=client.provider.supports_system_prompt,
+                task=subtask,
+            )
             if conv_logger:
                 conv_logger.log_prompt(
                     task_id=subtask_id,
