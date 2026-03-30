@@ -404,10 +404,29 @@ class SimpleTaskExecutor:
         print(f"   ⏳ AI submitted long-running task in simple task, waiting for completion...")
         
         log_session_dir = subtask_exec.session_dir
-        signal_file = os.path.join(log_session_dir, "lr_tasks", f"lr_{task_id}_signal.json")
-        output_log = os.path.join(log_session_dir, "lr_tasks", f"lr_{task_id}_output.log")
         
-        monitor_status = subtask_exec._poll_signal_file(task_id, signal_file)
+        # Extract the actual task-id used in the autoagent-exec command.
+        # The AI may use a different task-id than the current subtask
+        # (e.g. AI in subtask 1.3 might use --task-id 1.2).
+        # We must use the same task-id to find the correct signal file.
+        import re as _re
+        lr_task_id = task_id  # default fallback
+        tid_match = _re.search(
+            r'--task-id\s+(\S+)', response
+        )
+        if tid_match:
+            lr_task_id = tid_match.group(1)
+            if lr_task_id != task_id:
+                logger.info(
+                    f"Task {task_id}: AI used --task-id {lr_task_id} in "
+                    f"autoagent-exec (differs from current subtask id). "
+                    f"Using {lr_task_id} for signal file lookup."
+                )
+        
+        signal_file = os.path.join(log_session_dir, "lr_tasks", f"lr_{lr_task_id}_signal.json")
+        output_log = os.path.join(log_session_dir, "lr_tasks", f"lr_{lr_task_id}_output.log")
+        
+        monitor_status = subtask_exec._poll_signal_file(lr_task_id, signal_file)
         
         # Restart AI to analyze the result
         analyze_result = subtask_exec._ai_analyze_long_running_result(
@@ -1378,9 +1397,24 @@ class SubtaskExecutor:
                 if self._check_long_running_in_progress(result):
                     print(f"      ⏳ AI submitted long-running task, waiting for completion...")
                     
+                    # Extract the actual task-id used in the autoagent-exec
+                    # command from the AI response.  The AI *should* use
+                    # subtask_id, but we defensively check in case it differs.
+                    import re as _re
+                    lr_task_id = subtask_id  # default
+                    _tid_match = _re.search(r'--task-id\s+(\S+)', result)
+                    if _tid_match:
+                        lr_task_id = _tid_match.group(1)
+                        if lr_task_id != subtask_id:
+                            logger.info(
+                                f"Subtask {subtask_id}: AI used --task-id "
+                                f"{lr_task_id} in autoagent-exec. Using "
+                                f"{lr_task_id} for signal file lookup."
+                            )
+                    
                     # Poll the signal file
-                    signal_file = os.path.join(log_session_dir, "lr_tasks", f"lr_{subtask_id}_signal.json")
-                    output_log = os.path.join(log_session_dir, "lr_tasks", f"lr_{subtask_id}_output.log")
+                    signal_file = os.path.join(log_session_dir, "lr_tasks", f"lr_{lr_task_id}_signal.json")
+                    output_log = os.path.join(log_session_dir, "lr_tasks", f"lr_{lr_task_id}_output.log")
                     
                     monitor_status = self._poll_signal_file(subtask_id, signal_file)
                     
