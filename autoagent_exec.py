@@ -100,7 +100,11 @@ def main():
     log_dir = args.log_dir
     task_id = args.task_id
     command = args.command
-    command_str = " ".join(command)
+    # Use subprocess.list2cmdline to properly quote arguments that contain
+    # spaces (e.g. "C:/Program Files/..."). A naive " ".join() would lose
+    # the quotes that the shell stripped during argv parsing, causing
+    # paths with spaces to be split incorrectly when shell=True.
+    command_str = subprocess.list2cmdline(command)
 
     # Ensure lr_tasks subdirectory exists
     lr_tasks_dir = os.path.join(log_dir, "lr_tasks")
@@ -110,8 +114,10 @@ def main():
     signal_file = os.path.join(lr_tasks_dir, f"lr_{task_id}_signal.json")
     output_log = os.path.join(lr_tasks_dir, f"lr_{task_id}_output.log")
 
-    # Open output log file
-    log_fh = open(output_log, "w", encoding="utf-8", errors="replace")
+    # Open output log file in binary mode so that the subprocess's raw
+    # bytes (which may be GBK on Chinese Windows) are preserved as-is.
+    # We will decode properly when reading the file back.
+    log_fh = open(output_log, "wb")
 
     # Start the command
     try:
@@ -175,8 +181,7 @@ def main():
 
             # Print the log content so AI can see the error
             try:
-                with open(output_log, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
+                content = _read_log_file(output_log)
                 if content.strip():
                     # Show last 3000 chars
                     tail = content[-3000:] if len(content) > 3000 else content
@@ -364,6 +369,43 @@ def _wait_for_process_unix(pid: int) -> 'int | None':
 
 def _is_monitor_mode():
     return "--monitor" in sys.argv
+
+
+def _read_log_file(path: str) -> str:
+    """Read a log file with smart encoding detection.
+
+    The log file is written in binary mode (raw bytes from the subprocess),
+    so we need to detect the encoding. Strategy:
+      1. Try UTF-8 (strict) — works for most modern tools.
+      2. Fall back to the system's default encoding (e.g. GBK on Chinese Windows).
+      3. Last resort: latin-1 (never fails, 1:1 byte mapping).
+    """
+    with open(path, "rb") as f:
+        raw = f.read()
+
+    # Try UTF-8 first
+    try:
+        return raw.decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        pass
+
+    # Try system default encoding (e.g. 'gbk' on Chinese Windows)
+    sys_enc = sys.getdefaultencoding()
+    # Also try the console encoding on Windows
+    console_enc = None
+    if os.name == "nt":
+        import locale
+        console_enc = locale.getpreferredencoding(False)
+
+    for enc in (sys_enc, console_enc):
+        if enc and enc.lower() not in ("utf-8", "utf8"):
+            try:
+                return raw.decode(enc)
+            except (UnicodeDecodeError, ValueError, LookupError):
+                pass
+
+    # Last resort: latin-1 never fails
+    return raw.decode("latin-1")
 
 
 if __name__ == "__main__":

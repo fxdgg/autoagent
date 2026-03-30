@@ -31,6 +31,34 @@ from truncation_limits import limits
 logger = logging.getLogger(__name__)
 
 
+def _read_log_file_smart(path: str) -> str:
+    """Read a log file with smart encoding detection.
+
+    The log file may be written in binary mode (raw bytes from the subprocess),
+    so we try multiple encodings:
+      1. UTF-8 (strict)
+      2. System console encoding (e.g. GBK on Chinese Windows)
+      3. latin-1 (never fails)
+    """
+    with open(path, "rb") as f:
+        raw = f.read()
+    # Try UTF-8 first
+    try:
+        return raw.decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        pass
+    # Try system console encoding
+    import locale
+    console_enc = locale.getpreferredencoding(False)
+    if console_enc and console_enc.lower() not in ("utf-8", "utf8"):
+        try:
+            return raw.decode(console_enc)
+        except (UnicodeDecodeError, ValueError, LookupError):
+            pass
+    # Last resort
+    return raw.decode("latin-1")
+
+
 class ConfigError(Exception):
     """Configuration file error (YAML syntax, missing fields, etc.)"""
     pass
@@ -740,8 +768,7 @@ class NestedTaskExecutor:
                             signal_data = json.load(f)
                         output_log = signal_data.get('output_log', '')
                         if output_log and os.path.exists(output_log):
-                            with open(output_log, 'r', encoding='utf-8', errors='replace') as f:
-                                content = f.read()
+                            content = _read_log_file_smart(output_log)
                             _lf = limits.get('log_file')
                             log_contents[st_id] = content[-_lf:] if len(content) > _lf else content
                 except Exception:
@@ -1650,8 +1677,7 @@ class SubtaskExecutor:
             log_content = ""
             if os.path.exists(output_log):
                 try:
-                    with open(output_log, 'r', encoding='utf-8', errors='replace') as f:
-                        content = f.read()
+                    content = _read_log_file_smart(output_log)
                     _lf = limits.get('log_file')
                     log_content = content[-_lf:] if len(content) > _lf else content
                 except Exception:

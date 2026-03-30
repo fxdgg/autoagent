@@ -74,16 +74,20 @@ def build_long_running_prompt(
 
     parts.append(f"""\n**Long-Running Task Instructions**
 
-Use the `autoagent-exec` launcher to run your command:
+You MUST use the `autoagent-exec` launcher to run your command:
 
 python "{exec_display}" --log-dir "{log_dir_display}" --task-id {subtask_id} -- <your command here>
 
-- If the command fails within 10s, the error is shown immediately \u2014 fix and retry.
+- If the command fails within 10s, the error is shown immediately — fix and retry with autoagent-exec.
 - If the command is still running after 10s, it will be detached and you will see "TASK SUBMITTED".
-- When you see "TASK SUBMITTED", output: \u23f3 LONG_RUNNING_IN_PROGRESS
+- When you see "TASK SUBMITTED", output: ⏳ LONG_RUNNING_IN_PROGRESS
   AutoAgent will call you back with the results.
-- If the task cannot be done, output: \u274c not completed: <reason>""")
+- If the task cannot be done, output: ❌ not completed: <reason>
 
+**⚠️ CRITICAL: You MUST always use autoagent-exec to run the command. NEVER run it directly in Bash.
+Running commands directly will cause the session to hang and be killed.
+Even if autoagent-exec reports errors, debug and fix the command arguments, then retry with autoagent-exec.
+Do NOT attempt to bypass autoagent-exec under any circumstances.**""")
     return "\n\n".join(parts)
 
 

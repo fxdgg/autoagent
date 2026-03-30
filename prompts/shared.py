@@ -127,10 +127,14 @@ def build_autoagent_exec_note(task_id: str, exec_path: str, log_session_dir: str
     return (
         "**Note on long-running commands:** If a Bash command may take more "
         "than a few minutes (e.g. compilation, benchmarking, profiling), do "
-        "NOT run it directly. Instead use:\n"
+        "NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:\n"
         f'  python "{exec_path}"{log_dir_part} --task-id {task_id} -- <your command>\n'
         "The launcher will auto-detach after 10s and print \"TASK SUBMITTED\". "
-        "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS"
+        "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS\n\n"
+        "**\u26a0\ufe0f IMPORTANT: You MUST always use autoagent-exec for long-running "
+        "commands. Running them directly in Bash will cause the session to hang "
+        "and be killed. Even if autoagent-exec fails, fix the command arguments "
+        "and retry with autoagent-exec — NEVER fall back to running directly in Bash.**"
     )
 
 
@@ -156,5 +160,8 @@ def build_timeout_guidance(
         f"\"TASK SUBMITTED\".\n"
         f"- When you see \"TASK SUBMITTED\", output: \u23f3 LONG_RUNNING_IN_PROGRESS\n"
         f"  AutoAgent will call you back with the results.\n\n"
-        f"**Do NOT run long-running commands directly via Bash.** Use autoagent-exec instead."
+        f"**\u26a0\ufe0f CRITICAL: You MUST always use autoagent-exec for long-running "
+        f"commands. Running them directly in Bash will cause the session to hang "
+        f"and be killed. Even if autoagent-exec fails, fix the command arguments "
+        f"and retry with autoagent-exec — NEVER fall back to running directly in Bash.**"
     )
