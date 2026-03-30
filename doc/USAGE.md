@@ -241,7 +241,7 @@ tasks:
 |------|------|------|------|
 | `id` | int/string | 是 | 任务 ID（唯一标识） |
 | `name` | string | 是 | 任务名称 |
-| `type` | string | 是 | 任务类型：`simple`、`nested`、`looping`、`long_running` |
+| `type` | string | 是 | 任务类型：`simple`、`nested`、`looping`、`long_running`、`simple_once`、`long_running_once` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
 
 #### 简单任务 (type: simple)

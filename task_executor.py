@@ -871,7 +871,9 @@ class NestedTaskExecutor:
         """
         Reset subtask states starting from retry_from.
 
-        All subtasks from retry_from onwards are reset to 'pending'.
+        All subtasks from retry_from onwards are reset to 'pending',
+        except *_once subtasks (simple_once / long_running_once) which
+        are never reset once completed.
         Falls back to first subtask if retry_from ID is not found.
         """
         retry_from = str(retry_from)
@@ -888,6 +890,12 @@ class NestedTaskExecutor:
             if st_id == retry_from:
                 should_reset = True
             if should_reset:
+                # Never reset *_once subtasks that have already completed
+                if subtask.get('type', '').endswith('_once'):
+                    st_state = state_manager.get_task_state(st_id)
+                    if st_state.get('status') == 'completed':
+                        logger.info(f"Skipping reset of once-subtask {st_id} (already completed)")
+                        continue
                 state_manager.mark_task_status(st_id, "pending", attempts=0)
                 logger.info(f"Reset subtask {st_id} to pending")
 
@@ -988,8 +996,14 @@ class LoopingTaskExecutor:
             print(f"\n   🔁 Loop iteration {loop_idx}/{repeat_count} of task {task_id}")
 
             # Reset all subtask states at the start of each iteration
+            # (skip *_once subtasks that have already completed)
             for subtask in subtasks:
                 st_id = str(subtask['id'])
+                if subtask.get('type', '').endswith('_once'):
+                    st_state = state_manager.get_task_state(st_id)
+                    if st_state.get('status') == 'completed':
+                        logger.info(f"Skipping reset of once-subtask {st_id} in loop {loop_idx} (already completed)")
+                        continue
                 state_manager.mark_task_status(st_id, "pending", attempts=0)
 
             state_manager.mark_task_status(
@@ -1215,6 +1229,9 @@ class LoopingTaskExecutor:
 
     def _reset_subtasks_from(self, retry_from: str, subtasks: list, state_manager):
         """Reset subtask states starting from retry_from onwards.
+
+        *_once subtasks (simple_once / long_running_once) are never reset
+        once completed.
         Falls back to first subtask if retry_from ID is not found."""
         retry_from = str(retry_from)
 
@@ -1230,6 +1247,12 @@ class LoopingTaskExecutor:
             if st_id == retry_from:
                 should_reset = True
             if should_reset:
+                # Never reset *_once subtasks that have already completed
+                if subtask.get('type', '').endswith('_once'):
+                    st_state = state_manager.get_task_state(st_id)
+                    if st_state.get('status') == 'completed':
+                        logger.info(f"Skipping reset of once-subtask {st_id} (already completed)")
+                        continue
                 state_manager.mark_task_status(st_id, "pending", attempts=0)
                 logger.info(f"Reset subtask {st_id} to pending")
 
@@ -1283,13 +1306,13 @@ class SubtaskExecutor:
             if target_model:
                 client.provider.set_model(target_model)
         
-        if subtask_type == 'simple':
+        if subtask_type in ('simple', 'simple_once'):
             return self._execute_simple_subtask(
                 subtask, client, state_manager,
                 conv_logger=conv_logger, parent_task_id=parent_task_id,
                 parent_context=parent_context,
             )
-        elif subtask_type == 'long_running':
+        elif subtask_type in ('long_running', 'long_running_once'):
             return self._execute_long_running_subtask(
                 subtask, client, state_manager,
                 conv_logger=conv_logger, parent_task_id=parent_task_id,

@@ -41,26 +41,28 @@ commands, and analyze code and outputs.
 
 {last_feedback_section}## Task Types
 
-There are 4 task types:
+There are 6 task types:
 
 1. **simple** \u2014 A single-step task. Can be top-level or subtask.
 2. **nested** \u2014 A multi-step task with ordered subtasks. Top-level only.
 3. **looping** \u2014 An iterative task repeating subtasks for N cycles. Top-level only.
-4. **long_running** \u2014 A background task via nohup. Subtask only.
+4. **long_running** \u2014 A background task via autoagent-exec. Subtask only.
+5. **simple_once** \u2014 Same as simple, but never re-executed once completed. Subtask only.
+6. **long_running_once** \u2014 Same as long_running, but never re-executed once completed. Subtask only.
 
 **Hierarchy rules:**
 - Top-level: simple, nested, or looping.
-- Subtasks (inside nested/looping): simple or long_running only.
+- Subtasks (inside nested/looping): simple, long_running, simple_once, or long_running_once.
 
 ## Task Schema
 
 Common fields (all types): id, name, type, completion_criteria
 
 Type-specific fields:
-- simple: initial_hint (optional)
+- simple / simple_once: initial_hint (optional)
 - nested: subtasks (list), max_attempts (optional, default 20)
 - looping: subtasks (list), repeat_count (required), max_attempts_per_loop (optional, default 20)
-- long_running: (no extra required fields)
+- long_running / long_running_once: command (optional), initial_hint (optional)
 
 Optional field (all types):
 - model: "default" | "simple" (optional, defaults to "default")

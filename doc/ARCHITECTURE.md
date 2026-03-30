@@ -2067,7 +2067,7 @@ graph TD
 
 **审查标准**（由 reviewer AI 判断）：
 1. 任务 ID 是否正确且一致（包括子任务点号表示法）
-2. 任务类型是否合适（simple vs nested vs looping，simple vs long_running）
+2. 任务类型是否合适（simple vs nested vs looping，simple vs long_running vs simple_once vs long_running_once）
 3. 完成标准是否清晰、具体、可衡量
 4. 分解是否完整覆盖了原始想法
 5. 是否有遗漏或冗余的任务
@@ -2200,7 +2200,7 @@ python orchestrator.py --ideas ideas.md --log-dir logs
 本架构设计实现了：
 
 - ✅ 统一的任务执行模型（不再区分简单任务和循环任务）
-- ✅ 精简的任务类型体系（simple / nested / looping / long_running）
+- ✅ 精简的任务类型体系（simple / nested / looping / long_running / simple_once / long_running_once）
 - ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI / OpenCode / Test）
 - ✅ AI完全自主判断完成条件（三层检测策略）
 - ✅ 支持嵌套任务

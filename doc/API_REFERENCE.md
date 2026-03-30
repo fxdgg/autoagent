@@ -1121,7 +1121,7 @@ class SubtaskState(TypedDict, total=False):
 class TaskConfig(TypedDict, total=False):
     id: Union[int, str]                               # 必填，唯一标识
     name: str                                          # 必填，任务名称
-    type: Literal["simple", "nested", "looping", "long_running"]  # 必填，任务类型
+    type: Literal["simple", "nested", "looping", "long_running"]  # 必填，任务类型（顶层）
     completion_criteria: str                            # 必填，完成标准
     initial_hint: str                                  # simple 可选
     max_attempts: int                                  # 可选，默认 20
@@ -1136,7 +1136,7 @@ class TaskConfig(TypedDict, total=False):
 class SubtaskConfig(TypedDict, total=False):
     id: Union[int, str]                                # 必填
     name: str                                          # 必填
-    type: Literal["simple", "long_running"]            # 必填
+    type: Literal["simple", "long_running", "simple_once", "long_running_once"]  # 必填
     completion_criteria: str                            # 必填
     initial_hint: str                                  # simple 可选
     max_attempts: int                                  # 可选，默认 5

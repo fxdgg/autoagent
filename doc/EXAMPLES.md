@@ -367,7 +367,7 @@ tasks:
 
 - ✅ 任务描述清晰明确
 - ✅ 完成标准可量化验证
-- ✅ 合理使用任务类型（simple / nested / looping / long_running）
+- ✅ 合理使用任务类型（simple / nested / looping / long_running / simple_once / long_running_once）
 - ✅ 子任务粒度适中
 - ✅ 充分利用 AI 的决策能力
 

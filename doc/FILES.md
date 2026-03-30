@@ -161,7 +161,7 @@ autoagent/
 
 #### todos.example.yaml
 - **作用**：任务配置示例文件
-- **内容**：包含 simple、nested、looping、long_running 四种任务类型的配置示例
+- **内容**：包含 simple、nested、looping、long_running、simple_once、long_running_once 六种任务类型的配置示例
 - **用途**：用户可以复制此文件作为 `todos.yaml` 的模板
 
 ### 程序文件
@@ -330,7 +330,7 @@ tasks:
 |------|------|------|------|
 | `id` | int/string | 是 | 任务 ID（唯一标识） |
 | `name` | string | 是 | 任务名称 |
-| `type` | string | 是 | 任务类型：`simple`、`nested`、`looping`、`long_running` |
+| `type` | string | 是 | 任务类型：`simple`、`nested`、`looping`、`long_running`、`simple_once`、`long_running_once` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
 | `model` | string | 否 | 模型选择：`"default"` 或 `"simple"`（默认 `"default"`） |
 

@@ -25,11 +25,12 @@ Key implications for task design:
   read logs, analyze outputs, install packages, use git, etc.
 - The AI agent has a **context window limit** — avoid tasks that require
   reading extremely large files or outputs in a single step.
-- Each **simple** subtask runs in a single AI session (one prompt → one
-  response cycle, possibly with tool calls within that session).
-- The AI agent does NOT persist memory between separate subtask sessions
-  (but subtasks within the same parent task share context when they run
-  sequentially without resetting).
+- Subtasks within the same parent task share a single AI session — the AI
+  retains context from earlier subtasks and can reference their outputs.
+- Each top-level `simple` task runs in its own independent AI session.
+- The AI session is NOT reset between subtasks, between retry rounds, or
+  between loop iterations. The AI always retains the full conversation
+  history within a parent task.
 
 ---
 
@@ -59,6 +60,11 @@ changes, running tests, file analysis, data processing, simple builds, etc.
   the AI will use `autoagent-exec` automatically if needed. Use `long_running`
   only when you KNOW the command will take a long time and want to specify
   the command upfront.
+- **Auto-upgrade behavior:** If the AI uses `autoagent-exec` within a simple
+  task and outputs `LONG_RUNNING_IN_PROGRESS`, AutoAgent automatically
+  detects this and switches to the long-running poll + callback flow
+  (waiting for the background process to finish, then asking the AI to
+  analyze results). You do NOT need to anticipate this in your task design.
 
 ### 2.2 `nested`
 
@@ -139,6 +145,36 @@ large-scale data processing, heavy profiling (e.g., `ncu`), long compilations.
 - The AI will see the full output log after the command finishes, so
   completion_criteria can reference specific output patterns.
 
+### 2.5 `simple_once` and `long_running_once`
+
+**What happens at runtime:**
+These behave identically to `simple` and `long_running` respectively, with
+one key difference: **once completed, they are never re-executed**, even if:
+- The parent nested task's evaluation triggers a retry from an earlier subtask.
+- A new loop iteration starts in a looping task.
+- A sibling subtask fails and the failure analyzer sets `retry_from` to an
+  earlier subtask.
+
+When a reset or new iteration would normally set a subtask back to "pending",
+`*_once` subtasks that are already "completed" are skipped.
+
+**Scope:** Subtask only (inside nested or looping).
+
+**When to use:**
+- One-time setup tasks: environment preparation, dependency installation,
+  data download, initial code scaffolding.
+- Expensive operations whose results remain valid across retries: large data
+  preprocessing, one-time compilation of a dependency.
+- Any subtask where re-execution would be wasteful or harmful (e.g., a
+  database migration that should only run once).
+
+**Design tips:**
+- Use sparingly. Most subtasks SHOULD be re-executable so the AI can iterate.
+- Only use `*_once` when the subtask's output genuinely does not need to
+  change across retries or loop iterations.
+- If a `*_once` subtask's output might become stale after other subtasks
+  change things, do NOT use `*_once` — use the regular variant instead.
+
 ---
 
 ## 3. Task Schema Reference
@@ -149,13 +185,13 @@ large-scale data processing, heavy profiling (e.g., `ncu`), long compilations.
 |----------------------|--------|----------|------------------------------------------------|
 | `id`                 | int/float | Yes   | Unique ID. Integer for top-level, dot notation for subtasks (e.g., `1.1`) |
 | `name`               | string | Yes      | Concise, descriptive task name                 |
-| `type`               | string | Yes      | `simple`, `nested`, `looping`, or `long_running` |
+| `type`               | string | Yes      | `simple`, `nested`, `looping`, `long_running`, `simple_once`, or `long_running_once` |
 | `completion_criteria` | string | Yes     | Clear, specific, measurable success criteria   |
 | `model`              | string | No       | `"default"` or `"simple"`. Default: `"default"` |
 
 ### 3.2 Type-Specific Fields
 
-**simple:**
+**simple / simple_once:**
 
 | Field          | Type   | Required | Description                              |
 |----------------|--------|----------|------------------------------------------|
@@ -165,7 +201,7 @@ large-scale data processing, heavy profiling (e.g., `ncu`), long compilations.
 
 | Field          | Type   | Required | Description                              |
 |----------------|--------|----------|------------------------------------------|
-| `subtasks`     | list   | Yes      | Ordered list of subtasks (simple or long_running) |
+| `subtasks`     | list   | Yes      | Ordered list of subtasks (simple, long_running, simple_once, or long_running_once) |
 | `max_attempts` | int    | No       | Max retry rounds (default: 20)           |
 
 **looping:**
@@ -176,11 +212,12 @@ large-scale data processing, heavy profiling (e.g., `ncu`), long compilations.
 | `repeat_count`          | int  | Yes      | Number of loop iterations (≥ 1)      |
 | `max_attempts_per_loop` | int  | No       | Max retries per iteration (default: 20) |
 
-**long_running:**
+**long_running / long_running_once:**
 
-| Field     | Type   | Required | Description                              |
-|-----------|--------|----------|------------------------------------------|
-| `command` | string | No       | Command to run (AI can decide if omitted) |
+| Field          | Type   | Required | Description                              |
+|----------------|--------|----------|------------------------------------------|
+| `command`      | string | No       | Command to run (AI can decide if omitted) |
+| `initial_hint` | string | No       | Context/guidance for the AI on first attempt |
 
 ### 3.3 Hierarchy Rules
 
@@ -188,14 +225,18 @@ large-scale data processing, heavy profiling (e.g., `ncu`), long compilations.
 Top-level tasks:  simple | nested | looping
                      │        │         │
                      │    subtasks:   subtasks:
-                     │   simple or   simple or
-                     │  long_running long_running
+                     │   simple,     simple,
+                     │  long_running, long_running,
+                     │  simple_once, simple_once,
+                     │  long_running  long_running
+                     │    _once        _once
                      │
               (no subtasks)
 ```
 
 - `nested` and `looping` can ONLY be top-level.
-- `long_running` can ONLY be a subtask.
+- `long_running`, `long_running_once` can ONLY be subtasks.
+- `simple_once` can ONLY be a subtask.
 - `simple` can be either top-level or subtask.
 
 ### 3.4 The `model` Field
@@ -535,22 +576,25 @@ are logically independent and may need separate retry strategies.
 ## 10. Context Sharing Between Subtasks
 
 Within a nested or looping task, subtasks execute sequentially in the same
-AI session context (the context is NOT reset between subtasks of the same
-parent). This means:
+AI session. The session is **never reset** — not between subtasks, not on
+retry, and not between loop iterations. This means:
 
 - A later subtask can reference files created by an earlier subtask.
 - The AI remembers what it did in previous subtasks (within the same parent).
 - You can design subtasks that build on each other's outputs.
+- When a **retry** happens (e.g., retry_from 1.2), the AI session continues
+  with the full conversation history intact. The retried subtask's prompt
+  includes the `suggested_fix` from the failure analysis and previous
+  attempt summaries, but the AI also retains memory of earlier interactions.
+- In **looping** tasks, the AI session persists across all iterations. The
+  AI in iteration 3 can "remember" what it did in iteration 1. This is
+  useful for iterative optimization where the AI should learn from previous
+  rounds.
 
-However, when a **retry** happens (e.g., retry_from 1.2), the AI session
-is reset. The retried subtask gets:
-- Its own prompt with completion_criteria
-- The `suggested_fix` from the failure analysis
-- Previous attempt history (summaries only)
-
-**Implication:** Don't rely on the AI "remembering" details from a previous
-failed attempt. Important information should be in files, not just in the
-AI's memory.
+**Implication:** While the AI retains session context, it has a finite
+context window. For very long task sequences, important information should
+be persisted to files rather than relying solely on the AI's memory of
+earlier conversation turns.
 
 ---
 
@@ -560,7 +604,8 @@ Before finalizing your task decomposition, verify:
 
 - [ ] Every task has `id`, `name`, `type`, and `completion_criteria`
 - [ ] Top-level tasks use `simple`, `nested`, or `looping` (never `long_running`)
-- [ ] Subtasks use `simple` or `long_running` (never `nested` or `looping`)
+- [ ] Subtasks use `simple`, `long_running`, `simple_once`, or `long_running_once` (never `nested` or `looping`)
+- [ ] `*_once` subtasks are used only for genuinely one-time operations
 - [ ] `looping` tasks have `repeat_count` (positive integer)
 - [ ] `nested`/`looping` tasks have non-empty `subtasks` list
 - [ ] All `completion_criteria` are specific, measurable, and verifiable

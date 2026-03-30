@@ -269,7 +269,7 @@ class TodoOrchestrator:
         
         # Validate task type
         if is_subtask:
-            valid_types = ['simple', 'long_running']
+            valid_types = ['simple', 'long_running', 'simple_once', 'long_running_once']
         else:
             valid_types = ['simple', 'nested', 'looping']
         

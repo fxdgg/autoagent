@@ -32,7 +32,7 @@ commands, and analyze code and outputs. Design your tasks and completion criteri
 
 ## Task Types
 
-There are 4 task types. Choose the most appropriate one for each task:
+There are 6 task types. Choose the most appropriate one for each task:
 
 1. **simple** \u2014 A single-step task the AI agent completes autonomously (code changes, running
    commands, analysis, etc.). Can be a top-level task or a subtask.
@@ -43,10 +43,15 @@ There are 4 task types. Choose the most appropriate one for each task:
    Top-level only.
 4. **long_running** \u2014 A task that runs in the background via nohup to avoid timeouts (e.g.,
    model training, large data processing). Subtask only (inside nested or looping).
+5. **simple_once** \u2014 Same as simple, but executes only once within a nested/looping task.
+   Once completed, it is never re-executed even if the parent task retries from an earlier
+   subtask or a new loop iteration starts. Subtask only.
+6. **long_running_once** \u2014 Same as long_running, but executes only once. Once completed,
+   it is never re-executed. Subtask only.
 
 **Hierarchy rules:**
 - Top-level tasks can be: simple, nested, or looping.
-- Subtasks (inside nested/looping) can only be: simple or long_running.
+- Subtasks (inside nested/looping) can be: simple, long_running, simple_once, or long_running_once.
 
 **When to use which:**
 - If the idea can be done in one step \u2192 use a single **simple** task.
@@ -55,20 +60,23 @@ There are 4 task types. Choose the most appropriate one for each task:
 - If the idea involves repeating an optimize-test cycle N times \u2192 use **looping** with
   repeat_count.
 - If a subtask runs a long-running process (training, heavy computation) \u2192 use **long_running**.
+- If a subtask should only run once and not be repeated on retries or new loop iterations
+  (e.g., one-time setup, data download, environment preparation) \u2192 use **simple_once** or
+  **long_running_once**.
 
 ## Task Schema
 
 Common fields (all types):
 - id: integer for top-level tasks (starting from {next_id}), dot notation for subtasks (e.g., {next_id}.1)
 - name: string \u2014 concise task name
-- type: "simple" | "nested" | "looping" | "long_running"
+- type: "simple" | "nested" | "looping" | "long_running" | "simple_once" | "long_running_once"
 - completion_criteria: string \u2014 clear, specific, and measurable
 
 Type-specific fields:
-- simple: initial_hint (optional \u2014 helpful context for the AI executor)
+- simple / simple_once: initial_hint (optional \u2014 helpful context for the AI executor)
 - nested: subtasks (list), max_attempts (optional, default 20)
 - looping: subtasks (list), repeat_count (required, positive integer), max_attempts_per_loop (optional, default 20)
-- long_running: (no extra required fields)
+- long_running / long_running_once: command (optional), initial_hint (optional)
 
 Optional field (all types):
 - model: "default" | "simple" (optional, defaults to "default")
@@ -88,6 +96,8 @@ Optional field (all types):
 3. Do NOT use "long_running" or "simple" as a top-level task type when the idea clearly
    requires multiple coordinated steps \u2014 use "nested" or "looping" instead.
 4. Do NOT use "nested" or "looping" as subtask types.
+5. Use "simple_once" or "long_running_once" ONLY for subtasks that genuinely need to run
+   exactly once (e.g., one-time setup, data download). Do NOT overuse them.
 
 ## Output Format
 
