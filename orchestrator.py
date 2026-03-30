@@ -1151,22 +1151,26 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         print(f"✓ Loaded preset: {args.preset}")
         args = _merge_preset_with_args(args, preset)
     
+    # Resolve key file paths to absolute paths early, so all downstream
+    # code (IdeasWatcher, TodoOrchestrator, empty-file creation, etc.)
+    # works correctly regardless of CWD vs workspace differences.
+    args.config = os.path.abspath(args.config)
+    if args.ideas:
+        args.ideas = os.path.abspath(args.ideas)
+    
     # Ensure required files exist (create empty if not present)
     if args.ideas:
-        ideas_path = os.path.abspath(args.ideas)
-        if not os.path.exists(ideas_path):
-            os.makedirs(os.path.dirname(ideas_path) if os.path.dirname(ideas_path) else '.', exist_ok=True)
-            with open(ideas_path, 'w', encoding='utf-8') as f:
+        if not os.path.exists(args.ideas):
+            os.makedirs(os.path.dirname(args.ideas) or '.', exist_ok=True)
+            with open(args.ideas, 'w', encoding='utf-8') as f:
                 f.write('')  # Create empty file
-            print(f"✓ Created empty ideas file: {ideas_path}")
+            print(f"✓ Created empty ideas file: {args.ideas}")
     
-    if args.config:
-        config_path = os.path.abspath(args.config)
-        if not os.path.exists(config_path):
-            os.makedirs(os.path.dirname(config_path) if os.path.dirname(config_path) else '.', exist_ok=True)
-            with open(config_path, 'w', encoding='utf-8') as f:
-                f.write('')  # Create empty file
-            print(f"✓ Created empty config file: {config_path}")
+    if not os.path.exists(args.config):
+        os.makedirs(os.path.dirname(args.config) or '.', exist_ok=True)
+        with open(args.config, 'w', encoding='utf-8') as f:
+            f.write('')  # Create empty file
+        print(f"✓ Created empty config file: {args.config}")
     
     # Resolve log_dir early so we can point orchestrator.log there too.
     # The actual session sub-directory is determined later by the
