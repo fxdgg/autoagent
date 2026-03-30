@@ -131,6 +131,10 @@ class TodoOrchestrator:
             idle_interval: Seconds between idle checks for new ideas (default: 30)
             use_cli: If True, use CLI subprocess instead of CodeBuddy Agent SDK
                      (only valid when provider is codebuddy)
+            backoff_max_wait: Max wait time (seconds) for exponential backoff
+                     when AI CLI calls fail repeatedly (default: 300)
+            model_roles: Model role dict ({"plan": ..., "default": ..., "simple": ...}),
+                     parsed by parse_model_spec(). None uses provider's default model.
             codebuddy_path: (Legacy) Path to CodeBuddy executable
             model: (Legacy) AI model to use
         """

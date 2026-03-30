@@ -68,15 +68,6 @@ def reload_todos(self) -> None
 
 加载任务配置。`_load_todos` 从 YAML 文件加载并验证；`reload_todos` 在新任务追加后重新加载。`allow_empty=True` 时允许空配置（用于 idle 模式）。
 
-#### load_state / save_state
-
-```python
-def load_state(self) -> dict
-def save_state(self) -> None
-```
-
-加载/保存任务状态文件，支持断点续传。
-
 #### run
 
 ```python
@@ -421,6 +412,7 @@ def ask(
     expect_json: bool = False,
     timeout: int = None,
     system_prompt: str = None,
+    **kwargs,
 ) -> Union[str, dict]
 ```
 
@@ -501,7 +493,7 @@ AI CLI 工具的 `--output-format stream-json` 模式输出逐行 JSON 对象。
 ```python
 class SimpleTaskExecutor:
     def __init__(self, session_dir: str = None)
-    def execute(self, task: dict, client: CodeBuddyClient, ...) -> bool
+    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, **kwargs) -> bool
 ```
 
 **执行逻辑**：
@@ -1044,6 +1036,14 @@ def mark_task_status(self, task_id: str, status: str, **kwargs)
 
 更新任务状态和额外字段。自动触发 `save_state()`。
 
+#### update_task_field
+
+```python
+def update_task_field(self, task_id: str, field: str, value)
+```
+
+更新任务状态中的单个字段。自动触发 `save_state()`。
+
 #### add_task_history
 
 ```python
@@ -1093,6 +1093,22 @@ def get_summary(self) -> dict
     "failed": 1,
 }
 ```
+
+#### get_in_progress_tasks
+
+```python
+def get_in_progress_tasks(self) -> list
+```
+
+获取当前状态为 `in_progress` 的所有任务 ID 列表。
+
+#### record_interrupt
+
+```python
+def record_interrupt(self, task_id: str, attempt: int = 0)
+```
+
+记录一次中断事件（如 Ctrl+C）到任务的执行历史中。自动触发 `save_state()`。
 
 ---
 

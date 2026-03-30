@@ -18,6 +18,7 @@ autoagent/
 ├── .gitignore                   # Git 忽略规则
 ├── config.yaml                  # 全局配置（bash_timeout 等）
 ├── todos.example.yaml           # 任务配置示例
+├── TASK_DESIGN_GUIDE.md         # 任务设计指南（供 AI 参考）
 │
 ├── orchestrator.py              # 主程序、CLI 入口
 ├── ai_providers.py              # AI Provider 抽象层（多 CLI 工具支持）
@@ -177,6 +178,11 @@ autoagent/
 - **内容**：包含 simple、nested、looping、long_running、simple_once、long_running_once 六种任务类型的配置示例
 - **用途**：用户可以复制此文件作为 `todos.yaml` 的模板
 
+#### TASK_DESIGN_GUIDE.md
+- **作用**：任务设计指南
+- **内容**：详细的任务设计最佳实践和规范说明
+- **用途**：供 AI 在 Ideas 拆解为任务时参考，通过 `prompts/shared.py` 的 `load_task_design_guide()` 函数加载
+
 ### 程序文件
 
 #### orchestrator.py
@@ -252,8 +258,13 @@ autoagent/
   - `load_system_prompt_prefix()`: 从 config.yaml 加载并缓存 `system_prompt_prefix`
   - `get_system_prompt_prefix(task)`: 获取有效的系统提示词前缀（任务级覆盖全局）
   - `apply_system_prompt_prefix(parts, task)`: 将前缀插入到 prompt 部件列表的开头
+  - `prepend_system_prompt_prefix(prompt, task)`: 将前缀拼接到 prompt 字符串的开头
   - `load_task_design_guide()`: 加载并缓存 TASK_DESIGN_GUIDE.md 内容
   - `build_timeout_guidance(exec_script_path, timeout_feedback)`: 构建超时警告提示
+  - `build_sibling_context(task, parent_context)`: 构建兄弟任务上下文信息
+  - `build_history_section(history, extract_summary_fn)`: 构建历史尝试记录
+  - `build_suggested_fix_section(parent_context, fallback_msg)`: 构建修复建议
+  - `build_autoagent_exec_note(exec_script_path)`: 构建 autoagent-exec 使用说明
 
 #### prompts/simple_task.py
 - **作用**：简单任务执行 prompt 构造器
@@ -353,6 +364,7 @@ tasks:
 | `type` | string | 是 | 顶层任务类型：`simple`、`nested`、`looping`；子任务类型：`simple`、`long_running`、`simple_once`、`long_running_once` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
 | `model` | string | 否 | 模型选择：`"default"` 或 `"simple"`（默认 `"default"`） |
+| `system_prompt_prefix` | string | 否 | 任务级系统提示词前缀，覆盖 config.yaml 中的全局设置 |
 
 #### 简单任务 (type: simple)
 

@@ -143,6 +143,7 @@ python orchestrator.py --status
 | `--workspace` | `-w` | 工作目录（默认当前目录） |
 | `--ideas` | | ideas 文件路径，启用自动拆解 |
 | `--ideas-only` | | 仅拆解 ideas，不运行任务（支持人工审核） |
+| `--human-review` | | 启用 ideas 处理的人工审核 |
 | `--no-idle` | | 禁用 idle 模式 |
 | `--idle-interval` | | idle 模式检查间隔秒数（默认 30） |
 | `--preset` | | Preset 配置名称（默认 `default`），从 config.yaml 加载预设参数 |
@@ -150,6 +151,8 @@ python orchestrator.py --status
 | `--log-dir` | | 日志目录（默认 `.autoagent`） |
 | `--status` | | 显示当前任务状态 |
 | `--reset` | | 重置所有任务状态 |
+| `--validate` | | 验证配置文件并退出 |
+| `--no-skip` | | 不跳过已完成的任务 |
 | `--verbose` | `-v` | 启用详细日志 |
 | `--list-providers` | | 列出所有可用 AI Provider |
 

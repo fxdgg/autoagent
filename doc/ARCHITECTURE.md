@@ -122,16 +122,16 @@ orchestrator.py
 **核心方法**：
 ```python
 class TodoOrchestrator:
-    def __init__(self, todos_file: str = "todos.yaml", log_dir: str = None)
-    def load_todos(self) -> list
-    def load_state(self) -> dict
-    def save_state(self, state: dict)
-    def run(self)
-    def execute_task(self, task: dict)
-    def execute_simple_task(self, task: dict)
-    def execute_nested_task(self, task: dict)
-    def execute_subtask(self, parent_task_id: str, subtask: dict)
-    def call_codebuddy(self, prompt: str) -> str
+    def __init__(self, todos_file, provider, workspace, timeout, log_dir, ...)
+    def _load_todos(self, allow_empty: bool = False) -> list
+    def reload_todos(self) -> None
+    def validate_config(self) -> bool
+    def run(self, task_id=None, skip_completed=True) -> dict
+    def execute_task(self, task: dict) -> bool
+    def get_status(self) -> dict
+    def reset(self) -> None
+    def check_and_process_ideas(self, human_review=False) -> int
+    def run_with_idle(self, task_id=None, skip_completed=True) -> None
 ```
 
 **设计要点**：
@@ -180,6 +180,7 @@ PROVIDERS = {
     "claude": ClaudeCodeProvider,
     "gemini": GeminiCLIProvider,
     "opencode": OpenCodeProvider,
+    "test": TestProvider,
 }
 
 PROVIDER_ALIASES = {
@@ -1422,13 +1423,13 @@ def execute_task(self, task: dict) -> bool:
         # 1. 验证配置
         self._validate_task(task)
         
-        # 2. 执行任务
+        # 2. 根据任务类型分发到对应的 Executor
         if task['type'] == 'simple':
-            result = self.execute_simple_task(task)
+            return self.simple_executor.execute(task, client, self.state_manager, ...)
         elif task['type'] == 'nested':
-            result = self.execute_nested_task(task)
-        
-        return result
+            return self.nested_executor.execute(task, client, self.state_manager, ...)
+        elif task['type'] == 'looping':
+            return self.looping_executor.execute(task, client, self.state_manager, ...)
     
     except ConfigError as e:
         print(f"❌ 配置错误: {e}")
@@ -1440,11 +1441,6 @@ def execute_task(self, task: dict) -> bool:
     
     except AICallError as e:
         print(f"❌ AI 调用错误: {e}")
-        return False
-    
-    except Exception as e:
-        print(f"❌ 未知错误: {e}")
-        self._log_error(e)
         return False
 ```
 

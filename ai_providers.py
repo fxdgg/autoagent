@@ -5,6 +5,8 @@ Supported providers:
 - codebuddy: CodeBuddy CLI (default)
 - claude: Claude Code CLI
 - gemini: Gemini Cli
+- opencode: OpenCode CLI
+- test: Test Provider (reads pre-defined responses from a rules file)
 
 Each provider knows how to:
 - Build the correct command-line arguments for its tool
@@ -138,7 +140,7 @@ class CodeBuddyProvider(AIProvider):
     Provider for CodeBuddy CLI.
     
     Command pattern:
-        type prompt.txt | codebuddy --debug --verbose --max-turns 500 --print
+        type prompt.txt | codebuddy --debug --verbose --print
             --output-format stream-json [--resume <session_id>] --model <model> -y -
     """
 
@@ -293,18 +295,18 @@ class OpenCodeProvider(AIProvider):
     AI backends (Claude, GPT, Gemini, etc.) through its own configuration.
 
     Command pattern (new session):
-        opencode run --format json -m <model> "prompt text"
+        type prompt.txt | opencode run --format json [-m <model>]
 
     Command pattern (continue session):
-        opencode run --format json -m <model> -s <session_id> "prompt text"
+        type prompt.txt | opencode run --format json [-m <model>] -s <session_id>
 
     Key differences from other providers:
-    - Prompt is passed as a positional argument, NOT via stdin
     - Session continuation uses -s <session_id>
     - The session ID is extracted from the first JSON event
     - Output format uses line-delimited JSON with types:
       step_start, text, tool_call, tool_result, step_finish
     - The --format json flag is required for machine-readable output
+    - Does not set a default model; uses opencode's own configuration
     """
 
     name = "opencode"
