@@ -1282,31 +1282,61 @@ class AIClientTest:
         # e.g. python -c \"import time; time.sleep(5)\" → python -c "import time; time.sleep(5)"
         cmd = cmd.replace('\\"', '"')
 
-        # Extract exec_path from the prompt
-        # The prompt contains: python "<exec_path>" --log-dir "<log_dir>" --task-id <id> -- <command>
-        exec_path_match = re.search(
-            r'python\s+["\'](.+?autoagent_exec\.py)["\']\s+--log-dir\s+["\'](.+?)["\']',
+        # Extract exec_path and log_dir from the prompt.
+        # New format: the prompt contains a script path like
+        #   "<session_dir>/scripts/autoagent-exec.bat" <cmd>
+        # We read the script to extract the embedded exec_path and log_dir.
+        exec_path = None
+        log_dir = None
+
+        script_match = re.search(
+            r'["\'](.+?/scripts/autoagent-exec\.(?:bat|sh))["\']',
             prompt,
         )
-        if exec_path_match:
-            exec_path = exec_path_match.group(1)
-            log_dir = exec_path_match.group(2)
-        elif self._fallback_exec_path and self._fallback_log_dir:
-            # AI remembered exec_path/log_dir from context (e.g. simple task
-            # where the prompt doesn't include autoagent-exec instructions)
-            exec_path = self._fallback_exec_path
-            log_dir = self._fallback_log_dir
-            logger.info(
-                f"[{self.context_id}] Using fallback exec_path/log_dir "
-                f"for autoagent-exec in non-long_running task"
+        if script_match:
+            script_path = script_match.group(1)
+            try:
+                with open(script_path, "r", encoding="utf-8") as f:
+                    script_content = f.read()
+                # Parse: python "<exec_path>" --log-dir "<log_dir>" --task-id <id> -- ...
+                inner_match = re.search(
+                    r'python[3]?\s+["\'](.+?autoagent_exec\.py)["\']\s+--log-dir\s+["\'](.+?)["\']',
+                    script_content,
+                )
+                if inner_match:
+                    exec_path = inner_match.group(1)
+                    log_dir = inner_match.group(2)
+            except OSError as e:
+                logger.warning(
+                    f"[{self.context_id}] Failed to read autoagent-exec script "
+                    f"{script_path}: {e}"
+                )
+
+        if not exec_path or not log_dir:
+            # Legacy format: python "<exec_path>" --log-dir "<log_dir>" --task-id <id> -- <command>
+            legacy_match = re.search(
+                r'python\s+["\'](.+?autoagent_exec\.py)["\']\s+--log-dir\s+["\'](.+?)["\']',
+                prompt,
             )
-        else:
-            logger.warning(
-                f"[{self.context_id}] Response contains autoagent-exec command "
-                f"but could not extract exec_path/log_dir from prompt "
-                f"and no fallback is configured. Skipping actual execution."
-            )
-            return response
+            if legacy_match:
+                exec_path = legacy_match.group(1)
+                log_dir = legacy_match.group(2)
+
+        if not exec_path or not log_dir:
+            if self._fallback_exec_path and self._fallback_log_dir:
+                exec_path = self._fallback_exec_path
+                log_dir = self._fallback_log_dir
+                logger.info(
+                    f"[{self.context_id}] Using fallback exec_path/log_dir "
+                    f"for autoagent-exec in non-long_running task"
+                )
+            else:
+                logger.warning(
+                    f"[{self.context_id}] Response contains autoagent-exec command "
+                    f"but could not extract exec_path/log_dir from prompt "
+                    f"and no fallback is configured. Skipping actual execution."
+                )
+                return response
 
         print(f"\n🧪 [TestProvider] Detected autoagent-exec command, executing for real:")
         print(f"   exec_path: {exec_path}")

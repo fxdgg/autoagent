@@ -59,6 +59,66 @@ def _read_log_file_smart(path: str) -> str:
     return raw.decode("latin-1")
 
 
+def _write_autoagent_exec_script(
+    session_dir: str,
+    task_id: str,
+) -> str:
+    """Write (or overwrite) the ``autoagent-exec`` convenience script.
+
+    The script is placed in ``<session_dir>/scripts/`` so the AI can invoke
+    it by its absolute path without knowing the full
+    ``python … --log-dir … --task-id …`` incantation.
+
+    On Windows a ``.bat`` file is generated; on other platforms a ``.sh``
+    file is generated.  Both accept arbitrary trailing arguments which are
+    forwarded to ``autoagent_exec.py`` as the command to run.
+
+    The script is regenerated every time a new (sub)task starts so that
+    ``--task-id`` always matches the current task.
+
+    Args:
+        session_dir: Absolute path to the log session directory.
+        task_id: Current task / subtask ID (e.g. ``"1"`` or ``"2.1"``).
+
+    Returns:
+        The absolute path to the generated script.
+    """
+    exec_py = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "autoagent_exec.py"
+    ).replace("\\", "/")
+    log_dir = session_dir.replace("\\", "/")
+
+    scripts_dir = os.path.join(session_dir, "scripts")
+    os.makedirs(scripts_dir, exist_ok=True)
+
+    if os.name == "nt":
+        script_name = "autoagent-exec.bat"
+        # %* forwards all arguments the caller passes after the script name.
+        content = (
+            "@echo off\r\n"
+            f'python "{exec_py}" --log-dir "{log_dir}" --task-id {task_id} -- %*\r\n'
+        )
+    else:
+        script_name = "autoagent-exec.sh"
+        content = (
+            "#!/usr/bin/env bash\n"
+            f'python3 "{exec_py}" --log-dir "{log_dir}" --task-id {task_id} -- "$@"\n'
+        )
+
+    script_path = os.path.join(scripts_dir, script_name)
+    try:
+        with open(script_path, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+        # Make executable on Unix
+        if os.name != "nt":
+            os.chmod(script_path, 0o755)
+        logger.debug(f"Wrote {script_path} (task_id={task_id})")
+    except OSError as e:
+        logger.warning(f"Failed to write {script_path}: {e}")
+
+    return script_path.replace("\\", "/")
+
+
 class ConfigError(Exception):
     """Configuration file error (YAML syntax, missing fields, etc.)"""
     pass
@@ -243,18 +303,22 @@ class SimpleTaskExecutor:
         
         Delegates to ``prompts.simple_task.build_simple_task_prompt``.
         """
-        exec_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "autoagent_exec.py"
-        ).replace("\\", "/")
+        # Resolve session_dir: prefer own, fall back to _subtask_executor's.
         log_session_dir = ""
-        # Prefer own session_dir (set for top-level simple tasks by orchestrator),
-        # fall back to _subtask_executor.session_dir (set when running as a subtask).
         if self.session_dir:
-            log_session_dir = self.session_dir.replace("\\", "/")
+            log_session_dir = self.session_dir
         else:
             subtask_exec = getattr(self, '_subtask_executor', None)
             if subtask_exec and subtask_exec.session_dir:
-                log_session_dir = subtask_exec.session_dir.replace("\\", "/")
+                log_session_dir = subtask_exec.session_dir
+
+        # Generate / update the autoagent-exec convenience script
+        exec_script_path = ""
+        if log_session_dir:
+            exec_script_path = _write_autoagent_exec_script(
+                session_dir=log_session_dir,
+                task_id=str(task['id']),
+            )
 
         return build_simple_task_prompt(
             task=task,
@@ -263,8 +327,7 @@ class SimpleTaskExecutor:
             extract_summary_fn=self._extract_summary,
             parent_context=parent_context,
             timeout_feedback=timeout_feedback,
-            exec_path=exec_path,
-            log_session_dir=log_session_dir,
+            exec_script_path=exec_script_path,
         )
 
     @staticmethod
@@ -1392,11 +1455,6 @@ class SubtaskExecutor:
         subtask_id = str(subtask['id'])
         max_attempts = subtask.get('max_attempts', 5)
         
-        # Resolve the autoagent-exec script path
-        autoagent_exec_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "autoagent_exec.py"
-        )
-        
         # Use the session_dir passed from orchestrator
         if not self.session_dir:
             raise ConfigError(
@@ -1404,9 +1462,15 @@ class SubtaskExecutor:
                 "Cannot execute long-running tasks without a log session directory."
             )
         log_session_dir = self.session_dir
+
+        # Generate / update the autoagent-exec convenience script
+        exec_script_path = _write_autoagent_exec_script(
+            session_dir=log_session_dir,
+            task_id=subtask_id,
+        )
         
         logger.info(f"Executing long-running subtask {subtask_id}: {subtask['name']}")
-        logger.info(f"  autoagent-exec: {autoagent_exec_path}")
+        logger.info(f"  autoagent-exec script: {exec_script_path}")
         logger.info(f"  log session dir: {log_session_dir}")
         
         for attempt in range(1, max_attempts + 1):
@@ -1420,7 +1484,7 @@ class SubtaskExecutor:
             
             # Build prompt for AI
             prompt = self._build_long_running_prompt(
-                subtask, autoagent_exec_path, log_session_dir, attempt, state_manager,
+                subtask, exec_script_path, attempt, state_manager,
                 parent_context=parent_context,
             )
             
@@ -1552,7 +1616,7 @@ class SubtaskExecutor:
         )
 
     def _build_long_running_prompt(
-        self, subtask: dict, exec_path: str, log_session_dir: str,
+        self, subtask: dict, exec_script_path: str,
         attempt: int, state_manager, parent_context: dict = None,
     ) -> str:
         """
@@ -1565,8 +1629,7 @@ class SubtaskExecutor:
 
         return _build_lr_prompt(
             subtask=subtask,
-            exec_path=exec_path,
-            log_session_dir=log_session_dir,
+            exec_script_path=exec_script_path,
             attempt=attempt,
             state=state,
             extract_summary_fn=SimpleTaskExecutor._extract_summary,

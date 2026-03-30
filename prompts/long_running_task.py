@@ -16,8 +16,7 @@ from prompts.shared import (
 
 def build_long_running_prompt(
     subtask: dict,
-    exec_path: str,
-    log_session_dir: str,
+    exec_script_path: str,
     attempt: int,
     state: dict,
     extract_summary_fn,
@@ -27,15 +26,13 @@ def build_long_running_prompt(
 
     Args:
         subtask: Subtask configuration dict.
-        exec_path: Absolute path to ``autoagent_exec.py`` (raw, will be
-            normalised internally).
-        log_session_dir: Log session directory path (raw).
+        exec_script_path: Absolute path to the generated ``autoagent-exec``
+            convenience script (forward-slash normalised).
         attempt: Current attempt number (1-based).
         state: Current subtask state from state_manager.
         extract_summary_fn: Callable(ai_response: str) -> str.
         parent_context: Optional context from the parent task.
     """
-    subtask_id = str(subtask['id'])
     parts = [
         ROLE_CODING_AGENT,
         f"Task: {subtask['name']}",
@@ -68,15 +65,11 @@ def build_long_running_prompt(
         )
         parts.append(build_suggested_fix_section(parent_context, fallback_msg=fallback))
 
-    # Escape backslashes in paths for display in prompt
-    exec_display = exec_path.replace("\\", "/")
-    log_dir_display = log_session_dir.replace("\\", "/")
-
     parts.append(f"""\n**Long-Running Task Instructions**
 
 You MUST use the `autoagent-exec` launcher to run your command:
 
-python "{exec_display}" --log-dir "{log_dir_display}" --task-id {subtask_id} -- <your command here>
+"{exec_script_path}" <your command here>
 
 - If the command fails within 10s, the error is shown immediately — fix and retry with autoagent-exec.
 - If the command is still running after 10s, it will be detached and you will see "TASK SUBMITTED".

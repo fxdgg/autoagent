@@ -4,9 +4,6 @@ Prompt builder for simple task execution.
 Corresponds to ``SimpleTaskExecutor._build_prompt()`` in task_executor.py.
 """
 
-import os
-from typing import Optional
-
 from prompts.shared import (
     ROLE_CODING_AGENT,
     STATUS_MARKER_INSTRUCTION,
@@ -25,8 +22,7 @@ def build_simple_task_prompt(
     extract_summary_fn,
     parent_context: dict = None,
     timeout_feedback: str = None,
-    exec_path: str = None,
-    log_session_dir: str = "",
+    exec_script_path: str = "",
 ) -> str:
     """Build the prompt sent to AI for a simple task execution.
 
@@ -43,10 +39,8 @@ def build_simple_task_prompt(
             - main_task_criteria: completion criteria of the parent task
         timeout_feedback: If set, the previous AI call timed out.  This
             string contains the error message.
-        exec_path: Absolute path to ``autoagent_exec.py`` (forward-slash
-            normalised).  Required when *timeout_feedback* is set and on
-            the first attempt for the long-running-command note.
-        log_session_dir: Log session directory (forward-slash normalised).
+        exec_script_path: Absolute path to the generated ``autoagent-exec``
+            convenience script (forward-slash normalised).
     """
     parts = [
         ROLE_CODING_AGENT,
@@ -77,15 +71,9 @@ def build_simple_task_prompt(
 
     # Timeout feedback with autoagent-exec guidance
     if timeout_feedback:
-        if exec_path is None:
-            exec_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "..", "autoagent_exec.py"
-            ).replace("\\", "/")
         parts.append(
             build_timeout_guidance(
-                task_id=str(task['id']),
-                exec_path=exec_path,
-                log_session_dir=log_session_dir,
+                exec_script_path=exec_script_path,
                 timeout_feedback=timeout_feedback,
             )
         )
@@ -94,16 +82,10 @@ def build_simple_task_prompt(
     parts.append(STATUS_MARKER_INSTRUCTION)
 
     # First-attempt note about autoagent-exec
-    if attempt == 1:
-        if exec_path is None:
-            exec_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "..", "autoagent_exec.py"
-            ).replace("\\", "/")
+    if attempt == 1 and exec_script_path:
         parts.append(
             build_autoagent_exec_note(
-                task_id=str(task['id']),
-                exec_path=exec_path,
-                log_session_dir=log_session_dir,
+                exec_script_path=exec_script_path,
             )
         )
 

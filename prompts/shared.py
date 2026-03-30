@@ -155,20 +155,17 @@ def build_suggested_fix_section(parent_context: dict, fallback_msg: str = None) 
     return fallback_msg
 
 
-def build_autoagent_exec_note(task_id: str, exec_path: str, log_session_dir: str = "") -> str:
+def build_autoagent_exec_note(exec_script_path: str) -> str:
     """Build a brief first-attempt note about autoagent-exec.
 
     This is appended to simple-task prompts on the first attempt so the AI
     knows how to handle long-running commands *before* hitting a timeout.
     """
-    log_dir_part = ""
-    if log_session_dir:
-        log_dir_part = f' --log-dir "{log_session_dir}"'
     return (
         "**Note on long-running commands:** If a Bash command may take more "
         "than a few minutes (e.g. compilation, benchmarking, profiling), do "
         "NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:\n"
-        f'  python "{exec_path}"{log_dir_part} --task-id {task_id} -- <your command>\n'
+        f'  "{exec_script_path}" <your command>\n'
         "The launcher will auto-detach after 10s and print \"TASK SUBMITTED\". "
         "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS\n\n"
         "**\u26a0\ufe0f IMPORTANT: You MUST always use autoagent-exec for long-running "
@@ -179,7 +176,7 @@ def build_autoagent_exec_note(task_id: str, exec_path: str, log_session_dir: str
 
 
 def build_timeout_guidance(
-    task_id: str, exec_path: str, log_session_dir: str,
+    exec_script_path: str,
     timeout_feedback: str,
 ) -> str:
     """Build the detailed timeout-warning section.
@@ -193,8 +190,7 @@ def build_timeout_guidance(
         f"If your task requires running a command that takes more than a few "
         f"minutes (e.g. compilation, benchmarking, data processing), you MUST "
         f"use the `autoagent-exec` launcher to run it as a background task:\n\n"
-        f'python "{exec_path}" --log-dir "{log_session_dir}" --task-id {task_id} '
-        f"-- <your command here>\n\n"
+        f'"{exec_script_path}" <your command here>\n\n'
         f"- If the command fails within 10s, the error is shown immediately \u2014 fix and retry.\n"
         f"- If the command is still running after 10s, it will be detached and you will see "
         f"\"TASK SUBMITTED\".\n"
