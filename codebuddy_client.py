@@ -162,7 +162,7 @@ class AIClient:
         
         logger.info(
             f"[{self.context_id}] Calling {self.provider.name} "
-            f"(session_id={self.session_id or 'new'}, timeout={effective_timeout}s)"
+            f"(session_id={self.session_id or 'new'}, model={self.model}, timeout={effective_timeout}s)"
         )
         logger.debug(f"[{self.context_id}] Prompt: {prompt[:200]}...")
         logger.debug(f"[{self.context_id}] Command: {cmd_args}")
@@ -781,7 +781,7 @@ class AIClientSDK:
 
         logger.info(
             f"[{self.context_id}] Calling CodeBuddy SDK "
-            f"(session_id={self.session_id or 'new'}, timeout={effective_timeout}s)"
+            f"(session_id={self.session_id or 'new'}, model={self.model}, timeout={effective_timeout}s)"
         )
         logger.debug(f"[{self.context_id}] Prompt: {prompt[:200]}...")
 

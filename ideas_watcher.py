@@ -604,6 +604,11 @@ class IdeasWatcher:
                    revised_tasks contains reviewer's corrected tasks if it rejected and
                    directly modified the file (None otherwise).
         """
+        # Reset reviewer session so each review round starts with a fresh context.
+        # Without this, the reviewer AI would see the full conversation history
+        # from previous review rounds, which pollutes its judgment.
+        review_client.reset_session()
+
         tasks_yaml = yaml.dump(tasks, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
         temp_tasks_path = self._get_temp_tasks_path()
