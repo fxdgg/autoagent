@@ -9,7 +9,6 @@ from prompts.shared import (
     build_sibling_context,
     build_history_section,
     build_suggested_fix_section,
-    build_autoagent_exec_note,
     build_timeout_guidance,
 )
 
@@ -74,14 +73,6 @@ def build_simple_task_prompt(
             build_timeout_guidance(
                 exec_script_path=exec_script_path,
                 timeout_feedback=timeout_feedback,
-            )
-        )
-
-    # First-attempt note about autoagent-exec
-    if attempt == 1 and exec_script_path:
-        parts.append(
-            build_autoagent_exec_note(
-                exec_script_path=exec_script_path,
             )
         )
 

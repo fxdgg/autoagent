@@ -16,7 +16,7 @@ import logging
 from typing import Optional, Tuple
 
 from codebuddy_client import AIClient, CodeBuddyClient, AICallError
-from prompts.shared import SYSTEM_PROMPT_CODING_AGENT
+from prompts.shared import build_system_prompt_coding_agent
 from prompts.simple_task import build_simple_task_prompt
 from prompts.long_running_task import (
     build_long_running_prompt as _build_lr_prompt,
@@ -190,13 +190,12 @@ class SimpleTaskExecutor:
             current_state = state_manager.get_task_state(task_id)
             
             # Build prompt (with timeout feedback if previous attempt timed out)
-            prompt = self._build_prompt(
+            prompt, exec_script_path = self._build_prompt(
                 task, attempts, current_state,
                 parent_context=parent_context,
                 timeout_feedback=last_timeout_error,
             )
-            last_timeout_error = None  # Reset after injecting into prompt
-            
+            last_timeout_error = None  # Reset after injecting into prompt            
             try:
                 # Write prompt to log BEFORE calling AI (crash safety)
                 if conv_logger:
@@ -208,7 +207,10 @@ class SimpleTaskExecutor:
                         parent_task_id=parent_task_id,
                     )
                 
-                result = client.ask(prompt, system_prompt=SYSTEM_PROMPT_CODING_AGENT)
+                result = client.ask(
+                    prompt,
+                    system_prompt=build_system_prompt_coding_agent(exec_script_path),
+                )
                 
                 # Append response to log AFTER AI returns
                 if conv_logger:
@@ -299,10 +301,15 @@ class SimpleTaskExecutor:
         )
         return False
 
-    def _build_prompt(self, task: dict, attempt: int, state: dict, parent_context: dict = None, timeout_feedback: str = None) -> str:
+    def _build_prompt(self, task: dict, attempt: int, state: dict, parent_context: dict = None, timeout_feedback: str = None) -> tuple:
         """Build the prompt for AI.
         
         Delegates to ``prompts.simple_task.build_simple_task_prompt``.
+
+        Returns:
+            A ``(prompt, exec_script_path)`` tuple.  *exec_script_path*
+            is the absolute path to the generated autoagent-exec script
+            (empty string when unavailable).
         """
         # Resolve session_dir: prefer own, fall back to _subtask_executor's.
         log_session_dir = ""
@@ -329,10 +336,10 @@ class SimpleTaskExecutor:
             parent_context=parent_context,
             timeout_feedback=timeout_feedback,
             exec_script_path=exec_script_path,
-        )
+        ), exec_script_path
 
     @staticmethod
-    def _extract_summary(ai_response: str) -> str:
+    def _extract_summary(ai_response: str) -> str:        
         """Extract a meaningful summary from AI response.
         
         The AI's raw response is a concatenation of tool calls and text,
@@ -521,12 +528,19 @@ class SimpleTaskExecutor:
         
         monitor_status = subtask_exec._poll_signal_file(lr_task_id, signal_file)
         
+        # Generate exec_script_path for the system prompt
+        exec_script_path = _write_autoagent_exec_script(
+            session_dir=log_session_dir,
+            task_id=task_id,
+        )
+
         # Restart AI to analyze the result
         analyze_result = subtask_exec._ai_analyze_long_running_result(
             task, client, state_manager,
             monitor_status, output_log,
             conv_logger=conv_logger, parent_task_id=parent_task_id,
             signal_file=signal_file,
+            exec_script_path=exec_script_path,
         )
         
         if analyze_result.success:
@@ -1500,7 +1514,10 @@ class SubtaskExecutor:
                         parent_task_id=parent_task_id,
                     )
                 
-                result = client.ask(prompt, system_prompt=SYSTEM_PROMPT_CODING_AGENT)
+                result = client.ask(
+                    prompt,
+                    system_prompt=build_system_prompt_coding_agent(exec_script_path),
+                )
                 
                 # Append response to log AFTER AI returns
                 if conv_logger:
@@ -1541,6 +1558,7 @@ class SubtaskExecutor:
                         monitor_status, output_log,
                         conv_logger=conv_logger, parent_task_id=parent_task_id,
                         parent_context=parent_context, signal_file=signal_file,
+                        exec_script_path=exec_script_path,
                     )
                     
                     if analyze_result.success:
@@ -1784,6 +1802,7 @@ class SubtaskExecutor:
         self, subtask, client, state_manager, status, output_log,
         conv_logger=None, parent_task_id: str = None,
         parent_context: dict = None, signal_file: str = None,
+        exec_script_path: str = "",
     ) -> SubtaskResult:
         """
         Ask AI to analyze the result of a long-running task.
@@ -1832,7 +1851,10 @@ class SubtaskExecutor:
                     metadata={"type": "long_running_analysis"},
                 )
             
-            result = client.ask(prompt, system_prompt=SYSTEM_PROMPT_CODING_AGENT)
+            result = client.ask(
+                prompt,
+                system_prompt=build_system_prompt_coding_agent(exec_script_path),
+            )
             
             # Append response to log AFTER AI returns
             if conv_logger:

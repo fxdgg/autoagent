@@ -101,20 +101,49 @@ ROLE_CODING_AGENT = (
     "commands, and analyze outputs. Complete the following task."
 )
 
-SYSTEM_PROMPT_CODING_AGENT = (
-    "You are an AI coding agent. You can read/write files, run shell "
-    "commands, and analyze outputs.\n\n"
-    "## Status Markers\n"
-    "When you finish a task, you MUST end your response with EXACTLY one of "
-    "these status lines (on its own line):\n"
-    "  ✅ completed\n"
-    "  ❌ not completed: <reason>\n\n"
-    "If a task requires a long-running command (e.g. compilation, benchmarking), "
-    "use the `autoagent-exec` launcher instead of running it directly in Bash. "
-    "When the launcher prints \"TASK SUBMITTED\", output:\n"
-    "  ⏳ LONG_RUNNING_IN_PROGRESS\n\n"
-    "These markers are MANDATORY. Your response MUST end with one of them."
-)
+def build_system_prompt_coding_agent(exec_script_path: str = "") -> str:
+    """Build the system prompt for coding-agent tasks.
+
+    Includes role definition, status-marker instructions, and — when
+    *exec_script_path* is provided — the autoagent-exec usage note so
+    the AI knows how to handle long-running commands.
+
+    Args:
+        exec_script_path: Absolute path to the generated ``autoagent-exec``
+            convenience script.  When empty, the long-running-command
+            section is omitted.
+    """
+    base = (
+        "You are an AI coding agent. You can read/write files, run shell "
+        "commands, and analyze outputs.\n\n"
+        "## Status Markers\n"
+        "When you finish a task, you MUST end your response with EXACTLY one of "
+        "these status lines (on its own line):\n"
+        "  ✅ completed\n"
+        "  ❌ not completed: <reason>\n\n"
+        "If a task requires a long-running command (e.g. compilation, benchmarking), "
+        "use the `autoagent-exec` launcher instead of running it directly in Bash. "
+        "When the launcher prints \"TASK SUBMITTED\", output:\n"
+        "  ⏳ LONG_RUNNING_IN_PROGRESS\n\n"
+        "These markers are MANDATORY. Your response MUST end with one of them."
+    )
+    if not exec_script_path:
+        return base
+
+    exec_note = (
+        "\n\n"
+        "**Note on long-running commands:** If a Bash command may take more "
+        "than a few minutes (e.g. compilation, benchmarking, profiling), do "
+        "NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:\n"
+        f'  "{exec_script_path}" <your command>\n'
+        "The launcher will auto-detach after 10s and print \"TASK SUBMITTED\". "
+        "When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS\n\n"
+        "**⚠️ IMPORTANT: You MUST always use autoagent-exec for long-running "
+        "commands. Running them directly in Bash will cause the session to hang "
+        "and be killed. Even if autoagent-exec fails, fix the command arguments "
+        "and retry with autoagent-exec — NEVER fall back to running directly in Bash.**"
+    )
+    return base + exec_note
 
 ROLE_TASK_PLANNER = (
     "You are a task planner. Your job is to decompose a given idea into "
@@ -213,11 +242,15 @@ def build_suggested_fix_section(parent_context: dict, fallback_msg: str = None) 
     return fallback_msg
 
 
+# Keep build_autoagent_exec_note as a thin wrapper for backward compatibility.
+# The canonical long-running note now lives inside build_system_prompt_coding_agent.
 def build_autoagent_exec_note(exec_script_path: str) -> str:
     """Build a brief first-attempt note about autoagent-exec.
 
-    This is appended to simple-task prompts on the first attempt so the AI
-    knows how to handle long-running commands *before* hitting a timeout.
+    .. deprecated::
+        The autoagent-exec note is now included in the system prompt
+        returned by :func:`build_system_prompt_coding_agent`.  This
+        function is kept only for backward compatibility.
     """
     return (
         "**Note on long-running commands:** If a Bash command may take more "
