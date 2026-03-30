@@ -5,8 +5,7 @@ Corresponds to ``SimpleTaskExecutor._build_prompt()`` in task_executor.py.
 """
 
 from prompts.shared import (
-    ROLE_CODING_AGENT,
-    STATUS_MARKER_INSTRUCTION,
+    SYSTEM_PROMPT_CODING_AGENT,
     build_sibling_context,
     build_history_section,
     build_suggested_fix_section,
@@ -43,7 +42,7 @@ def build_simple_task_prompt(
             convenience script (forward-slash normalised).
     """
     parts = [
-        ROLE_CODING_AGENT,
+        SYSTEM_PROMPT_CODING_AGENT,
         f"Task: {task['name']}",
         f"Completion Criteria: {task['completion_criteria']}",
     ]
@@ -77,9 +76,6 @@ def build_simple_task_prompt(
                 timeout_feedback=timeout_feedback,
             )
         )
-
-    # Mandatory status marker
-    parts.append(STATUS_MARKER_INSTRUCTION)
 
     # First-attempt note about autoagent-exec
     if attempt == 1 and exec_script_path:

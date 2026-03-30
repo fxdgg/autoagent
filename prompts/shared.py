@@ -58,6 +58,21 @@ ROLE_CODING_AGENT = (
     "commands, and analyze outputs. Complete the following task."
 )
 
+SYSTEM_PROMPT_CODING_AGENT = (
+    "You are an AI coding agent. You can read/write files, run shell "
+    "commands, and analyze outputs.\n\n"
+    "## Status Markers\n"
+    "When you finish a task, you MUST end your response with EXACTLY one of "
+    "these status lines (on its own line):\n"
+    "  ✅ completed\n"
+    "  ❌ not completed: <reason>\n\n"
+    "If a task requires a long-running command (e.g. compilation, benchmarking), "
+    "use the `autoagent-exec` launcher instead of running it directly in Bash. "
+    "When the launcher prints \"TASK SUBMITTED\", output:\n"
+    "  ⏳ LONG_RUNNING_IN_PROGRESS\n\n"
+    "These markers are MANDATORY. Your response MUST end with one of them."
+)
+
 ROLE_TASK_PLANNER = (
     "You are a task planner. Your job is to decompose a given idea into "
     "concrete, actionable TODO tasks in YAML format."

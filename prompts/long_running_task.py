@@ -6,7 +6,7 @@ Corresponds to ``SubtaskExecutor._build_long_running_prompt()`` and
 """
 
 from prompts.shared import (
-    ROLE_CODING_AGENT,
+    SYSTEM_PROMPT_CODING_AGENT,
     STATUS_MARKER_INSTRUCTION,
     build_sibling_context,
     build_history_section,
@@ -34,7 +34,7 @@ def build_long_running_prompt(
         parent_context: Optional context from the parent task.
     """
     parts = [
-        ROLE_CODING_AGENT,
+        SYSTEM_PROMPT_CODING_AGENT,
         f"Task: {subtask['name']}",
         f"Type: long_running (\u26a0\ufe0f This task may take a long time)",
         f"Completion Criteria: {subtask['completion_criteria']}",
