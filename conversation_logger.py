@@ -95,6 +95,7 @@ class ConversationLogger:
         attempt: int,
         parent_task_id: Optional[str] = None,
         metadata: Optional[dict] = None,
+        system_prompt: Optional[str] = None,
     ):
         """
         Write the prompt section to the log file immediately (before AI call).
@@ -109,6 +110,7 @@ class ConversationLogger:
             attempt: Attempt number
             parent_task_id: Parent task ID if this is a subtask
             metadata: Optional dict with extra info
+            system_prompt: Optional system prompt sent alongside the user prompt
         """
         filepath = self._resolve_filepath(task_id, parent_task_id)
 
@@ -122,6 +124,10 @@ class ConversationLogger:
         if metadata and metadata.get("type"):
             meta_label = f" ({metadata['type']})"
         content_parts.append(f"## Attempt #{attempt}{meta_label}\n\n")
+
+        if system_prompt:
+            content_parts.append(f"### System Prompt\n\n")
+            content_parts.append(f"```\n{system_prompt}\n```\n\n")
 
         content_parts.append(f"### Prompt\n\n")
         content_parts.append(f"```\n{prompt}\n```\n\n")

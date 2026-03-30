@@ -198,6 +198,7 @@ class SimpleTaskExecutor:
             last_timeout_error = None  # Reset after injecting into prompt            
             try:
                 # Write prompt to log BEFORE calling AI (crash safety)
+                system_prompt = build_system_prompt_coding_agent(exec_script_path)
                 if conv_logger:
                     conv_logger.log_prompt(
                         task_id=task_id,
@@ -205,11 +206,12 @@ class SimpleTaskExecutor:
                         prompt=prompt,
                         attempt=attempts,
                         parent_task_id=parent_task_id,
+                        system_prompt=system_prompt,
                     )
                 
                 result = client.ask(
                     prompt,
-                    system_prompt=build_system_prompt_coding_agent(exec_script_path),
+                    system_prompt=system_prompt,
                 )
                 
                 # Append response to log AFTER AI returns
@@ -1505,6 +1507,7 @@ class SubtaskExecutor:
             
             try:
                 # Write prompt to log BEFORE calling AI (crash safety)
+                system_prompt = build_system_prompt_coding_agent(exec_script_path)
                 if conv_logger:
                     conv_logger.log_prompt(
                         task_id=subtask_id,
@@ -1512,11 +1515,12 @@ class SubtaskExecutor:
                         prompt=prompt,
                         attempt=attempt,
                         parent_task_id=parent_task_id,
+                        system_prompt=system_prompt,
                     )
                 
                 result = client.ask(
                     prompt,
-                    system_prompt=build_system_prompt_coding_agent(exec_script_path),
+                    system_prompt=system_prompt,
                 )
                 
                 # Append response to log AFTER AI returns
@@ -1841,6 +1845,7 @@ class SubtaskExecutor:
         )
         try:
             # Write prompt to log BEFORE calling AI (crash safety)
+            system_prompt = build_system_prompt_coding_agent(exec_script_path)
             if conv_logger:
                 conv_logger.log_prompt(
                     task_id=subtask_id,
@@ -1849,11 +1854,12 @@ class SubtaskExecutor:
                     attempt=1,
                     parent_task_id=parent_task_id,
                     metadata={"type": "long_running_analysis"},
+                    system_prompt=system_prompt,
                 )
             
             result = client.ask(
                 prompt,
-                system_prompt=build_system_prompt_coding_agent(exec_script_path),
+                system_prompt=system_prompt,
             )
             
             # Append response to log AFTER AI returns
