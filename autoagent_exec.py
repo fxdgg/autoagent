@@ -2,19 +2,28 @@
 """
 autoagent-exec: Long-running task launcher for AutoAgent.
 
-This script is called by the AI (via Bash tool) to submit a long-running task.
-It implements a fast-fail mechanism (default 10 seconds, configurable):
+This script is called by the AI through a wrapper script (autoagent-exec.bat
+on Windows, autoagent-exec.sh on Linux/macOS).  The wrapper pre-fills all
+internal parameters (log directory, task ID, fast-fail timeout); the AI only
+needs to append the command to run.
+
+It implements a fast-fail mechanism (default 10 seconds, configurable via
+config.yaml ``fast_fail_timeout``):
   - Start the command in foreground
   - If it exits within the timeout with a non-zero exit code, report the error
     immediately so the AI can fix the command without restarting the session
   - If it's still running after the timeout, detach it to the background,
     write a signal file, and tell the AI to end its session
 
-Usage (called by AI via Bash):
-    python <path>/autoagent_exec.py --log-dir <log_session_dir> --task-id <id> [--fast-fail-timeout <seconds>] -- <command...>
+Usage (via wrapper script):
+    autoagent-exec.bat <command...>          (Windows)
+    bash autoagent-exec.sh <command...>      (Linux/macOS)
 
 Example:
-    python autoagent_exec.py --log-dir /path/to/logs/proj_abc123 --task-id 1.2 -- ncu --set full --csv ./build/Release/main.exe
+    autoagent-exec.bat ncu --set full --csv ./build/Release/main.exe
+
+Internal invocation (by the wrapper script, not by the AI directly):
+    python autoagent_exec.py --log-dir <dir> --task-id <id> [--fast-fail-timeout <s>] -- <command...>
 
 Signal file: <log-dir>/lr_tasks/lr_<task_id>_signal.json
 Output log:  <log-dir>/lr_tasks/lr_<task_id>_output.log
@@ -45,35 +54,44 @@ def _ensure_utf8_stdio():
 def parse_args():
     parser = argparse.ArgumentParser(
         description="AutoAgent long-running task launcher.\n\n"
-            "Runs a command with fast-fail detection:\n"
-            "  - If the command exits within the timeout with an error, the error is shown immediately.\n"
-            "  - If the command is still running after the timeout, it is detached to the background\n"
-            "    and a signal file is created for the orchestrator to monitor.\n\n"
+            "This script is invoked through the autoagent-exec wrapper script\n"
+            "(autoagent-exec.bat on Windows, autoagent-exec.sh on Linux/macOS).\n"
+            "All internal parameters (log directory, task ID, timeout, etc.) are\n"
+            "pre-configured in the wrapper script — you only need to append the\n"
+            "command you want to run.\n\n"
+            "Usage (via wrapper script):\n"
+            "  <path>/autoagent-exec.bat <command...>     (Windows)\n"
+            "  bash <path>/autoagent-exec.sh <command...>  (Linux/macOS)\n\n"
             "Examples:\n"
-            "  python autoagent_exec.py --log-dir /path/to/logs --task-id 1.2 -- make -j8\n"
-            "  python autoagent_exec.py --log-dir /path/to/logs --task-id 2.1 -- python train.py --epochs 100\n"
-            "  python autoagent_exec.py --log-dir /path/to/logs --task-id 1.3 -- ncu --set full ./main.exe\n\n"
-            "Output files (created under <log-dir>/lr_tasks/):\n"
-            "  lr_<task-id>_signal.json  - Status signal file (running/finished/error)\n"
-            "  lr_<task-id>_output.log   - Full stdout+stderr output of the command",
+            "  autoagent-exec.bat make -j8\n"
+            "  autoagent-exec.bat python train.py --epochs 100\n"
+            "  bash autoagent-exec.sh ncu --set full ./main.exe\n\n"
+            "Behavior:\n"
+            "  - If the command fails quickly, the error is shown immediately\n"
+            "    so you can fix and retry without restarting the session.\n"
+            "  - If the command is still running after the fast-fail window,\n"
+            "    it is detached to the background. You should then end your\n"
+            "    session; AutoAgent will call you back when it completes.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        usage="autoagent_exec.py --log-dir <dir> --task-id <id> -- <command...>",
+        usage="autoagent-exec.bat <command...>  OR  bash autoagent-exec.sh <command...>",
     )
+    # Internal parameters — hidden from --help because they are pre-filled
+    # by the wrapper script. AI should never set these manually.
     parser.add_argument(
         "--log-dir",
         required=True,
-        help="Log session directory (absolute path) where signal and output files are written",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--task-id",
         required=True,
-        help="Subtask ID (e.g. 1.2)",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--fast-fail-timeout",
         type=int,
         default=DEFAULT_FAST_FAIL_TIMEOUT,
-        help=f"Seconds to wait before treating the command as long-running (default: {DEFAULT_FAST_FAIL_TIMEOUT})",
+        help=argparse.SUPPRESS,
     )
     # Everything after '--' is the command
     args, remaining = parser.parse_known_args()
@@ -83,7 +101,7 @@ def parse_args():
         remaining = remaining[1:]
 
     if not remaining:
-        parser.error("No command specified. Usage: autoagent_exec.py --log-dir <dir> --task-id <id> -- <command...>")
+        parser.error("No command specified. Append the command after the script path.")
 
     args.command = remaining
     return args
