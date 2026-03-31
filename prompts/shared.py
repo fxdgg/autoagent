@@ -215,7 +215,7 @@ def build_system_prompt_coding_agent(
             "Always wrap your command in double quotes so that shell operators "
             "(&&, |, ;, etc.) are passed correctly. For example:\n"
             f'  "{exec_script_path}" "cd build && cmake .. && make -j8"\n'
-            "The launcher will auto-detach after the fast-fail window and print \"TASK SUBMITTED\". "
+            "The launcher will auto-detach after the fast-run window and print \"TASK SUBMITTED\". "
             "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS"
         )
         parts.append(
@@ -342,7 +342,7 @@ def build_autoagent_exec_note(exec_script_path: str) -> str:
         f'  "{exec_script_path}" "<your entire command>"\n'
         "Always wrap your command in double quotes so that shell operators "
         "(&&, |, ;, etc.) are passed correctly.\n"
-        "The launcher will auto-detach after the fast-fail window and print \"TASK SUBMITTED\". "
+        "The launcher will auto-detach after the fast-run window and print \"TASK SUBMITTED\". "
         "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS\n\n"
         "**\u26a0\ufe0f IMPORTANT: You MUST always use autoagent-exec for long-running "
         "commands. Running them directly in Bash will cause the session to hang "
@@ -409,7 +409,7 @@ def build_timeout_guidance(
         f"(&&, |, ;, etc.) are passed correctly. For example:\n"
         f'  "{exec_script_path}" "cd build && cmake .. && make -j8"\n\n'
         f"- If the command fails quickly, the error is shown immediately \u2014 fix and retry.\n"
-        f"- If the command is still running after the fast-fail window, it will be detached and you will see "
+        f"- If the command is still running after the fast-run window, it will be detached and you will see "
         f"\"TASK SUBMITTED\".\n"
         f"- When you see \"TASK SUBMITTED\", output: \u23f3 LONG_RUNNING_IN_PROGRESS\n"
         f"  AutoAgent will call you back with the results.\n\n"

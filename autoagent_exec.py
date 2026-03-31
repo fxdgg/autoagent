@@ -81,7 +81,7 @@ def parse_args():
             "Behavior:\n"
             "  - If the command fails quickly, the error is shown immediately\n"
             "    so you can fix and retry without restarting the session.\n"
-            "  - If the command is still running after the fast-fail window,\n"
+            "  - If the command is still running after the fast-run window,\n"
             "    it is detached to the background. You should then end your\n"
             "    session; AutoAgent will call you back when it completes.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -240,9 +240,6 @@ def main():
     log_fh.close()
 
     print(f"\n[RUNNING] Command is still running after {fast_fail_timeout}s -- treating as long-running task.")
-    print(f"   PID: {pid}")
-    print(f"   Output log: {output_log}")
-    print(f"   Signal file: {signal_file}")
 
     # Write signal file with "running" status
     signal_data = {
@@ -291,7 +288,7 @@ def main():
         print(f"   The orchestrator will fall back to process-alive checks.")
 
     print(f"\n" + "=" * 60)
-    print(f"  LONG-RUNNING TASK SUBMITTED SUCCESSFULLY")
+    print(f"  TASK SUBMITTED")
     print(f"  The task is running in the background (PID {pid}).")
     print(f"  You MUST now end your current session immediately.")
     print(f"  Output your final status as: LONG_RUNNING_IN_PROGRESS")
