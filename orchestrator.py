@@ -279,7 +279,8 @@ class TodoOrchestrator:
         
         # Validate task type
         if is_subtask:
-            valid_types = ['simple', 'long_running', 'simple_once', 'long_running_once']
+            valid_types = ['simple', 'long_running', 'simple_once', 'long_running_once',
+                           'nested', 'looping']
         else:
             valid_types = ['simple', 'nested', 'looping']
         
@@ -577,21 +578,30 @@ class TodoOrchestrator:
             
             # Add subtask info for nested/looping tasks
             if task['type'] in ('nested', 'looping') and 'subtasks' in task:
-                task_status["subtasks"] = []
-                for st in task['subtasks']:
-                    st_id = str(st['id'])
-                    st_state = self.state_manager.get_task_state(st_id)
-                    task_status["subtasks"].append({
-                        "id": st_id,
-                        "name": st['name'],
-                        "type": st['type'],
-                        "status": st_state.get('status', 'pending'),
-                        "attempts": st_state.get('attempts', 0),
-                    })
+                task_status["subtasks"] = self._collect_subtask_status(task['subtasks'])
             
             status["tasks"].append(task_status)
         
         return status
+
+    def _collect_subtask_status(self, subtasks: list) -> list:
+        """Recursively collect status for subtasks (supports nested subtasks)."""
+        result = []
+        for st in subtasks:
+            st_id = str(st['id'])
+            st_state = self.state_manager.get_task_state(st_id)
+            entry = {
+                "id": st_id,
+                "name": st['name'],
+                "type": st['type'],
+                "status": st_state.get('status', 'pending'),
+                "attempts": st_state.get('attempts', 0),
+            }
+            # Recurse into nested/looping subtasks
+            if st['type'] in ('nested', 'looping') and 'subtasks' in st:
+                entry["subtasks"] = self._collect_subtask_status(st['subtasks'])
+            result.append(entry)
+        return result
 
     def reset(self):
         """Reset all task states by removing the entire session directory."""
@@ -840,6 +850,23 @@ def print_status(orchestrator: TodoOrchestrator):
     print(f"  Task Status")
     print(f"{'=' * 60}")
     
+    def _print_subtasks(subtasks, indent=1):
+        """Recursively print subtask status."""
+        prefix = "   " * indent
+        for st in subtasks:
+            st_icon = {
+                'pending': '⏳',
+                'in_progress': '🔄',
+                'completed': '✅',
+                'failed': '❌',
+            }.get(st['status'], '❓')
+            
+            print(f"{prefix}{st_icon} Subtask {st['id']}: {st['name']}")
+            print(f"{prefix}   Type: {st['type']} | Status: {st['status']} | Attempts: {st['attempts']}")
+            
+            if 'subtasks' in st:
+                _print_subtasks(st['subtasks'], indent + 1)
+    
     for task in status['tasks']:
         status_icon = {
             'pending': '⏳',
@@ -852,16 +879,7 @@ def print_status(orchestrator: TodoOrchestrator):
         print(f"   Type: {task['type']} | Status: {task['status']} | Attempts: {task['attempts']}")
         
         if 'subtasks' in task:
-            for st in task['subtasks']:
-                st_icon = {
-                    'pending': '  ⏳',
-                    'in_progress': '  🔄',
-                    'completed': '  ✅',
-                    'failed': '  ❌',
-                }.get(st['status'], '  ❓')
-                
-                print(f"   {st_icon} Subtask {st['id']}: {st['name']}")
-                print(f"      Type: {st['type']} | Status: {st['status']} | Attempts: {st['attempts']}")
+            _print_subtasks(task['subtasks'])
     
     print(f"\n{'=' * 60}")
 

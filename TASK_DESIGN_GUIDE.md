@@ -82,7 +82,7 @@ changes, running tests, file analysis, data processing, simple builds, etc.
    passing the `suggested_fix` to the retried subtask's prompt.
 5. This loop repeats up to `max_attempts` times.
 
-**Scope:** Top-level only.
+**Scope:** Top-level or subtask (nesting is supported — see §8.5).
 
 **When to use:** Multi-step workflows where the overall success depends on
 the combined result of all steps, and the AI should evaluate the final
@@ -108,7 +108,7 @@ outcome holistically.
 5. Within a single iteration, if a subtask fails, the AI analyzes the failure
    and decides retry strategy (same as nested).
 
-**Scope:** Top-level only.
+**Scope:** Top-level or subtask (nesting is supported — see §8.5).
 
 **When to use:** Iterative optimization cycles where you want to repeat the
 same workflow N times (e.g., profile → optimize → benchmark → commit).
@@ -210,7 +210,7 @@ When a reset or new iteration would normally set a subtask back to "pending",
 
 | Field          | Type   | Required | Description                              |
 |----------------|--------|----------|------------------------------------------|
-| `subtasks`     | list   | Yes      | Ordered list of subtasks (simple, long_running, simple_once, or long_running_once) |
+| `subtasks`     | list   | Yes      | Ordered list of subtasks (any valid subtask type, including nested/looping) |
 | `max_attempts` | int    | No       | Max retry rounds (default: 20)           |
 
 **looping:**
@@ -238,15 +238,21 @@ Top-level tasks:  simple | nested | looping
                      │  long_running, long_running,
                      │  simple_once, simple_once,
                      │  long_running  long_running
-                     │    _once        _once
+                     │    _once,       _once,
+                     │   nested,     nested,
+                     │   looping     looping
                      │
               (no subtasks)
 ```
 
-- `nested` and `looping` can ONLY be top-level.
+- `nested` and `looping` can be top-level OR subtasks (multi-level nesting
+  is supported).
 - `long_running`, `long_running_once` can ONLY be subtasks.
 - `simple_once` can ONLY be a subtask.
 - `simple` can be either top-level or subtask.
+- When `nested` or `looping` is used as a subtask, it behaves identically
+  to the top-level version — it has its own `subtasks`, `max_attempts` /
+  `repeat_count`, and independent retry/evaluation logic.
 
 ### 3.4 The `model` Field
 
@@ -529,7 +535,89 @@ Example: "Iteratively optimize CUDA kernel performance"
       completion_criteria: "Benchmark run. If improved, committed. If not, rolled back."
 ```
 
-### 8.4 Decomposition Anti-Patterns
+### 8.4 When to Use Nested Subtasks
+
+Use `nested` or `looping` as a subtask type when a step within a larger
+workflow is itself a multi-step process with its own completion criteria
+and retry logic.
+
+Example: "Build and deploy a microservice" where the build step itself
+involves multiple sub-steps:
+```yaml
+- id: 1
+  name: "Build and deploy microservice"
+  type: nested
+  max_attempts: 5
+  completion_criteria: |
+    Service is deployed and health check returns 200 OK.
+  subtasks:
+    - id: 1.1
+      name: "Build and test"
+      type: nested
+      max_attempts: 3
+      completion_criteria: |
+        All unit tests pass and Docker image is built.
+      subtasks:
+        - id: 1.1.1
+          name: "Fix lint errors"
+          type: simple
+          completion_criteria: "No lint errors (pylint returns 0)."
+        - id: 1.1.2
+          name: "Run unit tests"
+          type: simple
+          completion_criteria: "All tests pass (pytest returns 0)."
+        - id: 1.1.3
+          name: "Build Docker image"
+          type: simple
+          completion_criteria: "Docker image built successfully."
+    - id: 1.2
+      name: "Deploy to staging"
+      type: simple
+      completion_criteria: "Deployed to staging, health check returns 200."
+```
+
+Example: A subtask that repeats an optimization cycle:
+```yaml
+- id: 2
+  name: "Optimize and validate"
+  type: nested
+  completion_criteria: |
+    Performance improved by at least 20% over baseline.
+  subtasks:
+    - id: 2.1
+      name: "Establish baseline"
+      type: simple_once
+      completion_criteria: "Baseline timing saved to baseline.txt."
+    - id: 2.2
+      name: "Iterative optimization"
+      type: looping
+      repeat_count: 3
+      completion_criteria: "3 optimization rounds completed."
+      subtasks:
+        - id: 2.2.1
+          name: "Profile"
+          type: long_running
+          completion_criteria: "Profiling output saved."
+        - id: 2.2.2
+          name: "Optimize and benchmark"
+          type: simple
+          completion_criteria: "Optimization applied, benchmark run."
+    - id: 2.3
+      name: "Final validation"
+      type: simple
+      completion_criteria: "Final benchmark shows >= 20% improvement."
+```
+
+**Design tips for nested subtasks:**
+- Use nested subtasks when a step has its own independent retry logic
+  that should not affect sibling subtasks.
+- Keep nesting shallow (2–3 levels max) to maintain readability.
+- Each nested subtask has its own `max_attempts` / `repeat_count`,
+  independent of the parent.
+- When a nested/looping subtask is reset by the parent's retry logic,
+  all of its inner subtasks are also recursively reset.
+
+### 8.5 Decomposition Anti-Patterns
 
 ❌ **Over-decomposition:** Breaking a simple task into 5 trivial subtasks.
 ```yaml
@@ -558,13 +646,6 @@ are logically independent and may need separate retry strategies.
 # BAD: long_running as top-level
 - id: 1
   type: long_running  # ERROR: long_running can only be a subtask
-
-# BAD: nested as subtask
-- id: 1
-  type: nested
-  subtasks:
-    - id: 1.1
-      type: nested  # ERROR: nested cannot be a subtask
 ```
 
 ❌ **Vague criteria with nested tasks:**
@@ -583,6 +664,8 @@ are logically independent and may need separate retry strategies.
   Example: if existing tasks go up to id 5, new tasks start from 6.
 - **Subtasks**: Dot notation using parent ID as prefix.
   Example: task 6's subtasks are 6.1, 6.2, 6.3, etc.
+- **Nested subtasks**: Continue the dot notation for deeper levels.
+  Example: subtask 6.2 (type: nested) has subtasks 6.2.1, 6.2.2, etc.
 - **IDs must be unique** across the entire todos.yaml file.
 - **Subtask IDs determine execution order** — they run in ascending order.
 
@@ -624,7 +707,7 @@ Before finalizing your task decomposition, verify:
 
 - [ ] Every task has `id`, `name`, `type`, and `completion_criteria`
 - [ ] Top-level tasks use `simple`, `nested`, or `looping` (never `long_running`)
-- [ ] Subtasks use `simple`, `long_running`, `simple_once`, or `long_running_once` (never `nested` or `looping`)
+- [ ] Subtasks use `simple`, `long_running`, `simple_once`, `long_running_once`, `nested`, or `looping`
 - [ ] `*_once` subtasks are used only for genuinely one-time operations
 - [ ] `looping` tasks have `repeat_count` (positive integer)
 - [ ] `nested`/`looping` tasks have non-empty `subtasks` list

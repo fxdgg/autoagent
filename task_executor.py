@@ -5,7 +5,7 @@ This module provides:
 - SimpleTaskExecutor: Executes simple tasks with AI self-evaluation loop
 - NestedTaskExecutor: Executes nested tasks with subtasks and AI decision points
 - LoopingTaskExecutor: Executes looping tasks that repeat subtasks a fixed number of times
-- SubtaskExecutor: Dispatches subtask execution based on type
+- SubtaskExecutor: Dispatches subtask execution based on type (supports nested subtasks)
 """
 
 import os
@@ -1011,6 +1011,8 @@ class NestedTaskExecutor:
         except *_once subtasks (simple_once / long_running_once) which
         are never reset once completed.
         Falls back to first subtask if retry_from ID is not found.
+        If a subtask being reset is itself nested/looping, its inner
+        subtasks are also recursively reset.
         """
         retry_from = str(retry_from)
 
@@ -1034,6 +1036,10 @@ class NestedTaskExecutor:
                         continue
                 state_manager.mark_task_status(st_id, "pending", attempts=0)
                 logger.info(f"Reset subtask {st_id} to pending")
+                # Recursively reset inner subtasks of nested/looping subtasks
+                inner_subtasks = subtask.get('subtasks', [])
+                if inner_subtasks:
+                    self._reset_subtasks_from(str(inner_subtasks[0]['id']), inner_subtasks, state_manager)
 
     def _format_task_history(self, history: list) -> str:
         """Format task history for prompt, including completion criteria."""
@@ -1385,7 +1391,9 @@ class LoopingTaskExecutor:
 
         *_once subtasks (simple_once / long_running_once) are never reset
         once completed.
-        Falls back to first subtask if retry_from ID is not found."""
+        Falls back to first subtask if retry_from ID is not found.
+        If a subtask being reset is itself nested/looping, its inner
+        subtasks are also recursively reset."""
         retry_from = str(retry_from)
 
         # Validate retry_from exists
@@ -1408,6 +1416,10 @@ class LoopingTaskExecutor:
                         continue
                 state_manager.mark_task_status(st_id, "pending", attempts=0)
                 logger.info(f"Reset subtask {st_id} to pending")
+                # Recursively reset inner subtasks of nested/looping subtasks
+                inner_subtasks = subtask.get('subtasks', [])
+                if inner_subtasks:
+                    self._reset_subtasks_from(str(inner_subtasks[0]['id']), inner_subtasks, state_manager)
 
     @staticmethod
     def _truncate_error(error_text: str, max_chars: int = None) -> str:
@@ -1471,6 +1483,16 @@ class SubtaskExecutor:
                 conv_logger=conv_logger, parent_task_id=parent_task_id,
                 parent_context=parent_context,
             )
+        elif subtask_type == 'nested':
+            return self._execute_nested_subtask(
+                subtask, client, state_manager,
+                conv_logger=conv_logger,
+            )
+        elif subtask_type == 'looping':
+            return self._execute_looping_subtask(
+                subtask, client, state_manager,
+                conv_logger=conv_logger,
+            )
         else:
             raise ConfigError(f"Unknown subtask type: {subtask_type}")
 
@@ -1494,6 +1516,46 @@ class SubtaskExecutor:
             logs="",
             error_type=None if success else "ai_failed",
             response_text=self.simple_executor.last_response_text,
+        )
+
+    def _execute_nested_subtask(
+        self, subtask: dict, client: CodeBuddyClient, state_manager,
+        conv_logger=None,
+    ) -> SubtaskResult:
+        """Execute a nested subtask by delegating to NestedTaskExecutor."""
+        executor = NestedTaskExecutor(
+            session_dir=self.session_dir, model_roles=self.model_roles,
+        )
+        success = executor.execute(
+            subtask, client, state_manager, conv_logger=conv_logger,
+        )
+        subtask_id = str(subtask['id'])
+        state = state_manager.get_task_state(subtask_id)
+        return SubtaskResult(
+            success=success,
+            output=state.get('ai_reasoning', '') or state.get('status', ''),
+            logs="",
+            error_type=None if success else "nested_failed",
+        )
+
+    def _execute_looping_subtask(
+        self, subtask: dict, client: CodeBuddyClient, state_manager,
+        conv_logger=None,
+    ) -> SubtaskResult:
+        """Execute a looping subtask by delegating to LoopingTaskExecutor."""
+        executor = LoopingTaskExecutor(
+            session_dir=self.session_dir, model_roles=self.model_roles,
+        )
+        success = executor.execute(
+            subtask, client, state_manager, conv_logger=conv_logger,
+        )
+        subtask_id = str(subtask['id'])
+        state = state_manager.get_task_state(subtask_id)
+        return SubtaskResult(
+            success=success,
+            output=state.get('ai_reasoning', '') or state.get('status', ''),
+            logs="",
+            error_type=None if success else "looping_failed",
         )
 
     def _execute_long_running_subtask(
