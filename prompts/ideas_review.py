@@ -42,12 +42,12 @@ commands, and analyze code and outputs.
 
 ## Original Idea
 
-{idea_content[:limits.get('idea_content')] + chr(10) + chr(10) + '(idea text truncated)' if len(idea_content) > limits.get('idea_content') else idea_content}
+{idea_content[:limits.get('max')] + chr(10) + chr(10) + '(idea text truncated)' if len(idea_content) > limits.get('max') else idea_content}
 
 ## Generated Tasks (YAML)
 
 ```yaml
-{tasks_yaml[:limits.get('tasks_yaml')] + chr(10) + '# (YAML truncated)' if len(tasks_yaml) > limits.get('tasks_yaml') else tasks_yaml}```
+{tasks_yaml[:limits.get('max')] + chr(10) + '# (YAML truncated)' if len(tasks_yaml) > limits.get('max') else tasks_yaml}```
 
 ## Task Design Guide
 
@@ -118,8 +118,8 @@ def build_revision_prompt(
     parts: list[str] = []
 
     if current_tasks_yaml:
-        yaml_display = current_tasks_yaml[:limits.get('tasks_yaml')]
-        if len(current_tasks_yaml) > limits.get('tasks_yaml'):
+        yaml_display = current_tasks_yaml[:limits.get('max')]
+        if len(current_tasks_yaml) > limits.get('max'):
             yaml_display += '\n# (YAML truncated)'
         parts.append(f"""## Updated Tasks (edited by human)
 
@@ -127,8 +127,8 @@ def build_revision_prompt(
 {yaml_display}```""")
 
     if human_feedback:
-        fb_display = human_feedback[:limits.get('human_feedback')]
-        if len(human_feedback) > limits.get('human_feedback'):
+        fb_display = human_feedback[:limits.get('max')]
+        if len(human_feedback) > limits.get('max'):
             fb_display += '\n\n(feedback truncated)'
         parts.append(f"""## Human Feedback
 

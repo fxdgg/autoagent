@@ -704,8 +704,8 @@ class NestedTaskExecutor:
                     latest_fix = f"{latest_fix}\n\n{eval_context}".strip() if latest_fix else eval_context
 
             # Cap composite fix context to avoid oversized prompts
-            if latest_fix and len(latest_fix) > limits.get('nested_latest_fix'):
-                latest_fix = "(truncated)\n..." + latest_fix[-limits.get('nested_latest_fix'):]
+            if latest_fix and len(latest_fix) > limits.get('max'):
+                latest_fix = "(truncated)\n..." + latest_fix[-limits.get('max'):]
             
             parent_context = {
                 'subtasks': subtasks,
@@ -864,7 +864,7 @@ class NestedTaskExecutor:
                 decision_lines.append(
                     f"  - Round {d.get('attempt', '?')}: failed at {d.get('failed_at', '?')}, "
                     f"retried from {d.get('retry_from', '?')}\n"
-                    f"    Fix attempted: {d.get('suggested_fix', 'N/A')[:500]}"
+                    f"    Fix attempted: {d.get('suggested_fix', 'N/A')[:limits.get('max')]}"
                 )
             prev_decisions_text = "\n".join(decision_lines)
         
@@ -879,8 +879,9 @@ class NestedTaskExecutor:
         )
         print(f"\n   🤖 [AI Decision Point 1: Failure Analysis]")
         
-        # Always prepend system_prompt_prefix to user prompt
-        effective_prompt = prepend_system_prompt_prefix(prompt, task)
+        # NOTE: Do NOT prepend system_prompt_prefix here — failure analysis
+        # is a follow-up message in the same conversation context.
+        effective_prompt = prompt
 
         try:
             # Write prompt to log BEFORE calling AI (crash safety)
@@ -952,8 +953,8 @@ class NestedTaskExecutor:
             for ev in prev_evaluations[-3:]:
                 eval_lines.append(
                     f"  - Round {ev.get('round', '?')}: {'completed' if ev.get('completed') else 'not completed'}\n"
-                    f"    Analysis: {ev.get('analysis', 'N/A')[:300]}\n"
-                    f"    Strategy: {ev.get('next_strategy', 'N/A')[:200]}"
+                    f"    Analysis: {ev.get('analysis', 'N/A')[:limits.get('max')]}\n"
+                    f"    Strategy: {ev.get('next_strategy', 'N/A')[:limits.get('max')]}"
                 )
             prev_eval_section = "\n".join(eval_lines)
         
@@ -1043,22 +1044,23 @@ class NestedTaskExecutor:
                 f"status={item['status']}, attempts={item['attempts']}"
             )
             if item.get('completion_criteria'):
-                lines.append(f"    Criteria: {item['completion_criteria'][:200]}")
+                lines.append(f"    Criteria: {item['completion_criteria'][:limits.get('max')]}")
             if item.get('ai_reasoning'):
-                lines.append(f"    Summary: {item['ai_reasoning'][:300]}")
+                lines.append(f"    Summary: {item['ai_reasoning'][:limits.get('history_summary')]}")
         return "\n".join(lines)
 
     @staticmethod
     def _truncate_error(error_text: str, max_chars: int = None) -> str:
         """Truncate error text to avoid wasting tokens on overly long errors."""
         if max_chars is None:
-            max_chars = limits.get('error_text')
+            max_chars = limits.get('previous_subtask_summary')
         if not error_text:
             return "(no error output)"
         error_text = str(error_text)
         if len(error_text) <= max_chars:
             return error_text
         return f"(truncated, showing last {max_chars} chars)\n...{error_text[-max_chars:]}"
+
 
     def _format_execution_results(self, results: list) -> str:
         """Format execution results for prompt.
@@ -1076,7 +1078,7 @@ class NestedTaskExecutor:
                 # Never truncate criteria — evaluator must see them in full
                 lines.append(f"    Criteria: {r['completion_criteria']}")
             if r.get('ai_reasoning'):
-                lines.append(f"    Result: {r['ai_reasoning'][:500]}")
+                lines.append(f"    Result: {r['ai_reasoning'][:limits.get('history_summary')]}")
         return "\n".join(lines)
 
 
@@ -1206,8 +1208,8 @@ class LoopingTaskExecutor:
             ai_decisions = parent_state.get('ai_decisions', [])
             latest_fix = ai_decisions[-1].get('suggested_fix', '') if ai_decisions else ''
             # Cap fix context to avoid oversized prompts
-            if latest_fix and len(latest_fix) > limits.get('looping_latest_fix'):
-                latest_fix = "(truncated)\n..." + latest_fix[-limits.get('looping_latest_fix'):]
+            if latest_fix and len(latest_fix) > limits.get('max'):
+                latest_fix = "(truncated)\n..." + latest_fix[-limits.get('max'):]
 
             parent_context = {
                 'subtasks': subtasks,
@@ -1309,9 +1311,9 @@ class LoopingTaskExecutor:
                 f"  - {h['subtask_id']} ({h['name']}): status={h['status']}, attempts={h['attempts']}"
             )
             if h.get('completion_criteria'):
-                history_lines.append(f"    Criteria: {h['completion_criteria'][:200]}")
+                history_lines.append(f"    Criteria: {h['completion_criteria'][:limits.get('max')]}")
             if h.get('ai_reasoning'):
-                history_lines.append(f"    Summary: {h['ai_reasoning'][:300]}")
+                history_lines.append(f"    Summary: {h['ai_reasoning'][:limits.get('history_summary')]}")
         history_text = "\n".join(history_lines)
 
         # Include previous AI decisions for context
@@ -1325,7 +1327,7 @@ class LoopingTaskExecutor:
                 decision_lines.append(
                     f"  - Loop {d.get('loop', '?')}: failed at {d.get('failed_at', '?')}, "
                     f"retried from {d.get('retry_from', '?')}\n"
-                    f"    Fix attempted: {d.get('suggested_fix', 'N/A')[:500]}"
+                    f"    Fix attempted: {d.get('suggested_fix', 'N/A')[:limits.get('max')]}"
                 )
             prev_decisions_text = "\n".join(decision_lines)
 
@@ -1342,8 +1344,9 @@ class LoopingTaskExecutor:
 
         print(f"\n   🤖 [AI: Failure Analysis (loop {loop_idx})]")
 
-        # Always prepend system_prompt_prefix to user prompt
-        effective_prompt = prepend_system_prompt_prefix(prompt, task)
+        # NOTE: Do NOT prepend system_prompt_prefix here — failure analysis
+        # is a follow-up message in the same conversation context.
+        effective_prompt = prompt
 
         try:
             if conv_logger:
@@ -1410,7 +1413,7 @@ class LoopingTaskExecutor:
     def _truncate_error(error_text: str, max_chars: int = None) -> str:
         """Truncate error text to avoid wasting tokens on overly long errors."""
         if max_chars is None:
-            max_chars = limits.get('error_text')
+            max_chars = limits.get('previous_subtask_summary')
         if not error_text:
             return "(no error output)"
         error_text = str(error_text)
@@ -1950,7 +1953,7 @@ class SubtaskExecutor:
             if os.path.exists(output_log):
                 try:
                     content = _read_log_file_smart(output_log)
-                    _lf = limits.get('log_file')
+                    _lf = limits.get('previous_subtask_summary')
                     log_content = content[-_lf:] if len(content) > _lf else content
                 except Exception:
                     log_content = "(failed to read log file)"

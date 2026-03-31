@@ -324,7 +324,7 @@ def build_suggested_fix_section(parent_context: dict, fallback_msg: str = None) 
     """
     if parent_context and parent_context.get('suggested_fix'):
         fix_text = parent_context['suggested_fix']
-        max_len = limits.get('suggested_fix')
+        max_len = limits.get('max')
         if len(fix_text) > max_len:
             fix_text = f"(truncated, showing last {max_len} chars)\n..." + fix_text[-max_len:]
         return (

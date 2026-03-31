@@ -44,20 +44,14 @@ fast_fail_timeout: 30
 backoff_max_wait: 300
 
 # Truncation limits for auto-built prompts (in characters).
-# These cap the length of various fields embedded into AI prompts
-# to prevent context from growing too large.
+# Only 3 keys are used:
+#   previous_subtask_summary: for subtask summaries, error text, log files
+#   history_summary: for history attempt summaries, ai_reasoning
+#   max: defensive upper bound for fields that should not normally be truncated
 truncation_limits:
-  suggested_fix: 50000
+  previous_subtask_summary: 4000
   history_summary: 300
-  nested_latest_fix: 2000
-  looping_latest_fix: 1500
-  log_section: 6000
-  idea_content: 50000
-  tasks_yaml: 50000
-  review_feedback: 3000
-  human_feedback: 3000
-  error_text: 2000
-  log_file: 2000
+  max: 50000
 
 # Preset configurations
 # Each preset can define default values for command-line arguments.
