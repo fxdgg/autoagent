@@ -1,6 +1,6 @@
 # API 参考文档
 
-本文档提供 CodeBuddy Todo Orchestrator 的完整 API 参考。
+本文档提供 AutoAgent 的完整 API 参考。
 
 ## 目录
 
@@ -29,7 +29,8 @@ class TodoOrchestrator:
         state_file: str = None,
         provider: AIProvider = None,
         workspace: str = ".",
-        timeout: int = 300,
+        timeout: int = 3600,
+        bash_timeout: int = 300,
         log_dir: str = None,
         ideas_file: str = None,
         idle_interval: int = 30,
@@ -46,7 +47,8 @@ class TodoOrchestrator:
 | `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
 | `provider` | AIProvider | None | AI 提供者实例（支持 CodeBuddy/Claude/Gemini） |
 | `workspace` | str | "." | 工作目录（项目根目录） |
-| `timeout` | int | 300 | AI 会话超时时间（秒）。CLI 模式下，默认值来自 `config.yaml` 中的 `session_timeout`（默认 3600），CLI 参数 `--timeout` 可覆盖 |
+| `timeout` | int | 3600 | AI 会话超时时间（秒，总时间硬上限）。来自 `config.yaml` 中的 `session_timeout`，CLI 参数 `--timeout` 可覆盖 |
+| `bash_timeout` | int | 300 | 无新输出超时时间（秒）。如果 AI 在此时间内无新输出，会话将被终止，下次 prompt 会包含长时间任务引导 |
 | `log_dir` | str | None | 日志根目录（相对于 CWD，默认 `.autoagent`）|
 | `ideas_file` | str | None | ideas.md 文件路径（None 则禁用 ideas 监控） |
 | `idle_interval` | int | 30 | idle 模式检查间隔（秒） |
@@ -519,7 +521,7 @@ return False
 ```python
 class LoopingTaskExecutor:
     def __init__(self, session_dir: str = None, model_roles: dict = None)
-    def execute(self, task: dict, client: CodeBuddyClient) -> bool
+    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None) -> bool
 ```
 
 **构造函数参数**：
@@ -558,7 +560,7 @@ for loop in range(task['repeat_count']):
 ```python
 class NestedTaskExecutor:
     def __init__(self, session_dir: str = None, model_roles: dict = None)
-    def execute(self, task: dict, client: CodeBuddyClient) -> bool
+    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None) -> bool
 ```
 
 **构造函数参数**：
@@ -975,9 +977,8 @@ def parse_ideas(self) -> List[dict]
 
 ```python
 {
-    'title': str,     # 标题（来自 heading 或首行）
+    'title': str,     # 标题（从内容首行派生的短显示字符串）
     'content': str,   # 原始内容
-    'body': str,      # 正文（不含标题）
     'hash': str,      # SHA256 hash（前 16 位，用于去重）
 }
 ```
@@ -1324,26 +1325,17 @@ python orchestrator.py --no-skip
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `suggested_fix` | 1500 | AI 失败分析建议（保留尾部） |
-| `history_summary` | 300 | 历史尝试摘要 |
-| `nested_latest_fix` | 2000 | 嵌套任务的修复上下文（含 evaluation 建议） |
-| `looping_latest_fix` | 1500 | 循环任务的修复上下文 |
-| `log_section` | 6000 | 长时间任务日志汇总（保留头尾） |
-| `execution_results` | 4000 | 子任务执行结果汇总（保留头尾） |
-| `idea_content` | 8000 | Ideas 原文（保留头部） |
-| `tasks_yaml` | 10000 | 生成的任务 YAML（保留头部） |
-| `review_feedback` | 3000 | AI 审查反馈（保留头部） |
-| `human_feedback` | 3000 | 人工审核反馈（保留头部） |
-| `error_text` | 2000 | 错误信息 |
-| `log_file` | 2000 | 单个日志文件内容（保留尾部） |
+| `previous_subtask_summary` | 4000 | 子任务摘要、错误文本、日志文件的截断限制 |
+| `history_summary` | 300 | 历史尝试摘要、AI 推理记录的截断限制 |
+| `max` | 50000 | 防御性上限，用于不应被截断的字段 |
 
 ### 使用方式
 
 ```python
 from truncation_limits import limits
 
-max_len = limits.get('suggested_fix')  # 返回配置值或默认值
-limits.reload()                        # 重新从 config.yaml 加载
+max_len = limits.get('previous_subtask_summary')  # 返回配置值或默认值
+limits.reload()                                    # 重新从 config.yaml 加载
 ```
 
 所有字段都有内置默认值，`config.yaml` 中只需配置想调整的项。

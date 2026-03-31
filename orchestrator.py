@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CodeBuddy Todo Orchestrator - Main entry point.
+AutoAgent - Main entry point.
 
 An intelligent task orchestration system that uses CodeBuddy AI to
 automatically execute, evaluate, and iterate on tasks defined in YAML.
@@ -373,7 +373,7 @@ class TodoOrchestrator:
             tasks_to_run = self.todos
         
         print(f"{'=' * 60}")
-        print(f"  CodeBuddy Todo Orchestrator")
+        print(f"  AutoAgent")
         print(f"  Tasks to execute: {len(tasks_to_run)}")
         print(f"  Config: {self.todos_file}")
         print(f"  Provider: {self.provider.name}")
@@ -730,7 +730,7 @@ class TodoOrchestrator:
             skip_completed: Whether to skip already completed tasks
         """
         print(f"{'=' * 60}")
-        print(f"  CodeBuddy Todo Orchestrator (Idle Mode)")
+        print(f"  AutoAgent (Idle Mode)")
         print(f"  Config: {self.todos_file}")
         print(f"  Ideas: {self.ideas_watcher.ideas_file if self.ideas_watcher else 'disabled'}")
         print(f"  Provider: {self.provider.name}")

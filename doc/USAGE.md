@@ -1,6 +1,6 @@
 # 使用指南
 
-本文档提供 CodeBuddy Todo Orchestrator 的详细使用说明。
+本文档提供 AutoAgent 的详细使用说明。
 
 ## 目录
 
@@ -105,19 +105,14 @@ python orchestrator.py --preset debug --verbose
 
 ```yaml
 # config.yaml
+# Only 3 keys are used:
+#   previous_subtask_summary: for subtask summaries, error text, log files
+#   history_summary: for history attempt summaries, ai_reasoning
+#   max: defensive upper bound for fields that should not normally be truncated
 truncation_limits:
-  suggested_fix: 1500        # AI 失败分析建议
-  history_summary: 300       # 历史尝试摘要
-  nested_latest_fix: 2000    # 嵌套任务的修复上下文
-  looping_latest_fix: 1500   # 循环任务的修复上下文
-  log_section: 6000          # 长时间任务日志汇总
-  execution_results: 4000    # 子任务执行结果汇总
-  idea_content: 8000         # Ideas 原文
-  tasks_yaml: 10000          # 生成的任务 YAML
-  review_feedback: 3000      # AI 审查反馈
-  human_feedback: 3000       # 人工审核反馈
-  error_text: 2000           # 错误信息
-  log_file: 2000             # 单个日志文件内容
+  previous_subtask_summary: 4000  # 子任务摘要、错误文本、日志文件
+  history_summary: 300            # 历史尝试摘要、AI 推理记录
+  max: 50000                      # 防御性上限
 ```
 
 所有字段都有内置默认值，只需配置你想调整的项。

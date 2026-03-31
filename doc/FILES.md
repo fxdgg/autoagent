@@ -1,6 +1,6 @@
 # 项目文件说明
 
-本文档详细说明 CodeBuddy Todo Orchestrator 的项目结构和各个文件的作用。
+本文档详细说明 AutoAgent 的项目结构和各个文件的作用。
 
 ## 📁 目录结构
 
@@ -123,28 +123,23 @@ autoagent/
   bash_timeout: 300
 
   # Fast-fail timeout for autoagent-exec (in seconds).
-  # Default: 10. Configures how long autoagent-exec waits before
+  # Default: 30. Configures how long autoagent-exec waits before
   # treating a command as long-running.
-  fast_fail_timeout: 10
+  fast_fail_timeout: 30
 
   # Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
   # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
   backoff_max_wait: 300
 
   # Truncation limits for auto-built prompts (in characters)
+  # Only 3 keys are used:
+  #   previous_subtask_summary: for subtask summaries, error text, log files
+  #   history_summary: for history attempt summaries, ai_reasoning
+  #   max: defensive upper bound for fields that should not normally be truncated
   truncation_limits:
-    suggested_fix: 1500
+    previous_subtask_summary: 4000
     history_summary: 300
-    nested_latest_fix: 2000
-    looping_latest_fix: 1500
-    log_section: 6000
-    execution_results: 4000
-    idea_content: 8000
-    tasks_yaml: 10000
-    review_feedback: 3000
-    human_feedback: 3000
-    error_text: 2000
-    log_file: 2000
+    max: 50000
 
   # Preset configurations
   preset:
@@ -171,7 +166,7 @@ autoagent/
   - `default_model`: 默认 AI 模型，当 CLI `--model` 和 preset 均未指定时使用
   - `session_timeout`: 会话超时配置值（总时间硬上限）
   - `bash_timeout`: 无新输出超时配置值（检测 AI 卡住）
-  - `fast_fail_timeout`: autoagent-exec 快速失败超时时间（默认 10 秒），命令在此时间内退出则立即报告结果，否则转为后台运行
+  - `fast_fail_timeout`: autoagent-exec 快速失败超时时间（默认 30 秒），命令在此时间内退出则立即报告结果，否则转为后台运行
   - `backoff_max_wait`: AI CLI 连续失败时的最大退避等待时间（指数退避：5s→10s→20s→...→上限）
   - `truncation_limits`: 控制各类提示词字段的最大字符数，防止上下文过长
   - `preset`: 定义常用参数预设，通过 `--preset <name>` 快速切换配置

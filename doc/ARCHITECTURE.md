@@ -1,6 +1,6 @@
 # 架构设计文档
 
-本文档详细描述 CodeBuddy Todo Orchestrator 的架构设计。
+本文档详细描述 AutoAgent 的架构设计。
 
 ## 目录
 
@@ -1052,7 +1052,7 @@ bash autoagent-exec.sh <command...>
 | `--fast-fail-timeout` | 快速失败超时时间（秒），由 `config.yaml` 的 `fast_fail_timeout` 配置 |
 | `-- <command>` | 要执行的命令（`--` 之后的所有内容） |
 
-**快速失败检测机制**（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置，默认 10 秒）：
+**快速失败检测机制**（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置，默认 30 秒）：
 
 ```
 启动命令
@@ -1957,7 +1957,7 @@ python orchestrator.py --log-dir logs
 class IdeasWatcher:
     MAX_REVIEW_ROUNDS = 3  # Maximum AI review rounds before accepting
 
-    def __init__(self, ideas_file, todos_file, processed_state_file)
+    def __init__(self, ideas_file, todos_file, plans_state_file)
     def has_new_ideas(self) -> bool
     def parse_ideas(self) -> List[dict]
     def process_new_ideas(

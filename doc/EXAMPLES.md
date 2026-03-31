@@ -1,6 +1,6 @@
 # 示例和用例
 
-本文档提供 CodeBuddy Todo Orchestrator 的实际使用示例。
+本文档提供 AutoAgent 的实际使用示例。
 
 ## 目录
 
