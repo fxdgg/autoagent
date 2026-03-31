@@ -17,11 +17,19 @@ system_prompt_prefix: "You are an AI coding agent. You can read/write files, run
 # Supported models depend on the provider (e.g., codebuddy supports deepseek-v3.2, claude-*)
 default_model: glm-5.0-ioa
 
-# Timeout for each AI call (in seconds).
-# If an AI call exceeds this limit, the session is killed and the next
-# prompt will include a timeout notification with guidance on using
-# autoagent-exec for long-running commands.
-bash_timeout: 3600
+# Session timeout (in seconds).
+# If the total elapsed time of an AI session exceeds this limit, the
+# session is killed.  This is a hard cap on how long a single AI call
+# can run, regardless of whether the AI is actively producing output.
+# The AI will be told "Interrupted by user (Ctrl+C)" to avoid confusion.
+session_timeout: 3600
+
+# Bash timeout (in seconds).
+# If the AI produces no new output for this many seconds, the session
+# is killed.  This detects cases where the AI is stuck waiting for a
+# long-running command to finish.  The next prompt will include guidance
+# on using autoagent-exec for long-running commands.
+bash_timeout: 300
 
 # Fast-fail timeout for autoagent-exec (in seconds).
 # When a long-running task is launched via autoagent-exec, the script

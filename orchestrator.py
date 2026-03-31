@@ -103,7 +103,8 @@ class TodoOrchestrator:
         state_file: str = None,
         provider: AIProvider = None,
         workspace: str = ".",
-        timeout: int = 300,
+        timeout: int = 3600,
+        bash_timeout: int = 300,
         log_dir: str = None,
         ideas_file: str = None,
         idle_interval: int = 30,
@@ -123,7 +124,11 @@ class TodoOrchestrator:
                         from log_dir automatically.
             provider: AI provider instance (takes precedence over legacy params)
             workspace: Working directory for AI tool
-            timeout: Default timeout for AI calls
+            timeout: Default session timeout for AI calls (hard cap on
+                total session time).
+            bash_timeout: No-new-output timeout for AI calls.  If the AI
+                produces no new output for this many seconds, the session
+                is killed and the next prompt includes long-running guidance.
             log_dir: Root directory for all output files (conversation logs,
                      state files, orchestrator.log).  Defaults to ".autoagent"
                      relative to the current working directory.
@@ -141,6 +146,7 @@ class TodoOrchestrator:
         self.todos_file = todos_file
         self.workspace = os.path.abspath(workspace)
         self.timeout = timeout
+        self.bash_timeout = bash_timeout
         self.idle_interval = idle_interval
         self.use_cli = use_cli
         self.backoff_max_wait = backoff_max_wait
@@ -459,6 +465,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id=context_id,
             )
             # Set fallback paths so TestClient can execute autoagent-exec
@@ -473,6 +480,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id=context_id,
             )
             client._backoff_max = self.backoff_max_wait
@@ -481,6 +489,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id=context_id,
             )
             client._backoff_max = self.backoff_max_wait
@@ -639,6 +648,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id="ideas_processor",
             )
             # Review client uses the same TestProvider (shared rule sequence)
@@ -646,6 +656,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id="ideas_reviewer",
             )
         elif self.use_cli:
@@ -653,6 +664,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id="ideas_processor",
             )
             client._backoff_max = self.backoff_max_wait
@@ -660,6 +672,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id="ideas_reviewer",
             )
             review_client._backoff_max = self.backoff_max_wait
@@ -668,6 +681,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id="ideas_processor",
             )
             client._backoff_max = self.backoff_max_wait
@@ -675,6 +689,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id="ideas_reviewer",
             )
             review_client._backoff_max = self.backoff_max_wait
@@ -999,7 +1014,20 @@ def main():
 
     # Load config.yaml defaults
     config = _load_config()
-    default_timeout = config.get('bash_timeout', 300)
+    # session_timeout: hard cap on total AI session time (default 3600)
+    # For backward compatibility, also check the old 'bash_timeout' key
+    default_session_timeout = config.get('session_timeout',
+                                         config.get('bash_timeout', 3600))
+    # bash_timeout: no-new-output timeout (default 300)
+    default_bash_timeout = config.get('bash_timeout', 300)
+    # If config has the new session_timeout key, bash_timeout is independent;
+    # if only the old bash_timeout key exists, use it as session_timeout
+    # and fall back to 300 for the new bash_timeout.
+    if 'session_timeout' in config:
+        default_bash_timeout = config.get('bash_timeout', 300)
+    else:
+        # Old config: bash_timeout was actually session_timeout
+        default_bash_timeout = 300
 
     parser = argparse.ArgumentParser(
         description="AI-driven task execution system (supports CodeBuddy, Claude Code, Gemini CLI)",
@@ -1076,7 +1104,7 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         '--timeout',
         type=int,
         default=None,
-        help=f'Timeout for AI calls in seconds (default: {default_timeout}, from config.yaml)',
+        help=f'Session timeout for AI calls in seconds (default: {default_session_timeout}, from config.yaml session_timeout)',
     )
     parser.add_argument(
         '--status',
@@ -1310,15 +1338,17 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         logger.info(f"Using AI provider: {provider}")
         
         # Create orchestrator
-        # Resolve timeout: CLI arg > config.yaml > fallback 300
-        effective_timeout = args.timeout if args.timeout is not None else default_timeout
+        # Resolve timeout: CLI arg > config.yaml > fallback
+        effective_session_timeout = args.timeout if args.timeout is not None else default_session_timeout
+        effective_bash_timeout = default_bash_timeout
         backoff_max = config.get('backoff_max_wait', 300)
 
         orchestrator = TodoOrchestrator(
             todos_file=args.config,
             provider=provider,
             workspace=args.workspace,
-            timeout=effective_timeout,
+            timeout=effective_session_timeout,
+            bash_timeout=effective_bash_timeout,
             log_dir=_log_dir_raw,
             ideas_file=args.ideas,
             idle_interval=args.idle_interval,

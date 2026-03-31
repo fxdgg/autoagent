@@ -17,7 +17,7 @@ from typing import Optional, Tuple
 
 import yaml
 
-from codebuddy_client import AIClient, CodeBuddyClient, AICallError
+from codebuddy_client import AIClient, CodeBuddyClient, AICallError, BashTimeoutError, SessionTimeoutError
 from prompts.shared import build_system_prompt_coding_agent, prepend_system_prompt_prefix
 from prompts.simple_task import build_simple_task_prompt
 from prompts.long_running_task import (
@@ -219,6 +219,7 @@ class SimpleTaskExecutor:
         logger.info(f"Executing simple task {task_id}: {task['name']}")
         
         last_timeout_error = None  # Track if previous attempt timed out
+        last_timeout_type = None   # "bash" or "session"
         
         while attempts < max_attempts:
             attempts += 1
@@ -238,8 +239,10 @@ class SimpleTaskExecutor:
                 task, attempts, current_state,
                 parent_context=parent_context,
                 timeout_feedback=last_timeout_error,
+                timeout_type=last_timeout_type,
             )
-            last_timeout_error = None  # Reset after injecting into prompt            
+            last_timeout_error = None  # Reset after injecting into prompt
+            last_timeout_type = None
             try:
                 # Write prompt to log BEFORE calling AI (crash safety)
                 system_prompt = build_system_prompt_coding_agent(
@@ -327,10 +330,14 @@ class SimpleTaskExecutor:
                 logger.error(f"AI call failed for task {task_id}: {e}")
                 print(f"   ❌ AI call error: {e}")
                 # Detect timeout errors so we can inject feedback in the next prompt
-                error_str = str(e).lower()
-                if "timed out" in error_str or "timeout" in error_str:
+                if isinstance(e, BashTimeoutError):
                     last_timeout_error = str(e)
-                    print(f"   ⏰ Timeout detected — next attempt will include long-running task guidance")
+                    last_timeout_type = "bash"
+                    print(f"   ⏰ Bash timeout detected — next attempt will include long-running task guidance")
+                elif isinstance(e, SessionTimeoutError):
+                    last_timeout_error = str(e)
+                    last_timeout_type = "session"
+                    print(f"   ⏰ Session timeout detected — next attempt will continue where left off")
                 # Append error as response (prompt was already logged above)
                 if conv_logger:
                     conv_logger.log_response(
@@ -354,7 +361,7 @@ class SimpleTaskExecutor:
         )
         return False
 
-    def _build_prompt(self, task: dict, attempt: int, state: dict, parent_context: dict = None, timeout_feedback: str = None) -> tuple:
+    def _build_prompt(self, task: dict, attempt: int, state: dict, parent_context: dict = None, timeout_feedback: str = None, timeout_type: str = None) -> tuple:
         """Build the prompt for AI.
         
         Delegates to ``prompts.simple_task.build_simple_task_prompt``.
@@ -389,6 +396,7 @@ class SimpleTaskExecutor:
             extract_summary_fn=self._extract_summary,
             parent_context=parent_context,
             timeout_feedback=timeout_feedback,
+            timeout_type=timeout_type,
             exec_script_path=exec_script_path,
         ), exec_script_path
 

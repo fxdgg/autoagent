@@ -46,7 +46,7 @@ class TodoOrchestrator:
 | `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
 | `provider` | AIProvider | None | AI 提供者实例（支持 CodeBuddy/Claude/Gemini） |
 | `workspace` | str | "." | 工作目录（项目根目录） |
-| `timeout` | int | 300 | AI 调用超时时间（秒）。CLI 模式下，默认值来自 `config.yaml` 中的 `bash_timeout`（默认 3600），CLI 参数 `--timeout` 可覆盖 |
+| `timeout` | int | 300 | AI 会话超时时间（秒）。CLI 模式下，默认值来自 `config.yaml` 中的 `session_timeout`（默认 3600），CLI 参数 `--timeout` 可覆盖 |
 | `log_dir` | str | None | 日志根目录（相对于 CWD，默认 `.autoagent`）|
 | `ideas_file` | str | None | ideas.md 文件路径（None 则禁用 ideas 监控） |
 | `idle_interval` | int | 30 | idle 模式检查间隔（秒） |
@@ -1226,7 +1226,7 @@ class AICallError(Exception):
 | `--codebuddy-path` | - | None | （Legacy）CodeBuddy 可执行文件路径，建议用 `--provider` + `--executable` |
 | `--model` | `-m` | 取决于 provider | AI 模型。支持单模型（如 `glm-5`）和多角色格式（如 `"plan:X;default:Y;simple:Z"`）。codebuddy 默认从 config.yaml 的 `default_model` 加载 |
 | `--workspace` | `-w` | `.` | 工作目录 |
-| `--timeout` | - | 3600 | AI 调用超时时间（秒），默认值来自 `config.yaml` 的 `bash_timeout`（如果 config.yaml 不存在则为 300） |
+| `--timeout` | - | 3600 | AI 会话超时时间（秒），默认值来自 `config.yaml` 的 `session_timeout`（如果 config.yaml 不存在则为 3600） |
 | `--log-dir` | - | `.autoagent` | 日志根目录（相对于 CWD） |
 | `--ideas` | - | None | ideas.md 文件路径 |
 | `--ideas-only` | - | - | 只处理 ideas.md（带人工审核），不运行 todo list（需搭配 `--ideas`） |

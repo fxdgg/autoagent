@@ -50,7 +50,8 @@ opencode --version
 
 ```yaml
 # config.yaml
-bash_timeout: 3600
+session_timeout: 3600  # Hard cap on total AI session time (seconds)
+bash_timeout: 300      # No-new-output timeout (seconds)
 
 # Fast-fail timeout for autoagent-exec (in seconds, default: 10)
 fast_fail_timeout: 10

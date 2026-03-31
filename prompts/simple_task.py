@@ -20,6 +20,7 @@ def build_simple_task_prompt(
     extract_summary_fn,
     parent_context: dict = None,
     timeout_feedback: str = None,
+    timeout_type: str = None,
     exec_script_path: str = "",
 ) -> str:
     """Build the prompt sent to AI for a simple task execution.
@@ -37,6 +38,9 @@ def build_simple_task_prompt(
             - main_task_criteria: completion criteria of the parent task
         timeout_feedback: If set, the previous AI call timed out.  This
             string contains the error message.
+        timeout_type: Either ``"bash"`` (no output for N seconds) or
+            ``"session"`` (total session time exceeded).  Determines
+            the style of timeout guidance injected into the prompt.
         exec_script_path: Absolute path to the generated ``autoagent-exec``
             convenience script (forward-slash normalised).
     """
@@ -77,6 +81,7 @@ def build_simple_task_prompt(
             build_timeout_guidance(
                 exec_script_path=exec_script_path,
                 timeout_feedback=timeout_feedback,
+                timeout_type=timeout_type or "bash",
             )
         )
 

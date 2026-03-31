@@ -373,15 +373,34 @@ def build_previous_subtask_section(parent_context: dict) -> str:
 def build_timeout_guidance(
     exec_script_path: str,
     timeout_feedback: str,
+    timeout_type: str = "bash",
 ) -> str:
-    """Build the detailed timeout-warning section.
+    """Build the timeout-warning section.
 
-    Injected when the previous AI call timed out so the AI learns to use
-    ``autoagent-exec`` for long-running commands.
+    Args:
+        exec_script_path: Path to the autoagent-exec wrapper script.
+        timeout_feedback: Human-readable description of the timeout event.
+        timeout_type: Either ``"bash"`` (no output for N seconds — guide
+            the AI to use autoagent-exec) or ``"session"`` (total session
+            time exceeded — tell the AI it was interrupted by the user).
     """
+    if timeout_type == "session":
+        # Session timeout: the total session time exceeded the limit.
+        # Tell the AI it was interrupted by the user (Ctrl+C) so it
+        # doesn't try to guess the reason or blame a specific command.
+        return (
+            f"**Interrupted by user (Ctrl+C).** "
+            f"The previous session was terminated before completion. "
+            f"Please continue where you left off."
+        )
+
+    # bash timeout: the AI produced no new output for a long time,
+    # which usually means a long-running command is blocking the session.
     return (
         f"**\u23f0 TIMEOUT WARNING:** The previous session timed out "
-        f"({timeout_feedback}). The session was terminated before completion.\n\n"
+        f"({timeout_feedback}). The session was terminated because no new "
+        f"output was produced for an extended period, which usually means "
+        f"a long-running command was blocking the session.\n\n"
         f"If your task requires running a command that takes more than a few "
         f"minutes (e.g. compilation, benchmarking, data processing), you MUST "
         f"use the `autoagent-exec` launcher to run it as a background task:\n\n"

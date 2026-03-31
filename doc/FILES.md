@@ -16,7 +16,7 @@ autoagent/
 │   └── FILES.md                 # 本文件：项目文件说明
 ├── requirements.txt             # Python 依赖列表
 ├── .gitignore                   # Git 忽略规则
-├── config.yaml                  # 全局配置（bash_timeout 等）
+├── config.yaml                  # 全局配置（session_timeout, bash_timeout 等）
 ├── todos.example.yaml           # 任务配置示例
 ├── TASK_DESIGN_GUIDE.md         # 任务设计指南（供 AI 参考）
 │
@@ -115,8 +115,12 @@ autoagent/
   # Default AI model (used when no model is specified via CLI --model or preset)
   default_model: glm-5.0-ioa
 
-  # Timeout for each AI call (in seconds).
-  bash_timeout: 3600
+  # Session timeout (hard cap on total AI session time, in seconds).
+  session_timeout: 3600
+
+  # Bash timeout (no-new-output timeout, in seconds).
+  # If the AI produces no new output for this many seconds, the session is killed.
+  bash_timeout: 300
 
   # Fast-fail timeout for autoagent-exec (in seconds).
   # Default: 10. Configures how long autoagent-exec waits before
@@ -165,7 +169,8 @@ autoagent/
 - **用途**：
   - `system_prompt_prefix`: 全局系统提示词前缀，附加到所有任务的系统提示词中，可在 todos.yaml 中按任务覆盖
   - `default_model`: 默认 AI 模型，当 CLI `--model` 和 preset 均未指定时使用
-  - `bash_timeout`: 提供默认超时配置值
+  - `session_timeout`: 会话超时配置值（总时间硬上限）
+  - `bash_timeout`: 无新输出超时配置值（检测 AI 卡住）
   - `fast_fail_timeout`: autoagent-exec 快速失败超时时间（默认 10 秒），命令在此时间内退出则立即报告结果，否则转为后台运行
   - `backoff_max_wait`: AI CLI 连续失败时的最大退避等待时间（指数退避：5s→10s→20s→...→上限）
   - `truncation_limits`: 控制各类提示词字段的最大字符数，防止上下文过长
