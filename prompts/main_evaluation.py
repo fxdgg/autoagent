@@ -7,12 +7,17 @@ in task_executor.py.
 
 from typing import List
 
+# Role definition for main-task evaluation prompts
+ROLE_MAIN_EVALUATOR = (
+    "You are a task evaluation expert. Evaluate whether the main task's "
+    "completion criteria have been fully met based on the execution results."
+)
+
 
 def build_main_evaluation_prompt(
     task: dict,
     subtasks: list,
     execution_results_text: str,
-    log_section: str,
     prev_eval_section: str,
 ) -> str:
     """Build the prompt that asks AI to evaluate main-task completion.
@@ -22,37 +27,43 @@ def build_main_evaluation_prompt(
         subtasks: All subtask dicts (used for available IDs).
         execution_results_text: Pre-formatted execution results block
             (from ``_format_execution_results``).
-        log_section: Pre-formatted log-file contents section (may be empty).
         prev_eval_section: Pre-formatted previous evaluations section
             (may be empty).
     """
     available_ids = [str(s['id']) for s in subtasks]
 
-    return f"""All subtasks are completed. Please evaluate whether the main task is finished.
+    parts = [ROLE_MAIN_EVALUATOR]
+
+    # -- ## Evaluation Context --
+    parts.append(f"""## Evaluation Context
 
 Main Task: {task['name']}
-Completion Criteria: {task['completion_criteria']}
+Completion Criteria: {task['completion_criteria']}""")
 
-Execution Results:
-{execution_results_text}
-{log_section}
-{prev_eval_section}
+    # -- ## Execution Results --
+    parts.append(f"## Execution Results\n\n{execution_results_text}")
 
-Please respond in the following JSON format:
+    # -- ## Previous Evaluations (conditional) --
+    if prev_eval_section:
+        parts.append(f"## Previous Evaluations\n\n{prev_eval_section}")
+
+    # -- ## Instructions --
+    parts.append(f"""## Instructions
+
+Evaluate whether ALL completion criteria are met based on the execution results above.
+
+Respond with a JSON object:
 ```json
 {{
     "main_task_completed": true/false,
-    "analysis": "Detailed analysis of results vs criteria",
-    "retry_from": "<subtask_id to restart from>",
-    "next_strategy": "Strategy for next round if not completed",
-    "suggested_improvements": ["improvement 1", "improvement 2"],
-    "confidence": "high/medium/low"
+    "analysis": "Detailed analysis of results vs each criterion",
+    "retry_from": "<subtask_id>",
+    "next_strategy": "What to do differently in the next round"
 }}
 ```
 
-Important: 
-- Set main_task_completed to true ONLY if ALL completion criteria are met.
-- If not completed, retry_from should be the subtask ID to restart from.
-- If not completed, next_strategy and suggested_improvements will be passed to the AI executing the next round, so be specific.
-- Available subtask IDs: {available_ids}
-"""
+- `retry_from` and `next_strategy`: Only required when `main_task_completed` is false.
+- `next_strategy`: Will be passed to the AI executing the next round — be specific and actionable.
+- Available subtask IDs: {available_ids}""")
+
+    return "\n\n".join(parts)

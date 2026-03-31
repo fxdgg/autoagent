@@ -695,9 +695,6 @@ class NestedTaskExecutor:
             if evaluations:
                 last_eval = evaluations[-1]
                 eval_context_parts = []
-                improvements = last_eval.get('suggested_improvements', [])
-                if improvements:
-                    eval_context_parts.append("Suggested improvements from previous evaluation:\n" + "\n".join(f"  - {imp}" for imp in improvements))
                 if last_eval.get('next_strategy'):
                     eval_context_parts.append(f"Strategy from previous evaluation: {last_eval['next_strategy']}")
                 if eval_context_parts:
@@ -763,9 +760,7 @@ class NestedTaskExecutor:
                         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "failed_at": subtask_id,
                         "retry_from": retry_from,
-                        "reasoning": ai_decision.get('reasoning', ''),
                         "suggested_fix": ai_decision.get('suggested_fix', ''),
-                        "confidence": ai_decision.get('confidence', 'unknown'),
                     })
                     
                     break  # Break subtask loop, start new round
@@ -816,7 +811,6 @@ class NestedTaskExecutor:
                     "completed": False,
                     "analysis": ai_evaluation.get('analysis', ''),
                     "next_strategy": ai_evaluation.get('next_strategy', ''),
-                    "suggested_improvements": ai_evaluation.get('suggested_improvements', []),
                     "retry_from": retry_from,
                 })
         
@@ -837,7 +831,7 @@ class NestedTaskExecutor:
         AI Decision Point 1: Analyze subtask failure.
         
         Returns:
-            dict with keys: analysis, retry_from, reasoning, suggested_fix, confidence
+            dict with keys: analysis, retry_from, suggested_fix
         """
         task_id = str(task['id'])
         failed_id = str(failed_subtask['id'])
@@ -868,9 +862,9 @@ class NestedTaskExecutor:
                 decision_lines.append(
                     f"  - Round {d.get('attempt', '?')}: failed at {d.get('failed_at', '?')}, "
                     f"retried from {d.get('retry_from', '?')}\n"
-                    f"    Fix attempted: {d.get('suggested_fix', 'N/A')[:200]}"
+                    f"    Fix attempted: {d.get('suggested_fix', 'N/A')[:500]}"
                 )
-            prev_decisions_text = f"\nPrevious Failure Analyses:\n" + "\n".join(decision_lines)
+            prev_decisions_text = "\n".join(decision_lines)
         
         prompt = build_nested_failure_analysis_prompt(
             task=task,
@@ -916,9 +910,7 @@ class NestedTaskExecutor:
             return {
                 "analysis": f"AI analysis failed: {e}",
                 "retry_from": failed_id,
-                "reasoning": "Default: retry from failed subtask",
                 "suggested_fix": "Retry the same subtask",
-                "confidence": "low",
             }
 
     def _ai_evaluate_main_task(
@@ -929,8 +921,7 @@ class NestedTaskExecutor:
         AI Decision Point 2: Evaluate main task completion.
         
         Returns:
-            dict with keys: main_task_completed, analysis, retry_from, 
-                           next_strategy, suggested_improvements, confidence
+            dict with keys: main_task_completed, analysis, retry_from, next_strategy
         """
         task_id = str(task['id'])
         
@@ -950,40 +941,6 @@ class NestedTaskExecutor:
                 "history": st_state.get('history', [])[-3:],  # Last 3 entries
             })
         
-        # Check for log files of long_running subtasks
-        # Long-running task logs are now stored in the log session directory.
-        # We look for signal files to find the output log paths.
-        log_contents = {}
-        for st in subtasks:
-            if st.get('type') == 'long_running':
-                st_id = str(st['id'])
-                # Try to find the output log via the signal file
-                try:
-                    session_dir = self.session_dir
-                    if not session_dir:
-                        continue
-                    signal_file = os.path.join(session_dir, "lr_tasks", f"lr_{st_id}_signal.json")
-                    if os.path.exists(signal_file):
-                        with open(signal_file, 'r', encoding='utf-8') as f:
-                            signal_data = json.load(f)
-                        output_log = signal_data.get('output_log', '')
-                        if output_log and os.path.exists(output_log):
-                            content = _read_log_file_smart(output_log)
-                            _lf = limits.get('log_file')
-                            log_contents[st_id] = content[-_lf:] if len(content) > _lf else content
-                except Exception:
-                    pass
-        
-        log_section = ""
-        if log_contents:
-            log_section = "\nRelevant Log Files:\n"
-            for st_id, content in log_contents.items():
-                log_section += f"\n--- lr_{st_id}_output.log (last part) ---\n{content}\n"
-            # Cap total log section to prevent oversized prompts with many subtasks
-            _ls = limits.get('log_section')
-            if len(log_section) > _ls:
-                log_section = log_section[:200] + "\n...(log section truncated)...\n" + log_section[-(_ls - 200):]
-        
         # Build previous evaluations section for context
         parent_state = state_manager.get_task_state(task_id)
         prev_evaluations = parent_state.get('main_task_evaluations', [])
@@ -996,16 +953,12 @@ class NestedTaskExecutor:
                     f"    Analysis: {ev.get('analysis', 'N/A')[:300]}\n"
                     f"    Strategy: {ev.get('next_strategy', 'N/A')[:200]}"
                 )
-                improvements = ev.get('suggested_improvements', [])
-                if improvements:
-                    eval_lines.append(f"    Improvements: {', '.join(improvements[:5])}")
-            prev_eval_section = "\nPrevious Evaluations:\n" + "\n".join(eval_lines)
+            prev_eval_section = "\n".join(eval_lines)
         
         prompt = build_main_evaluation_prompt(
             task=task,
             subtasks=subtasks,
             execution_results_text=self._format_execution_results(execution_results),
-            log_section=log_section,
             prev_eval_section=prev_eval_section,
         )
         
@@ -1047,8 +1000,6 @@ class NestedTaskExecutor:
                 "analysis": f"AI evaluation failed: {e}",
                 "retry_from": str(subtasks[0]['id']),
                 "next_strategy": "Retry all subtasks",
-                "suggested_improvements": [],
-                "confidence": "low",
             }
 
     def _reset_subtasks_from(self, retry_from: str, subtasks: list, state_manager):
@@ -1311,7 +1262,6 @@ class LoopingTaskExecutor:
                         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "failed_at": subtask_id,
                         "retry_from": retry_from,
-                        "reasoning": ai_decision.get('reasoning', ''),
                         "suggested_fix": ai_decision.get('suggested_fix', ''),
                     })
 
@@ -1333,7 +1283,7 @@ class LoopingTaskExecutor:
         AI analyzes subtask failure and decides retry strategy.
 
         Returns:
-            dict with keys: analysis, retry_from, reasoning, suggested_fix
+            dict with keys: analysis, retry_from, suggested_fix
         """
         task_id = str(task['id'])
         failed_id = str(failed_subtask['id'])
@@ -1374,9 +1324,9 @@ class LoopingTaskExecutor:
                 decision_lines.append(
                     f"  - Loop {d.get('loop', '?')}: failed at {d.get('failed_at', '?')}, "
                     f"retried from {d.get('retry_from', '?')}\n"
-                    f"    Fix attempted: {d.get('suggested_fix', 'N/A')[:200]}"
+                    f"    Fix attempted: {d.get('suggested_fix', 'N/A')[:500]}"
                 )
-            prev_decisions_text = f"\nPrevious Failure Analyses:\n" + "\n".join(decision_lines)
+            prev_decisions_text = "\n".join(decision_lines)
 
         prompt = build_looping_failure_analysis_prompt(
             task=task,
@@ -1423,7 +1373,6 @@ class LoopingTaskExecutor:
             return {
                 "analysis": f"AI analysis failed: {e}",
                 "retry_from": failed_id,
-                "reasoning": "Default: retry from failed subtask",
                 "suggested_fix": "Retry the same subtask",
             }
 

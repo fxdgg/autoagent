@@ -39,8 +39,7 @@ from truncation_limits import limits
 from prompts.ideas_decompose import build_ideas_decompose_prompt
 from prompts.ideas_review import (
     build_ideas_review_prompt,
-    build_ideas_revision_prompt,
-    build_human_feedback_revision_prompt,
+    build_revision_prompt,
 )
 
 logger = logging.getLogger(__name__)
@@ -615,15 +614,10 @@ class IdeasWatcher:
                             print(f"   🔧 Reviewer directly revised tasks (round {review_round})")
                             tasks = revised_tasks
                         else:
-                            print(f"   🔄 Review rejected (round {review_round}), requesting revision...")
-                            result, tasks = self._revise_tasks(
-                                client, idea, review_feedback,
-                                conv_logger=conv_logger,
-                                revision_round=review_round,
-                            )
-                            if not tasks:
-                                logger.warning(f"Revision round {review_round} produced no tasks")
-                                break
+                            print(f"   🔄 Review rejected (round {review_round}), but reviewer did not provide revised tasks.")
+                            # Reviewer didn't write a corrected file — accept current tasks
+                            # (the reviewer's feedback is lost since we don't send it to planner anymore)
+                            break
                 else:
                     print(
                         f"   ⚠️  Max review rounds ({self.MAX_REVIEW_ROUNDS}) reached, "
@@ -648,20 +642,35 @@ class IdeasWatcher:
                     print(f"   ⚠️  Max validation retries ({self.MAX_VALIDATION_RETRIES}) exceeded, accepting current tasks")
                     break
 
-                # Feed validation errors back as review feedback
+                # Feed validation errors back as review feedback for the reviewer to fix
                 validation_feedback = (
                     f"Schema validation failed with the following errors:\n"
                     f"{error_text}\n\n"
                     f"Please fix these issues. Every task must conform to the schema."
                 )
-                print(f"   🔄 Sending validation errors to AI for revision...")
-                result, tasks = self._revise_tasks(
-                    client, idea, validation_feedback,
-                    conv_logger=conv_logger,
-                    revision_round=validation_attempt,
+                print(f"   🔄 Sending validation errors to reviewer for revision...")
+
+                # Send to the reviewer (same session) to fix
+                self._cleanup_temp_file()
+                temp_tasks_path = self._get_temp_tasks_path()
+                revision_prompt = build_revision_prompt(
+                    temp_tasks_path=temp_tasks_path,
+                    human_feedback=validation_feedback,
                 )
-                if not tasks:
-                    logger.warning(f"Validation-retry revision produced no tasks")
+                try:
+                    if conv_logger:
+                        conv_logger.log_ideas_revision_prompt(validation_attempt, revision_prompt)
+                    revision_result = review_client.ask(revision_prompt)
+                    if conv_logger:
+                        conv_logger.log_ideas_revision_response(revision_result)
+                    tasks = self._read_tasks_from_temp_file()
+                    if tasks is None:
+                        logger.info("Temp file not found after validation-retry revision, falling back to response text parsing")
+                        tasks = self._extract_yaml_tasks(revision_result)
+                    self._cleanup_temp_file()
+                    result = revision_result
+                except AICallError as e:
+                    logger.error(f"AI call failed during validation-retry revision: {e}")
                     break
                 # Loop back to AI review + validation
 
@@ -716,25 +725,10 @@ class IdeasWatcher:
         except OSError as e:
             logger.warning(f"Failed to write temp file for reviewer: {e}")
 
-        last_feedback_section = ""
-        if last_feedback:
-            _rf = limits.get('review_feedback')
-            if len(last_feedback) > _rf:
-                last_feedback = last_feedback[:_rf] + "\n\n(previous feedback truncated)"
-            last_feedback_section = f"""## Last Feedback
-
-The following feedback was provided in the previous review round. Check whether
-the issues have been addressed:
-
-{last_feedback}
-
-"""
-
         review_prompt = build_ideas_review_prompt(
             idea_content=idea['content'],
             tasks_yaml=tasks_yaml,
             temp_tasks_path=temp_tasks_path,
-            last_feedback_section=last_feedback_section,
         )
 
         try:
@@ -763,55 +757,6 @@ the issues have been addressed:
             self._cleanup_temp_file()
             # On review failure, accept the tasks to avoid blocking
             return True, "", None
-
-    def _revise_tasks(
-        self,
-        client: CodeBuddyClient,
-        idea: dict,
-        review_feedback: str,
-        conv_logger: ConversationLogger = None,
-        revision_round: int = 1,
-    ) -> tuple:
-        """
-        Send review feedback back to the original AI for task revision.
-        
-        Args:
-            client: Original CodeBuddyClient (with existing context)
-            idea: Original idea dict
-            review_feedback: Feedback from the reviewer AI
-            conv_logger: Optional ConversationLogger
-            revision_round: 1-based revision round number
-            
-        Returns:
-            tuple: (raw_response: str, tasks: List[dict])
-        """
-        temp_tasks_path = self._get_temp_tasks_path()
-        self._cleanup_temp_file()
-
-        revision_prompt = build_ideas_revision_prompt(
-            review_feedback=review_feedback,
-            temp_tasks_path=temp_tasks_path,
-        )
-
-        try:
-            if conv_logger:
-                conv_logger.log_ideas_revision_prompt(revision_round, revision_prompt)
-
-            result = client.ask(revision_prompt)
-
-            if conv_logger:
-                conv_logger.log_ideas_revision_response(result)
-
-            tasks = self._read_tasks_from_temp_file()
-            if tasks is None:
-                logger.info("Temp file not found or empty after revision, falling back to response text parsing")
-                tasks = self._extract_yaml_tasks(result)
-            self._cleanup_temp_file()
-            return result, tasks
-
-        except AICallError as e:
-            logger.error(f"AI call failed for idea revision: {e}")
-            raise
 
     @staticmethod
     def _check_review_passed(review_response: str) -> bool:
@@ -860,14 +805,16 @@ the issues have been addressed:
         """
         Pause for human review after AI review passes.
         
-        Displays the generated tasks and waits for human input:
-        - 'y': Accept the tasks and continue
-        - 'n': Human provides feedback, AI revises, AI re-reviews, then
-               pauses for human review again
+        Flow when human rejects:
+        1. Human provides feedback and/or edits the temp YAML file
+        2. Revision prompt is sent to the **same reviewer** (session preserved)
+        3. Reviewer revises the tasks
+        4. A **new reviewer** (fresh session) reviews the revised tasks
+        5. Human reviews again
         
         Args:
             client: Original CodeBuddyClient (with existing context)
-            review_client: CodeBuddyClient for AI review (fresh context)
+            review_client: CodeBuddyClient for AI review
             idea: Original idea dict
             tasks: Current parsed task list
             raw_yaml_response: Raw YAML response from the last AI call
@@ -925,7 +872,6 @@ the issues have been addressed:
                         for e in errors:
                             print(f"      • {e}")
                         print(f"   Please fix the errors and try again.")
-                        # Restore tasks in temp file and loop back
                         continue
                 else:
                     print(f"   ✅ Human approved the tasks.")
@@ -933,13 +879,16 @@ the issues have been addressed:
             elif choice == 'n':
                 # Check if human already edited the temp file
                 edited_tasks = self._read_tasks_from_temp_file()
-                temp_file_loaded = False
+                human_edited_yaml = ""
                 if edited_tasks is not None:
-                    # Human edited the file — validate and use it
+                    # Human edited the file — validate it
                     valid, errors = self._validate_tasks_schema(edited_tasks)
                     if valid:
                         tasks = edited_tasks
-                        temp_file_loaded = True
+                        human_edited_yaml = yaml.dump(
+                            tasks, Dumper=_BlockStyleDumper, default_flow_style=False,
+                            allow_unicode=True, sort_keys=False,
+                        )
                         print(f"   📝 Loaded human-edited tasks from temp file.")
                     else:
                         print(f"   ⚠️  Temp file has schema errors:")
@@ -947,7 +896,7 @@ the issues have been addressed:
                             print(f"      • {e}")
                         print(f"   Please fix the errors and try again, or provide text feedback below.")
 
-                # Get human feedback prompt for AI reviewer
+                # Get human text feedback
                 print(f"   Please provide your feedback for AI reviewer (end with an empty line, or leave empty to skip):")
                 feedback_lines = []
                 try:
@@ -962,56 +911,56 @@ the issues have been addressed:
 
                 human_feedback = '\n'.join(feedback_lines) if feedback_lines else ''
 
-                if not human_feedback and not temp_file_loaded:
+                if not human_feedback and not human_edited_yaml:
                     print(f"   ⚠️  No feedback provided and no file edits detected, please try again.")
                     continue
 
-                if human_feedback:
-                    revision_counter += 1
+                revision_counter += 1
 
-                    # Log human feedback
+                # Log human feedback
+                if conv_logger:
+                    log_parts = []
+                    if human_edited_yaml:
+                        log_parts.append(f"[Human edited YAML]")
+                    if human_feedback:
+                        log_parts.append(f"[Human Feedback]\n{human_feedback}")
+                    conv_logger.log_ideas_revision_prompt(
+                        revision_counter,
+                        '\n'.join(log_parts),
+                    )
+
+                # Step 3-4: Send revision prompt to the SAME reviewer
+                print(f"   🔄 Sending human feedback to reviewer for revision...")
+                self._cleanup_temp_file()
+
+                revision_prompt = build_revision_prompt(
+                    temp_tasks_path=temp_tasks_path,
+                    human_feedback=human_feedback,
+                    current_tasks_yaml=human_edited_yaml,
+                )
+                try:
+                    result = review_client.ask(revision_prompt)
+
                     if conv_logger:
-                        conv_logger.log_ideas_revision_prompt(
-                            revision_counter,
-                            f"[Human Feedback]\n{human_feedback}",
-                        )
+                        conv_logger.log_ideas_revision_response(result)
 
-                    print(f"   🔄 Sending human feedback to AI for revision...")
-
-                    # Send human feedback to AI for revision
+                    tasks = self._read_tasks_from_temp_file()
+                    if tasks is None:
+                        logger.info("Temp file not found after reviewer revision, falling back to response text parsing")
+                        tasks = self._extract_yaml_tasks(result)
                     self._cleanup_temp_file()
 
-                    # Build revision prompt with current tasks context
-                    current_tasks_yaml = yaml.dump(
-                        tasks, Dumper=_BlockStyleDumper, default_flow_style=False,
-                        allow_unicode=True, sort_keys=False,
-                    )
-                    revision_prompt = build_human_feedback_revision_prompt(
-                        current_tasks_yaml=current_tasks_yaml,
-                        human_feedback=human_feedback,
-                        temp_tasks_path=temp_tasks_path,
-                    )
-                    try:
-                        result = client.ask(revision_prompt)
-
-                        if conv_logger:
-                            conv_logger.log_ideas_revision_response(result)
-
-                        tasks = self._read_tasks_from_temp_file()
-                        if tasks is None:
-                            logger.info("Temp file not found after human-feedback revision, falling back to response text parsing")
-                            tasks = self._extract_yaml_tasks(result)
-                        if not tasks:
-                            print(f"   ⚠️  AI revision produced no valid tasks, keeping previous version.")
-                            continue
-
-                    except AICallError as e:
-                        logger.error(f"AI call failed during human-feedback revision: {e}")
-                        print(f"   ❌ AI revision failed: {e}")
-                        print(f"   Keeping previous version.")
+                    if not tasks:
+                        print(f"   ⚠️  Reviewer revision produced no valid tasks, keeping previous version.")
                         continue
 
-                # Re-run AI review + schema validation on the (possibly revised) tasks
+                except AICallError as e:
+                    logger.error(f"AI call failed during reviewer revision: {e}")
+                    print(f"   ❌ Reviewer revision failed: {e}")
+                    print(f"   Keeping previous version.")
+                    continue
+
+                # Step 5: New reviewer reviews the revised tasks
                 tasks, result = self._review_and_validate_loop(
                     client, review_client, idea, tasks, result,
                     conv_logger=conv_logger,

@@ -10,6 +10,8 @@ from prompts.shared import (
     build_history_section,
     build_previous_subtask_section,
     build_suggested_fix_section,
+    build_timeout_guidance,
+    build_long_running_reminder,
 )
 
 
@@ -20,8 +22,17 @@ def build_long_running_prompt(
     state: dict,
     extract_summary_fn,
     parent_context: dict = None,
+    timeout_feedback: str = None,
+    timeout_type: str = None,
 ) -> str:
     """Build the prompt that tells AI to use autoagent-exec for long-running tasks.
+
+    The prompt is organised into clearly separated sections:
+
+    1. **Task** — core instructions (name, criteria, hint)
+    2. **Context** — background information (main goal, workflow, prev step)
+    3. **Previous Attempts** — retry information (only when attempt > 1)
+    4. **Constraints** — long-running reminder + timeout warnings
 
     Args:
         subtask: Subtask configuration dict.
@@ -31,64 +42,76 @@ def build_long_running_prompt(
         state: Current subtask state from state_manager.
         extract_summary_fn: Callable(ai_response: str) -> str.
         parent_context: Optional context from the parent task.
+        timeout_feedback: If set, the previous AI call timed out.
+        timeout_type: Either ``"bash"`` or ``"session"``.
     """
-    parts = [
+    parts = []
+
+    # ── Section 1: Task ──────────────────────────────────────────────
+    task_lines = [
+        "## Task",
         f"Task: {subtask['name']}",
-        f"Type: long_running (\u26a0\ufe0f This task may take a long time)",
         f"Completion Criteria: {subtask['completion_criteria']}",
     ]
-
-    # Show main task goal if this is a subtask
-    if parent_context and parent_context.get('main_task_criteria'):
-        parts.append(f"Main Task Goal: {parent_context['main_task_criteria']}")
-
     if subtask.get('initial_hint') and attempt == 1:
-        parts.append(f"Initial Hint: {subtask['initial_hint']}")
+        task_lines.append(f"Initial Hint: {subtask['initial_hint']}")
+    parts.append("\n".join(task_lines))
 
-    # Previous subtask summary (when context isolation is enabled)
-    prev_section = build_previous_subtask_section(parent_context)
-    if prev_section:
-        parts.append(prev_section)
+    # ── Section 2: Context ───────────────────────────────────────────
+    context_lines = []
+    if parent_context and parent_context.get('main_task_criteria'):
+        context_lines.append(f"Main Task Goal: {parent_context['main_task_criteria']}")
 
-    # Sibling subtask orientation
     sibling = build_sibling_context(subtask, parent_context)
     if sibling:
-        parts.append(sibling)
+        context_lines.append(sibling)
 
-    # Retry context
+    prev_section = build_previous_subtask_section(parent_context)
+    if prev_section:
+        context_lines.append(prev_section)
+
+    if context_lines:
+        parts.append("## Context\n" + "\n\n".join(context_lines))
+
+    # ── Section 3: Previous Attempts (retry only) ────────────────────
     if attempt > 1:
+        retry_lines = []
+
         history = state.get('history', [])
         history_section = build_history_section(history, extract_summary_fn)
         if history_section:
-            parts.append(history_section)
+            retry_lines.append(history_section)
 
         fallback = (
             "The previous attempt failed. Please analyze what went wrong "
             "and adjust your command or approach."
         )
-        parts.append(build_suggested_fix_section(parent_context, fallback_msg=fallback))
+        retry_lines.append(build_suggested_fix_section(parent_context, fallback_msg=fallback))
 
-    parts.append(f"""\n**Long-Running Task Instructions**
+        parts.append("## Previous Attempts\n" + "\n\n".join(retry_lines))
 
-You MUST use the `autoagent-exec` launcher to run your command:
+    # ── Section 4: Constraints ───────────────────────────────────────
+    constraint_lines = []
 
-"{exec_script_path}" "<your entire command here>"
+    # Timeout guidance takes priority; if present, skip the generic reminder
+    has_timeout_guidance = False
+    if timeout_feedback:
+        guidance = build_timeout_guidance(
+            exec_script_path=exec_script_path,
+            timeout_feedback=timeout_feedback,
+            timeout_type=timeout_type or "bash",
+        )
+        if guidance:
+            constraint_lines.append(guidance)
+            has_timeout_guidance = True
 
-**Important:** Always wrap your command in double quotes so that shell operators
-(&&, |, ;, etc.) are passed correctly. For example:
-  "{exec_script_path}" "cd build && cmake .. && make -j8"
-  "{exec_script_path}" "python train.py --epochs 100 2>&1 | tee log.txt"
+    # Long-running reminder (only if no timeout guidance already present)
+    if not has_timeout_guidance:
+        constraint_lines.append(build_long_running_reminder(exec_script_path))
 
-- If the command fails quickly, the error is shown immediately — fix and retry with autoagent-exec.
-- If the command is still running after the fast-run window, it will be detached and you will see "TASK SUBMITTED".
-- When you see "TASK SUBMITTED", output: ⏳ LONG_RUNNING_IN_PROGRESS
-  AutoAgent will call you back with the results.
-- If the task cannot be done, output: ❌ not completed: <reason>
+    if constraint_lines:
+        parts.append("## Constraints\n" + "\n\n".join(constraint_lines))
 
-**⚠️ CRITICAL: You MUST always use autoagent-exec to run the command. NEVER run it directly in Bash.
-Running commands directly will cause the session to hang and be killed.
-Even if autoagent-exec reports errors, debug and fix the command arguments, then retry with autoagent-exec.
-Do NOT attempt to bypass autoagent-exec under any circumstances.**""")
     return "\n\n".join(parts)
 
 
@@ -102,33 +125,23 @@ def build_long_running_analysis_prompt(
 ) -> str:
     """Build the prompt for AI to analyse a completed long-running task.
 
+    The prompt is intentionally minimal because the AI conversation context
+    is preserved — it already knows the task name, criteria, workflow, etc.
+
     Args:
-        subtask: Subtask configuration dict.
-        status: Task status string (e.g. "completed", "failed").
+        subtask: Subtask configuration dict (unused, kept for API compat).
+        status: Task status string (unused, kept for API compat).
         output_log: Path to the output log file (raw, will be normalised).
         command_info: Optional formatted string like ``"\\nCommand: ..."``
-        exit_code_info: Optional formatted string like ``"\\nExit Code: 0"``
-        parent_context: Optional context from the parent task.
+        exit_code_info: Optional formatted string (unused, kept for API compat).
+        parent_context: Optional context (unused, kept for API compat).
     """
     output_log_display = output_log.replace("\\", "/")
 
-    # Build sibling subtask list for orientation
-    sibling_info = ""
-    if parent_context and parent_context.get('subtasks'):
-        sibling_info = "\n\n" + build_sibling_context(subtask, parent_context)
+    # command_info typically looks like "\nCommand: ..." — strip leading newline
+    command_line = command_info.strip()
 
-    return f"""You previously launched this task using autoagent-exec.{command_info}
-The task has now finished.
-
-Subtask: {subtask['name']}
-Completion Criteria: {subtask['completion_criteria']}
-Task Status: {status}{exit_code_info}{sibling_info}
-
-The task output has been saved to:
-  {output_log_display}
-
-Please:
-1. Read the output log file above to understand what happened
-2. Evaluate whether the task completed successfully
-3. Check if the results meet the completion criteria
-4. If the task produced output files, you may examine them as needed"""
+    return f"""You previously launched this task using autoagent-exec:
+  {command_line}
+The task has now finished. Output has been saved to:
+  {output_log_display}"""

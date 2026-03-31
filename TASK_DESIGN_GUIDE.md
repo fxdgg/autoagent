@@ -295,7 +295,7 @@ The evaluator sees:
 - Relevant log file contents
 
 The evaluator responds with a JSON object including `main_task_completed`,
-`analysis`, `retry_from`, `next_strategy`, and `suggested_improvements`.
+`analysis`, `retry_from`, and `next_strategy`.
 
 This means:
 - **The nested task's criteria should describe the END STATE**, not the

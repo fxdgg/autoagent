@@ -276,6 +276,12 @@ def build_sibling_context(task: dict, parent_context: dict) -> str:
 def build_history_section(history: list, extract_summary_fn) -> str:
     """Build the previous-attempts history section.
 
+    Only includes attempts that ended with an error (e.g. timeout, AI call
+    failure) — these carry useful diagnostic information.  Attempts that
+    simply resulted in "not_completed" or "completed" are omitted because
+    their summaries are just condensed AI output with little actionable
+    value for the next attempt.
+
     Args:
         history: Full history list from state.
         extract_summary_fn: A callable that takes an ai_response string and
@@ -290,12 +296,16 @@ def build_history_section(history: list, extract_summary_fn) -> str:
     history_lines = []
     for h in recent:
         result_str = h.get('result', 'unknown')
-        summary = h.get('summary', '')
-        if not summary:
-            summary = extract_summary_fn(h.get('ai_response', ''))
+        # Only include error entries (timeout, AI call failures, etc.)
+        # Skip 'completed' and 'not_completed' — those are just AI output summaries
+        if result_str not in ('error',):
+            continue
+        error_msg = h.get('error', '')
         history_lines.append(f"  - Attempt {h.get('attempt', '?')}: {result_str}")
-        if summary:
-            history_lines.append(f"    Summary: {summary[:limits.get('history_summary')]}")
+        if error_msg:
+            history_lines.append(f"    Error: {error_msg[:limits.get('history_summary')]}")
+    if not history_lines:
+        return ""
     return f"Previous Attempts:\n" + "\n".join(history_lines)
 
 
@@ -367,7 +377,7 @@ def build_previous_subtask_section(parent_context: dict) -> str:
     max_len = limits.get('previous_subtask_summary')
     if len(summary) > max_len:
         summary = "...(truncated)\n" + summary[-max_len:]
-    return f"=== Previous Step Result ===\n{summary}"
+    return f"=== Previous Step Result ===\n{summary}\n============================"
 
 
 def build_timeout_guidance(
@@ -380,41 +390,37 @@ def build_timeout_guidance(
     Args:
         exec_script_path: Path to the autoagent-exec wrapper script.
         timeout_feedback: Human-readable description of the timeout event.
-        timeout_type: Either ``"bash"`` (no output for N seconds — guide
+        timeout_type: Either ``"bash"`` (no output for N seconds — remind
             the AI to use autoagent-exec) or ``"session"`` (total session
             time exceeded — tell the AI it was interrupted by the user).
     """
     if timeout_type == "session":
-        # Session timeout: the total session time exceeded the limit.
-        # Tell the AI it was interrupted by the user (Ctrl+C) so it
-        # doesn't try to guess the reason or blame a specific command.
-        return (
-            f"**Interrupted by user (Ctrl+C).** "
-            f"The previous session was terminated before completion. "
-            f"Please continue where you left off."
-        )
+        # Session timeout: not included in the prompt per design.
+        # Return empty — session timeout is handled via history entries.
+        return ""
 
-    # bash timeout: the AI produced no new output for a long time,
-    # which usually means a long-running command is blocking the session.
+    # bash timeout: short reminder — the system prompt already contains
+    # full autoagent-exec usage instructions.
     return (
-        f"**\u23f0 TIMEOUT WARNING:** The previous session timed out "
-        f"({timeout_feedback}). The session was terminated because no new "
-        f"output was produced for an extended period, which usually means "
-        f"a long-running command was blocking the session.\n\n"
-        f"If your task requires running a command that takes more than a few "
-        f"minutes (e.g. compilation, benchmarking, data processing), you MUST "
-        f"use the `autoagent-exec` launcher to run it as a background task:\n\n"
-        f'"{exec_script_path}" "<your entire command here>"\n\n'
-        f"Always wrap your command in double quotes so that shell operators "
-        f"(&&, |, ;, etc.) are passed correctly. For example:\n"
-        f'  "{exec_script_path}" "cd build && cmake .. && make -j8"\n\n'
-        f"- If the command fails quickly, the error is shown immediately \u2014 fix and retry.\n"
-        f"- If the command is still running after the fast-run window, it will be detached and you will see "
-        f"\"TASK SUBMITTED\".\n"
-        f"- When you see \"TASK SUBMITTED\", output: \u23f3 LONG_RUNNING_IN_PROGRESS\n"
-        f"  AutoAgent will call you back with the results.\n\n"
-        f"**\u26a0\ufe0f CRITICAL: You MUST always use autoagent-exec for long-running "
-        f"commands. Running them directly in Bash will cause the session to hang "
-        f"and be killed. Even if autoagent-exec fails, fix the command arguments "
-        f"and retry with autoagent-exec \u2014 NEVER fall back to running directly in Bash.**"
+        f"**⏰ TIMEOUT WARNING:** The previous session was terminated because "
+        f"no new output was produced for an extended period. "
+        f"If your task involves a long-running command, remember to use "
+        f"`autoagent-exec` (see system instructions)."
+    )
+
+
+def build_long_running_reminder(exec_script_path: str) -> str:
+    """Build a short reminder for long-running tasks.
+
+    This is a concise reminder that the AI must use autoagent-exec.
+    The full usage instructions are already in the system prompt.
+
+    Args:
+        exec_script_path: Path to the autoagent-exec wrapper script.
+    """
+    return (
+        f"**⚠️ Long-Running Task:** You MUST use `autoagent-exec` to run your command. "
+        f"Do NOT run it directly in Bash. Example:\n"
+        f'  "{exec_script_path}" "cd build && cmake .. && make -j8"\n'
+        f"See system instructions for full details."
     )

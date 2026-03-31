@@ -25,6 +25,13 @@ def build_simple_task_prompt(
 ) -> str:
     """Build the prompt sent to AI for a simple task execution.
 
+    The prompt is organised into clearly separated sections:
+
+    1. **Task** — core instructions (name, criteria, hint)
+    2. **Context** — background information (main goal, workflow, prev step)
+    3. **Previous Attempts** — retry information (only when attempt > 1)
+    4. **Constraints** — operational constraints (timeout warnings)
+
     Args:
         task: Task configuration dict (must contain 'id', 'name',
             'completion_criteria'; may contain 'initial_hint').
@@ -44,45 +51,59 @@ def build_simple_task_prompt(
         exec_script_path: Absolute path to the generated ``autoagent-exec``
             convenience script (forward-slash normalised).
     """
-    parts = [
+    parts = []
+
+    # ── Section 1: Task ──────────────────────────────────────────────
+    task_lines = [
+        "## Task",
         f"Task: {task['name']}",
         f"Completion Criteria: {task['completion_criteria']}",
     ]
-
-    # Show main task goal if this is a subtask
-    if parent_context and parent_context.get('main_task_criteria'):
-        parts.append(f"Main Task Goal: {parent_context['main_task_criteria']}")
-
-    # Previous subtask summary (when context isolation is enabled)
-    prev_section = build_previous_subtask_section(parent_context)
-    if prev_section:
-        parts.append(prev_section)
-
     if task.get('initial_hint') and attempt == 1:
-        parts.append(f"Initial Hint: {task['initial_hint']}")
+        task_lines.append(f"Initial Hint: {task['initial_hint']}")
+    parts.append("\n".join(task_lines))
 
-    # Sibling subtask orientation
+    # ── Section 2: Context ───────────────────────────────────────────
+    context_lines = []
+    if parent_context and parent_context.get('main_task_criteria'):
+        context_lines.append(f"Main Task Goal: {parent_context['main_task_criteria']}")
+
     sibling = build_sibling_context(task, parent_context)
     if sibling:
-        parts.append(sibling)
+        context_lines.append(sibling)
 
-    # Retry context
+    prev_section = build_previous_subtask_section(parent_context)
+    if prev_section:
+        context_lines.append(prev_section)
+
+    if context_lines:
+        parts.append("## Context\n" + "\n\n".join(context_lines))
+
+    # ── Section 3: Previous Attempts (retry only) ────────────────────
     if attempt > 1:
+        retry_lines = []
+
         history = state.get('history', [])
         history_section = build_history_section(history, extract_summary_fn)
         if history_section:
-            parts.append(history_section)
+            retry_lines.append(history_section)
 
-        parts.append(build_suggested_fix_section(parent_context))
+        retry_lines.append(build_suggested_fix_section(parent_context))
 
-    # Timeout feedback with autoagent-exec guidance
+        parts.append("## Previous Attempts\n" + "\n\n".join(retry_lines))
+
+    # ── Section 4: Constraints ───────────────────────────────────────
+    constraint_lines = []
     if timeout_feedback:
-        parts.append(
-            build_timeout_guidance(
-                exec_script_path=exec_script_path,
-                timeout_feedback=timeout_feedback,
-                timeout_type=timeout_type or "bash",
-            )
+        guidance = build_timeout_guidance(
+            exec_script_path=exec_script_path,
+            timeout_feedback=timeout_feedback,
+            timeout_type=timeout_type or "bash",
         )
+        if guidance:
+            constraint_lines.append(guidance)
+
+    if constraint_lines:
+        parts.append("## Constraints\n" + "\n\n".join(constraint_lines))
 
     return "\n\n".join(parts)

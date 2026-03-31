@@ -9,14 +9,14 @@ import os
 import yaml
 
 _DEFAULTS = {
-    'suggested_fix': 1500,
+    'suggested_fix': 50000,
     'history_summary': 300,
     'nested_latest_fix': 2000,
     'looping_latest_fix': 1500,
     'log_section': 6000,
     'execution_results': 4000,
-    'idea_content': 8000,
-    'tasks_yaml': 10000,
+    'idea_content': 50000,
+    'tasks_yaml': 50000,
     'review_feedback': 3000,
     'human_feedback': 3000,
     'error_text': 2000,
