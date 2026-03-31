@@ -52,7 +52,6 @@ truncation_limits:
   nested_latest_fix: 2000
   looping_latest_fix: 1500
   log_section: 6000
-  execution_results: 4000
   idea_content: 50000
   tasks_yaml: 50000
   review_feedback: 3000

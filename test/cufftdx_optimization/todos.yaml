@@ -114,6 +114,7 @@ tasks:
       - id: 1.3
         name: "Optimize CUDA kernel based on profiling results"
         type: simple
+        max_attempts: 2
         completion_criteria: |
           1. Read the analysis from ncu_analysis.txt
           2. Modify the CUDA code (cufftdx_dct3d.cuh and/or cufftdx_dct3d_dispatch.cu)
