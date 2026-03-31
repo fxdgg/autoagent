@@ -148,7 +148,7 @@ autoagent/
       config: ${workspace}/todos.yaml
       provider: codebuddy
       use_cli: false
-      model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:claude-haiku-4.5"
+      model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:glm-5.0-ioa"
       human_review: true
       verbose: true
 
@@ -266,11 +266,13 @@ autoagent/
   - `apply_system_prompt_prefix(parts, task)`: 将前缀插入到 prompt 部件列表的开头
   - `prepend_system_prompt_prefix(prompt, task)`: 将前缀拼接到 prompt 字符串的开头
   - `load_task_design_guide()`: 加载并缓存 TASK_DESIGN_GUIDE.md 内容
-  - `build_timeout_guidance(exec_script_path, timeout_feedback)`: 构建超时警告提示
+  - `build_timeout_guidance(exec_script_path, timeout_feedback, timeout_type)`: 构建超时警告提示（支持 bash 和 session 两种超时类型）
   - `build_sibling_context(task, parent_context)`: 构建兄弟任务上下文信息
   - `build_history_section(history, extract_summary_fn)`: 构建历史尝试记录
   - `build_suggested_fix_section(parent_context, fallback_msg)`: 构建修复建议
-  - `build_autoagent_exec_note(exec_script_path)`: 构建 autoagent-exec 使用说明
+  - `build_autoagent_exec_note(exec_script_path)`: 构建 autoagent-exec 使用说明（已废弃，保留向后兼容）
+  - `build_previous_subtask_section(parent_context)`: 构建前一子任务摘要（用于上下文隔离的子任务间传递信息）
+  - `build_long_running_reminder(exec_script_path)`: 构建长时间任务简短提醒
 
 #### prompts/simple_task.py
 - **作用**：简单任务执行 prompt 构造器

@@ -53,8 +53,8 @@ opencode --version
 session_timeout: 3600  # Hard cap on total AI session time (seconds)
 bash_timeout: 300      # No-new-output timeout (seconds)
 
-# Fast-fail timeout for autoagent-exec (in seconds, default: 10)
-fast_fail_timeout: 10
+# Fast-fail timeout for autoagent-exec (in seconds, default: 30)
+fast_fail_timeout: 30
 
 # Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
 # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
@@ -72,7 +72,7 @@ preset:
     config: ${workspace}/todos.yaml
     provider: codebuddy
     use_cli: false
-    model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:claude-haiku-4.5"
+    model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:glm-5.0-ioa"
     human_review: true
     verbose: true
   

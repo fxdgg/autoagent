@@ -534,7 +534,9 @@ class AIClient:
         elif event_type == "result":
             # Final result — supports both CodeBuddy/Claude and Gemini formats
             result_text = event.get("result", "")
-            if result_text:
+            # Only use result_text as fallback when no text was collected
+            # from streaming assistant events, to avoid duplicating content.
+            if result_text and not assistant_text_parts:
                 assistant_text_parts.append(result_text)
 
             # Extract session_id from result event (Claude Code / CodeBuddy)
@@ -1036,7 +1038,10 @@ class AIClientSDK:
                             self._on_session_id_changed(message.session_id)
 
                     result_text = message.result or ""
-                    if result_text:
+                    # Only use result_text as fallback when no text was
+                    # collected from streaming AssistantMessage events,
+                    # to avoid duplicating content.
+                    if result_text and not assistant_text_parts:
                         assistant_text_parts.append(result_text)
 
                     is_error = message.is_error

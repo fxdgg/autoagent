@@ -63,7 +63,7 @@ preset:
     config: ${workspace}/todos.yaml
     provider: codebuddy
     use_cli: false
-    model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:claude-haiku-4.5"
+    model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:glm-5.0-ioa"
     human_review: true  # When processing ideas, force human review After AI review
     verbose: true
   
@@ -73,5 +73,14 @@ preset:
     provider: codebuddy
     use_cli: false
     model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;simple:deepseek-v3-2-volc-ioa"
+    human_review: true  # When processing ideas, force human review After AI review
+    verbose: true
+
+  - name: default2
+    ideas: ${workspace}/../ideas.md
+    config: ${workspace}/../todos_nbf.yaml
+    provider: codebuddy
+    use_cli: false
+    model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:glm-5.0-ioa"
     human_review: true  # When processing ideas, force human review After AI review
     verbose: true

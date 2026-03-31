@@ -348,6 +348,7 @@ class AIClient:
         provider: AIProvider = None,
         workspace: str = ".",
         timeout: int = 3600,
+        bash_timeout: int = 300,
         context_id: str = None,
         # Legacy parameters
         codebuddy_path: str = None,
@@ -362,6 +363,7 @@ class AIClient:
 | `provider` | AIProvider | None | AI provider 实例（优先于 legacy 参数） |
 | `workspace` | str | "." | 工作目录 |
 | `timeout` | int | 3600 | 超时时间（秒）。实际使用中由 TodoOrchestrator 传入（来自 config.yaml 或 CLI `--timeout`） |
+| `bash_timeout` | int | 300 | 无新输出超时时间（秒）。如果 AI 在此时间内无新输出，会话将被终止 |
 | `context_id` | str | None | Context 标识符，用于状态记录和日志追踪 |
 | `codebuddy_path` | str | None | （Legacy）CodeBuddy 可执行文件路径 |
 | `model` | str | None | （Legacy）AI 模型名 |
@@ -945,7 +947,7 @@ class IdeasWatcher:
         self,
         ideas_file: str = "ideas.md",
         todos_file: str = "todos.yaml",
-        processed_state_file: str = None,
+        plans_state_file: str = None,
     )
 ```
 
@@ -955,7 +957,7 @@ class IdeasWatcher:
 |------|------|--------|------|
 | `ideas_file` | str | "ideas.md" | Ideas 文件路径 |
 | `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
-| `processed_state_file` | str | "plans_state.yaml" | 已处理 ideas 状态文件（位于会话目录下） |
+| `plans_state_file` | str | None | 已处理 ideas 状态文件路径（默认为会话目录下的 `plans_state.yaml`） |
 
 ### 方法
 
@@ -1197,14 +1199,24 @@ class SubtaskConfig(TypedDict, total=False):
 ## 异常类
 
 ```python
+# task_executor.py 中定义
 class ConfigError(Exception):
     """配置文件错误（YAML 语法、缺少字段等）"""
 
 class ExecutionError(Exception):
     """任务执行错误（命令失败、超时等）"""
 
+# codebuddy_client.py 中定义
 class AICallError(Exception):
     """AI 调用错误（认证失败、响应解析失败等）"""
+
+class BashTimeoutError(AICallError):
+    """无新输出超时（AI 在 bash_timeout 秒内无新输出）。
+    通常意味着长时间命令阻塞了会话，下次 prompt 应包含 autoagent-exec 引导。"""
+
+class SessionTimeoutError(AICallError):
+    """会话总时间超时（超过 session_timeout 秒）。
+    调用方应告知 AI 它被用户中断（Ctrl+C）。"""
 ```
 
 ---
