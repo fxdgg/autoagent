@@ -346,6 +346,26 @@ def build_autoagent_exec_note(exec_script_path: str) -> str:
     )
 
 
+def build_previous_subtask_section(parent_context: dict) -> str:
+    """Build the previous-subtask summary section for context-isolated prompts.
+
+    When context isolation is enabled, each subtask starts a fresh AI session.
+    This section injects a truncated summary of the previous subtask's AI
+    response so the new session has essential context.
+
+    Returns an empty string when there is no previous summary to inject.
+    """
+    if not parent_context:
+        return ""
+    summary = parent_context.get('previous_subtask_summary', '')
+    if not summary:
+        return ""
+    max_len = limits.get('previous_subtask_summary')
+    if len(summary) > max_len:
+        summary = "...(truncated)\n" + summary[-max_len:]
+    return f"=== Previous Step Result ===\n{summary}"
+
+
 def build_timeout_guidance(
     exec_script_path: str,
     timeout_feedback: str,

@@ -133,11 +133,12 @@ class ExecutionError(Exception):
 class SubtaskResult:
     """Result of a subtask execution."""
     
-    def __init__(self, success: bool, output: str = "", logs: str = "", error_type: str = None):
+    def __init__(self, success: bool, output: str = "", logs: str = "", error_type: str = None, response_text: str = ""):
         self.success = success
         self.output = output
         self.logs = logs
         self.error_type = error_type
+        self.response_text = response_text
 
 
 class SimpleTaskExecutor:
@@ -150,6 +151,7 @@ class SimpleTaskExecutor:
 
     def __init__(self, session_dir: str = None):
         self.session_dir = session_dir
+        self.last_response_text = ""
 
     def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, **kwargs) -> bool:
         """
@@ -219,6 +221,7 @@ class SimpleTaskExecutor:
                     effective_prompt,
                     system_prompt=system_prompt,
                 )
+                self.last_response_text = result
                 
                 # Append response to log AFTER AI returns
                 if conv_logger:
@@ -664,6 +667,9 @@ class NestedTaskExecutor:
                 'ai_decisions': ai_decisions,
                 'main_task_criteria': task.get('completion_criteria', ''),
             }
+
+            context_isolation = task.get('context_isolation', True)
+            previous_subtask_summary = ""
             
             for subtask in subtasks:
                 subtask_id = str(subtask['id'])
@@ -673,6 +679,13 @@ class NestedTaskExecutor:
                 if subtask_state.get('status') == 'completed':
                     print(f"\n   📌 Subtask {subtask_id}: {subtask['name']} (already completed, skipping)")
                     continue
+
+                # Reset session before each subtask (except the first) to
+                # prevent unbounded context growth across subtasks.
+                if context_isolation and previous_subtask_summary:
+                    client.reset_session()
+
+                parent_context['previous_subtask_summary'] = previous_subtask_summary
                 
                 print(f"\n   📌 Executing subtask {subtask_id}: {subtask['name']}")
                 print(f"      Type: {subtask['type']}")
@@ -709,6 +722,9 @@ class NestedTaskExecutor:
                     })
                     
                     break  # Break subtask loop, start new round
+                else:
+                    # Capture response for next subtask's context
+                    previous_subtask_summary = result.response_text or result.output
             
             if not all_completed:
                 print(f"\n   ⏳ Subtask failed, starting new round...")
@@ -1201,6 +1217,9 @@ class LoopingTaskExecutor:
                 'main_task_criteria': task.get('completion_criteria', ''),
             }
 
+            context_isolation = task.get('context_isolation', True)
+            previous_subtask_summary = ""
+
             for subtask in subtasks:
                 subtask_id = str(subtask['id'])
                 subtask_state = state_manager.get_task_state(subtask_id)
@@ -1209,6 +1228,13 @@ class LoopingTaskExecutor:
                 if subtask_state.get('status') == 'completed':
                     print(f"\n   📌 Subtask {subtask_id}: {subtask['name']} (already completed, skipping)")
                     continue
+
+                # Reset session before each subtask (except the first) to
+                # prevent unbounded context growth across subtasks.
+                if context_isolation and previous_subtask_summary:
+                    client.reset_session()
+
+                parent_context['previous_subtask_summary'] = previous_subtask_summary
 
                 print(f"\n   📌 Executing subtask {subtask_id}: {subtask['name']}")
                 print(f"      Type: {subtask['type']} | Loop: {loop_idx} | Attempt: {attempts}")
@@ -1243,6 +1269,9 @@ class LoopingTaskExecutor:
                     })
 
                     break  # Break subtask loop, retry
+                else:
+                    # Capture response for next subtask's context
+                    previous_subtask_summary = result.response_text or result.output
 
             if all_completed:
                 return True
@@ -1464,6 +1493,7 @@ class SubtaskExecutor:
             output=state.get('ai_reasoning', ''),
             logs="",
             error_type=None if success else "ai_failed",
+            response_text=self.simple_executor.last_response_text,
         )
 
     def _execute_long_running_subtask(
@@ -1616,7 +1646,7 @@ class SubtaskExecutor:
                         last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
                         ai_reasoning=summary,
                     )
-                    return SubtaskResult(success=True, output=summary)
+                    return SubtaskResult(success=True, output=summary, response_text=result)
                 
                 # AI didn't complete and didn't submit long-running — maybe fast-fail retry
                 if completion_status is None:
@@ -1816,12 +1846,22 @@ class SubtaskExecutor:
             kernel32.CloseHandle(handle)
             return alive
         else:
-            # Unix: os.kill with signal 0
+            # Unix: check /proc status to detect zombies (os.kill can't)
             try:
-                os.kill(pid, 0)
-                return True
-            except OSError:
+                with open(f"/proc/{pid}/status") as f:
+                    for line in f:
+                        if line.startswith("State:"):
+                            return "Z" not in line  # zombie = not alive
                 return False
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                return False
+            except OSError:
+                # Fallback for platforms without /proc (e.g. macOS)
+                try:
+                    os.kill(pid, 0)
+                    return True
+                except OSError:
+                    return False
 
     def _ai_analyze_long_running_result(
         self, subtask, client, state_manager, status, output_log,
@@ -1942,6 +1982,7 @@ class SubtaskExecutor:
                 output=summary,
                 logs=log_content,
                 error_type=None if is_completed else "validation_failed",
+                response_text=result,
             )
             
         except AICallError as e:

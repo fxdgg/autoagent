@@ -7,6 +7,7 @@ Corresponds to ``SimpleTaskExecutor._build_prompt()`` in task_executor.py.
 from prompts.shared import (
     build_sibling_context,
     build_history_section,
+    build_previous_subtask_section,
     build_suggested_fix_section,
     build_timeout_guidance,
 )
@@ -47,6 +48,11 @@ def build_simple_task_prompt(
     # Show main task goal if this is a subtask
     if parent_context and parent_context.get('main_task_criteria'):
         parts.append(f"Main Task Goal: {parent_context['main_task_criteria']}")
+
+    # Previous subtask summary (when context isolation is enabled)
+    prev_section = build_previous_subtask_section(parent_context)
+    if prev_section:
+        parts.append(prev_section)
 
     if task.get('initial_hint') and attempt == 1:
         parts.append(f"Initial Hint: {task['initial_hint']}")
