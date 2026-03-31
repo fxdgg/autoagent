@@ -276,11 +276,10 @@ def build_sibling_context(task: dict, parent_context: dict) -> str:
 def build_history_section(history: list, extract_summary_fn) -> str:
     """Build the previous-attempts history section.
 
-    Only includes attempts that ended with an error (e.g. timeout, AI call
-    failure) — these carry useful diagnostic information.  Attempts that
-    simply resulted in "not_completed" or "completed" are omitted because
-    their summaries are just condensed AI output with little actionable
-    value for the next attempt.
+    Includes attempts that ended with an error (e.g. timeout, AI call
+    failure) or ``not_completed`` — both carry useful diagnostic
+    information for the next attempt.  ``completed`` entries are omitted
+    because they indicate success and provide no actionable guidance.
 
     Args:
         history: Full history list from state.
@@ -296,14 +295,18 @@ def build_history_section(history: list, extract_summary_fn) -> str:
     history_lines = []
     for h in recent:
         result_str = h.get('result', 'unknown')
-        # Only include error entries (timeout, AI call failures, etc.)
-        # Skip 'completed' and 'not_completed' — those are just AI output summaries
-        if result_str not in ('error',):
+        # Include error and not_completed entries; skip completed
+        if result_str not in ('error', 'not_completed'):
             continue
-        error_msg = h.get('error', '')
         history_lines.append(f"  - Attempt {h.get('attempt', '?')}: {result_str}")
-        if error_msg:
-            history_lines.append(f"    Error: {error_msg[:limits.get('history_summary')]}")
+        if result_str == 'error':
+            error_msg = h.get('error', '')
+            if error_msg:
+                history_lines.append(f"    Error: {error_msg[:limits.get('history_summary')]}")
+        elif result_str == 'not_completed':
+            summary = h.get('summary', '')
+            if summary:
+                history_lines.append(f"    Summary: {summary[:limits.get('history_summary')]}")
     if not history_lines:
         return ""
     return f"Previous Attempts:\n" + "\n".join(history_lines)

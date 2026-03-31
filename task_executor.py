@@ -309,9 +309,11 @@ class SimpleTaskExecutor:
                 else:
                     if completion_status is None:
                         # No marker found at all — give AI a clear hint
+                        last_line = result.strip().rsplit('\n', 1)[-1].strip() if result.strip() else '(empty)'
                         summary = (
                             f"Cannot find {self._SIMPLE_TASK_MARKERS} "
                             f"in previous response. "
+                            f"(The last line in your response is: {last_line[:200]}) "
                             f"Please include the required status marker."
                         )
                         print(f"   ⚠️ No completion marker found in response for task {task_id}")
@@ -963,22 +965,20 @@ class NestedTaskExecutor:
         )
         
         print(f"\n   🤖 [AI Decision Point 2: Main Task Evaluation]")
-        
-        # Always prepend system_prompt_prefix to user prompt
-        effective_prompt = prepend_system_prompt_prefix(prompt, task)
 
         try:
-            # Write prompt to log BEFORE calling AI (crash safety)
+            # No system_prompt_prefix needed here —
+            # this is a follow-up message in the same conversation context.
             if conv_logger:
                 conv_logger.log_nested_prompt(
                     task_id=str(task['id']),
                     task_name=task['name'],
                     call_type="main_task_evaluation",
-                    prompt=effective_prompt,
+                    prompt=prompt,
                     round_num=round_num,
                 )
             
-            evaluation = client.ask(effective_prompt, expect_json=True)
+            evaluation = client.ask(prompt, expect_json=True)
             completed = evaluation.get('main_task_completed', False)
             print(f"      AI Evaluation: {'✅ COMPLETED' if completed else '❌ NOT COMPLETED'}")
             print(f"      Analysis: {evaluation.get('analysis', 'N/A')[:200]}")
@@ -1061,7 +1061,11 @@ class NestedTaskExecutor:
         return f"(truncated, showing last {max_chars} chars)\n...{error_text[-max_chars:]}"
 
     def _format_execution_results(self, results: list) -> str:
-        """Format execution results for prompt."""
+        """Format execution results for prompt.
+
+        Note: completion_criteria is never truncated — the evaluator needs
+        the full criteria to judge whether the task is complete.
+        """
         lines = []
         for r in results:
             lines.append(
@@ -1069,14 +1073,11 @@ class NestedTaskExecutor:
                 f"status={r['status']}, attempts={r['attempts']}"
             )
             if r.get('completion_criteria'):
-                lines.append(f"    Criteria: {r['completion_criteria'][:200]}")
+                # Never truncate criteria — evaluator must see them in full
+                lines.append(f"    Criteria: {r['completion_criteria']}")
             if r.get('ai_reasoning'):
-                lines.append(f"    Result: {r['ai_reasoning'][:300]}")
-        result = "\n".join(lines)
-        _er = limits.get('execution_results')
-        if len(result) > _er:
-            result = result[:200] + "\n  ...(execution results truncated)...\n" + result[-(_er - 200):]
-        return result
+                lines.append(f"    Result: {r['ai_reasoning'][:500]}")
+        return "\n".join(lines)
 
 
 class LoopingTaskExecutor:
@@ -1650,9 +1651,11 @@ class SubtaskExecutor:
                 
                 # AI didn't complete and didn't submit long-running — maybe fast-fail retry
                 if completion_status is None:
+                    last_line = result.strip().rsplit('\n', 1)[-1].strip() if result.strip() else '(empty)'
                     summary = (
                         f"Cannot find {SimpleTaskExecutor._LONG_RUNNING_MARKERS} "
                         f"in previous response. "
+                        f"(The last line in your response is: {last_line[:200]}) "
                         f"Please include the required status marker."
                     )
                     print(f"      ⚠️ No completion/long-running marker found in response for task {subtask_id}")
@@ -1916,29 +1919,19 @@ class SubtaskExecutor:
             parent_context=parent_context,
         )
         try:
-            # Write prompt to log BEFORE calling AI (crash safety)
-            system_prompt = build_system_prompt_coding_agent(
-                exec_script_path,
-                supports_system_prompt=client.provider.supports_system_prompt,
-                task=subtask,
-            )
-            # Always prepend system_prompt_prefix to user prompt
-            effective_prompt = prepend_system_prompt_prefix(prompt, subtask)
+            # No system_prompt or system_prompt_prefix needed here —
+            # this is a follow-up message in the same conversation context.
             if conv_logger:
                 conv_logger.log_prompt(
                     task_id=subtask_id,
                     task_name=subtask['name'],
-                    prompt=effective_prompt,
+                    prompt=prompt,
                     attempt=1,
                     parent_task_id=parent_task_id,
                     metadata={"type": "long_running_analysis"},
-                    system_prompt=system_prompt,
                 )
             
-            result = client.ask(
-                effective_prompt,
-                system_prompt=system_prompt,
-            )
+            result = client.ask(prompt)
             
             # Append response to log AFTER AI returns
             if conv_logger:
@@ -1972,9 +1965,11 @@ class SubtaskExecutor:
                 print(f"      ✅ Long-running task {subtask_id} completed!")
             else:
                 if completion_status is None:
+                    last_line = result.strip().rsplit('\n', 1)[-1].strip() if result.strip() else '(empty)'
                     summary = (
                         f"Cannot find {SimpleTaskExecutor._SIMPLE_TASK_MARKERS} "
                         f"in previous response. "
+                        f"(The last line in your response is: {last_line[:200]}) "
                         f"Please include the required status marker."
                     )
                     print(f"      ⚠️ No completion marker found in response for task {subtask_id}")
