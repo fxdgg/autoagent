@@ -34,12 +34,19 @@ from truncation_limits import limits
 logger = logging.getLogger(__name__)
 
 
+_fast_fail_timeout_cache: int | None = None
+
+
 def _load_fast_fail_timeout() -> int:
-    """Load fast_fail_timeout from config.yaml.
+    """Load fast_fail_timeout from config.yaml (cached after first call).
 
     Returns:
         The configured fast-fail timeout in seconds (default 10).
     """
+    global _fast_fail_timeout_cache
+    if _fast_fail_timeout_cache is not None:
+        return _fast_fail_timeout_cache
+
     config_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "config.yaml"
     )
@@ -48,10 +55,12 @@ def _load_fast_fail_timeout() -> int:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
             value = config.get("fast_fail_timeout", 10)
-            return int(value)
+            _fast_fail_timeout_cache = int(value)
+            return _fast_fail_timeout_cache
         except Exception:
             pass
-    return 10
+    _fast_fail_timeout_cache = 10
+    return _fast_fail_timeout_cache
 
 
 def _read_log_file_smart(path: str) -> str:
@@ -1784,8 +1793,15 @@ class SubtaskExecutor:
         consecutive_errors = 0
         max_consecutive_errors = 10  # After 10 consecutive read failures, escalate
         signal_file_seen = False  # Track if we've ever seen the signal file
+        # Use a shorter interval during the initial wait phase so we don't
+        # overshoot max_initial_wait when check_interval > max_initial_wait.
+        initial_check_interval = min(2, check_interval)
 
         while elapsed < max_wait:
+            # Choose interval: short polling until signal file first appears,
+            # then switch to the normal (longer) check_interval.
+            current_interval = check_interval if signal_file_seen else initial_check_interval
+
             if os.path.exists(signal_file):
                 signal_file_seen = True
                 try:
@@ -1854,8 +1870,8 @@ class SubtaskExecutor:
                     )
                     return "error"
             
-            time.sleep(check_interval)
-            elapsed += check_interval
+            time.sleep(current_interval)
+            elapsed += current_interval
             
             if elapsed % 300 == 0:  # Print status every 5 minutes
                 print(f"      [WAITING] Still running... ({elapsed // 60} minutes elapsed)")
