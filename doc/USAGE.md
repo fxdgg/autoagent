@@ -52,6 +52,9 @@ opencode --version
 # config.yaml
 bash_timeout: 3600
 
+# Fast-fail timeout for autoagent-exec (in seconds, default: 10)
+fast_fail_timeout: 10
+
 # Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
 # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
 backoff_max_wait: 300
@@ -410,15 +413,15 @@ tasks:
 **执行流程**：
 1. AutoAgent 构造 prompt，告知 AI 使用 `autoagent-exec` 启动长时间命令
 2. AI 通过 Bash 调用 `autoagent-exec --log-dir <session_dir> --task-id <id> -- <command>`
-3. `autoagent-exec` 启动命令并监视 10 秒：
-   - 10 秒内失败：立即报告错误，AI 可修复并重试（避免重启会话）
-   - 10 秒内成功：直接完成
-   - 10 秒后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
+3. `autoagent-exec` 启动命令并监视（默认 10 秒，可通过 `config.yaml` 的 `fast_fail_timeout` 配置）：
+   - 超时内失败：立即报告错误，AI 可修复并重试（避免重启会话）
+   - 超时内成功：直接完成
+   - 超时后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
 4. AutoAgent 检测到 `LONG_RUNNING_IN_PROGRESS`，开始轮询信号文件
 5. 任务完成后，重新启动 AI 分析输出日志并判断完成条件
 
 **技术细节**：
-- 使用 `autoagent_exec.py` 作为启动器，支持 10 秒快速失败检测
+- 使用 `autoagent_exec.py` 作为启动器，支持快速失败检测（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置，默认 10 秒）
 - 信号文件（`lr_tasks/lr_<task_id>_signal.json`）用于进程间通信
 - 输出日志（`lr_tasks/lr_<task_id>_output.log`）记录命令完整输出
 - 信号文件和输出日志均位于 `session_dir/lr_tasks/`（由 orchestrator 的 `--log-dir` 参数决定）

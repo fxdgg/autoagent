@@ -372,7 +372,22 @@ class AIClient:
         # DEBUG: Log the stream json (disabled currently)
         # logger.debug(f"[{self.context_id}] Event content: {json.dumps(event, ensure_ascii=False)[:500]}")
         
-        if event_type == "assistant":
+        # Capture session_id as early as possible from any event that
+        # carries it (system/init, assistant, result, step_start).
+        # This is critical for Ctrl+C recovery: if the user interrupts
+        # before the final "result" event, we still have the session_id.
+        early_sid = event.get("session_id", "")
+        if early_sid and early_sid != self._session_id:
+            self._session_id = early_sid
+            if self._on_session_id_changed:
+                self._on_session_id_changed(early_sid)
+
+        if event_type == "system":
+            # CodeBuddy CLI: system/init event — session_id already
+            # captured above via the generic early-capture block.
+            pass
+
+        elif event_type == "assistant":
             # CodeBuddy/Claude format: AI message with content[] array
             message = event.get("message", {})
             content_blocks = message.get("content", [])
@@ -853,6 +868,7 @@ class AIClientSDK:
                 query as sdk_query,
                 AssistantMessage,
                 ResultMessage,
+                SystemMessage,
                 CodeBuddyAgentOptions,
             )
             from codebuddy_agent_sdk.types import (
@@ -912,6 +928,19 @@ class AIClientSDK:
             )
 
             async for message in sdk_query(prompt=prompt, options=options):
+                # Capture session_id from SystemMessage (init) — this
+                # arrives before any AssistantMessage, so we get the
+                # session_id as early as possible (important for Ctrl+C
+                # interruption recovery).
+                if isinstance(message, SystemMessage):
+                    if hasattr(message, 'data') and isinstance(message.data, dict):
+                        sid = message.data.get('session_id', '')
+                        if sid and sid != self._session_id:
+                            self._session_id = sid
+                            if self._on_session_id_changed:
+                                self._on_session_id_changed(sid)
+                    continue
+
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, ThinkingBlock):
@@ -1319,6 +1348,7 @@ class AIClientTest:
         # We read the script to extract the embedded exec_path and log_dir.
         exec_path = None
         log_dir = None
+        fast_fail_timeout = 10  # default; may be overridden from script content
 
         script_match = re.search(
             r'["\'](.+?/scripts/autoagent-exec\.(?:bat|sh))["\']',
@@ -1337,6 +1367,12 @@ class AIClientTest:
                 if inner_match:
                     exec_path = inner_match.group(1)
                     log_dir = inner_match.group(2)
+                # Also extract --fast-fail-timeout if present
+                fft_match = re.search(
+                    r'--fast-fail-timeout\s+(\d+)',
+                    script_content,
+                )
+                fast_fail_timeout = int(fft_match.group(1)) if fft_match else 10
             except OSError as e:
                 logger.warning(
                     f"[{self.context_id}] Failed to read autoagent-exec script "
@@ -1394,6 +1430,7 @@ class AIClientTest:
             sys.executable, exec_path,
             '--log-dir', log_dir,
             '--task-id', task_id,
+            '--fast-fail-timeout', str(fast_fail_timeout),
             '--',
         ] + cmd_parts
 
@@ -1405,7 +1442,7 @@ class AIClientTest:
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                timeout=30,  # autoagent-exec itself should return within ~10s
+                timeout=fast_fail_timeout + 20,  # autoagent-exec itself should return within fast_fail_timeout
                 cwd=self.workspace,
             )
             exec_output = result.stdout.strip()

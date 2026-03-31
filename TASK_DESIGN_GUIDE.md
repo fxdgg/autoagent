@@ -126,11 +126,11 @@ same workflow N times (e.g., profile → optimize → benchmark → commit).
 1. AutoAgent sends a prompt telling the AI to use `autoagent-exec` to
    launch the command in the background.
 2. The AI runs: `python autoagent_exec.py --log-dir <dir> --task-id <id> -- <command>`
-3. `autoagent-exec` implements a **10-second fast-fail** mechanism:
-   - If the command exits within 10s with an error → error shown immediately,
+3. `autoagent-exec` implements a **fast-fail** mechanism (default 10 seconds, configurable via `fast_fail_timeout` in `config.yaml`):
+   - If the command exits within the timeout with an error → error shown immediately,
      AI can fix and retry.
-   - If the command exits within 10s with success → treated as completed.
-   - If still running after 10s → detached to background, AI outputs
+   - If the command exits within the timeout with success → treated as completed.
+   - If still running after the timeout → detached to background, AI outputs
      `⏳ LONG_RUNNING_IN_PROGRESS` and the session ends.
 4. AutoAgent monitors the background process via a signal file.
 5. When the process finishes, AutoAgent calls the AI back with the output

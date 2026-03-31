@@ -646,7 +646,7 @@ long_running 任务启动器，AI 通过 Bash 调用的独立脚本。
 
 **调用方式**：
 ```bash
-python autoagent_exec.py --log-dir <log_session_dir> --task-id <id> -- <command...>
+python autoagent_exec.py --log-dir <log_session_dir> --task-id <id> [--fast-fail-timeout <seconds>] -- <command...>
 ```
 
 **参数**：
@@ -655,15 +655,16 @@ python autoagent_exec.py --log-dir <log_session_dir> --task-id <id> -- <command.
 |------|------|------|
 | `--log-dir` | str | 日志会话目录绝对路径（由 SubtaskExecutor 的 `session_dir` 提供） |
 | `--task-id` | str | 子任务 ID（如 `1.2`） |
+| `--fast-fail-timeout` | int | 快速失败超时时间（秒），默认 10，由 `config.yaml` 的 `fast_fail_timeout` 配置 |
 | `-- <command>` | str | `--` 之后的所有内容作为要执行的命令 |
 
-**行为**：
+**行为**（以下 `N` 秒由 `--fast-fail-timeout` 控制，默认 10）：
 
 | 场景 | 行为 |
 |------|------|
-| 命令在 10s 内失败（退出码≠ 0） | 打印错误输出，不写信号文件，返回非零退出码 |
-| 命令在 10s 内成功（退出码 = 0） | 写入 `finished` 信号文件，返回 0 |
-| 命令 10s 后仍在运行 | 写入 `running` 信号文件，打印 `TASK SUBMITTED`，启动监控线程 |
+| 命令在 N 秒内失败（退出码≠ 0） | 打印错误输出，不写信号文件，返回非零退出码 |
+| 命令在 N 秒内成功（退出码 = 0） | 写入 `finished` 信号文件，返回 0 |
+| 命令 N 秒后仍在运行 | 写入 `running` 信号文件，打印 `TASK SUBMITTED`，启动监控线程 |
 
 **生成的文件**：
 
@@ -1419,7 +1420,7 @@ orchestrator.run_with_idle()  # 不会退出，直到 Ctrl+C
 | **NestedTaskExecutor** | 嵌套任务执行、AI 决策调度 |
 | **LoopingTaskExecutor** | 循环任务执行（固定 N 次迭代） |
 | **SubtaskExecutor** | 子任务分发执行（接收 session_dir） |
-| **autoagent_exec.py** | long_running 任务启动器（10s 快速失败 + 信号文件） |
+| **autoagent_exec.py** | long_running 任务启动器（快速失败检测 + 信号文件，超时可通过 `config.yaml` 的 `fast_fail_timeout` 配置） |
 | **StateManager** | 任务状态持久化（todos_state.yaml） |
 | **ConversationLogger** | 对话日志记录、索引生成、Ideas 拆解/审查/修订日志 |
 | **IdeasWatcher** | ideas.md 监控、AI 分解、AI 审查、人工审核、任务追加（支持日志记录） |

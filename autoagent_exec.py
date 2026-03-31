@@ -3,15 +3,15 @@
 autoagent-exec: Long-running task launcher for AutoAgent.
 
 This script is called by the AI (via Bash tool) to submit a long-running task.
-It implements a "10-second fast-fail" mechanism:
+It implements a fast-fail mechanism (default 10 seconds, configurable):
   - Start the command in foreground
-  - If it exits within 10 seconds with a non-zero exit code, report the error
+  - If it exits within the timeout with a non-zero exit code, report the error
     immediately so the AI can fix the command without restarting the session
-  - If it's still running after 10 seconds, detach it to the background,
+  - If it's still running after the timeout, detach it to the background,
     write a signal file, and tell the AI to end its session
 
 Usage (called by AI via Bash):
-    python <path>/autoagent_exec.py --log-dir <log_session_dir> --task-id <id> -- <command...>
+    python <path>/autoagent_exec.py --log-dir <log_session_dir> --task-id <id> [--fast-fail-timeout <seconds>] -- <command...>
 
 Example:
     python autoagent_exec.py --log-dir /path/to/logs/proj_abc123 --task-id 1.2 -- ncu --set full --csv ./build/Release/main.exe
@@ -28,8 +28,10 @@ import subprocess
 import sys
 import time
 
-# Timeout in seconds for fast-fail detection
-FAST_FAIL_TIMEOUT = 10
+# Default timeout in seconds for fast-fail detection.
+# Can be overridden via --fast-fail-timeout CLI argument,
+# which is configured in config.yaml as fast_fail_timeout.
+DEFAULT_FAST_FAIL_TIMEOUT = 10
 
 
 def _ensure_utf8_stdio():
@@ -44,8 +46,8 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="AutoAgent long-running task launcher.\n\n"
             "Runs a command with fast-fail detection:\n"
-            "  - If the command exits within 10s with an error, the error is shown immediately.\n"
-            "  - If the command is still running after 10s, it is detached to the background\n"
+            "  - If the command exits within the timeout with an error, the error is shown immediately.\n"
+            "  - If the command is still running after the timeout, it is detached to the background\n"
             "    and a signal file is created for the orchestrator to monitor.\n\n"
             "Examples:\n"
             "  python autoagent_exec.py --log-dir /path/to/logs --task-id 1.2 -- make -j8\n"
@@ -66,6 +68,12 @@ def parse_args():
         "--task-id",
         required=True,
         help="Subtask ID (e.g. 1.2)",
+    )
+    parser.add_argument(
+        "--fast-fail-timeout",
+        type=int,
+        default=DEFAULT_FAST_FAIL_TIMEOUT,
+        help=f"Seconds to wait before treating the command as long-running (default: {DEFAULT_FAST_FAIL_TIMEOUT})",
     )
     # Everything after '--' is the command
     args, remaining = parser.parse_known_args()
@@ -97,6 +105,7 @@ def main():
     log_dir = args.log_dir
     task_id = args.task_id
     command = args.command
+    fast_fail_timeout = args.fast_fail_timeout
     # Re-quote the command list into a single shell string.
     # On Windows, use subprocess.list2cmdline (handles "C:/Program Files/...").
     # On POSIX, use shlex.join which produces /bin/sh-compatible quoting.
@@ -141,13 +150,13 @@ def main():
 
     pid = proc.pid
 
-    # --- Fast-fail phase: wait up to FAST_FAIL_TIMEOUT seconds ---
-    print(f"[autoagent-exec] Starting command (watching for {FAST_FAIL_TIMEOUT}s)...")
+    # --- Fast-fail phase: wait up to fast_fail_timeout seconds ---
+    print(f"[autoagent-exec] Starting command (watching for {fast_fail_timeout}s)...")
     print(f"   Command: {command_str}")
     print(f"   PID: {pid}")
 
     try:
-        exit_code = proc.wait(timeout=FAST_FAIL_TIMEOUT)
+        exit_code = proc.wait(timeout=fast_fail_timeout)
     except subprocess.TimeoutExpired:
         exit_code = None  # Still running after timeout
 
@@ -175,7 +184,7 @@ def main():
             sys.exit(0)
         else:
             # Command failed fast — print error for AI to see and retry
-            print(f"\n[FAST-FAIL] Command failed within {FAST_FAIL_TIMEOUT}s (exit code {exit_code}).")
+            print(f"\n[FAST-FAIL] Command failed within {fast_fail_timeout}s (exit code {exit_code}).")
             print(f"   Output log: {output_log}")
 
             # Print the log content so AI can see the error
@@ -205,7 +214,7 @@ def main():
     # The subprocess will continue writing via its inherited fd.
     log_fh.close()
 
-    print(f"\n[RUNNING] Command is still running after {FAST_FAIL_TIMEOUT}s -- treating as long-running task.")
+    print(f"\n[RUNNING] Command is still running after {fast_fail_timeout}s -- treating as long-running task.")
     print(f"   PID: {pid}")
     print(f"   Output log: {output_log}")
     print(f"   Signal file: {signal_file}")

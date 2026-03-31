@@ -15,6 +15,8 @@ import subprocess
 import logging
 from typing import Optional, Tuple
 
+import yaml
+
 from codebuddy_client import AIClient, CodeBuddyClient, AICallError
 from prompts.shared import build_system_prompt_coding_agent, prepend_system_prompt_prefix
 from prompts.simple_task import build_simple_task_prompt
@@ -30,6 +32,26 @@ from prompts.main_evaluation import build_main_evaluation_prompt
 from truncation_limits import limits
 
 logger = logging.getLogger(__name__)
+
+
+def _load_fast_fail_timeout() -> int:
+    """Load fast_fail_timeout from config.yaml.
+
+    Returns:
+        The configured fast-fail timeout in seconds (default 10).
+    """
+    config_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "config.yaml"
+    )
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f) or {}
+            value = config.get("fast_fail_timeout", 10)
+            return int(value)
+        except Exception:
+            pass
+    return 10
 
 
 def _read_log_file_smart(path: str) -> str:
@@ -63,6 +85,7 @@ def _read_log_file_smart(path: str) -> str:
 def _write_autoagent_exec_script(
     session_dir: str,
     task_id: str,
+    fast_fail_timeout: int = 10,
 ) -> str:
     """Write (or overwrite) the ``autoagent-exec`` convenience script.
 
@@ -80,6 +103,8 @@ def _write_autoagent_exec_script(
     Args:
         session_dir: Absolute path to the log session directory.
         task_id: Current task / subtask ID (e.g. ``"1"`` or ``"2.1"``).
+        fast_fail_timeout: Seconds to wait before treating the command as
+            long-running (default 10, from config.yaml ``fast_fail_timeout``).
 
     Returns:
         The absolute path to the generated script.
@@ -97,13 +122,15 @@ def _write_autoagent_exec_script(
         # %* forwards all arguments the caller passes after the script name.
         content = (
             "@echo off\r\n"
-            f'python "{exec_py}" --log-dir "{log_dir}" --task-id {task_id} -- %*\r\n'
+            f'python "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
+            f' --fast-fail-timeout {fast_fail_timeout} -- %*\r\n'
         )
     else:
         script_name = "autoagent-exec.sh"
         content = (
             "#!/usr/bin/env bash\n"
-            f'python3 "{exec_py}" --log-dir "{log_dir}" --task-id {task_id} -- "$@"\n'
+            f'python3 "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
+            f' --fast-fail-timeout {fast_fail_timeout} -- "$@"\n'
         )
 
     script_path = os.path.join(scripts_dir, script_name)
@@ -337,6 +364,7 @@ class SimpleTaskExecutor:
             exec_script_path = _write_autoagent_exec_script(
                 session_dir=log_session_dir,
                 task_id=str(task['id']),
+                fast_fail_timeout=_load_fast_fail_timeout(),
             )
 
         return build_simple_task_prompt(
@@ -535,6 +563,7 @@ class SimpleTaskExecutor:
         exec_script_path = _write_autoagent_exec_script(
             session_dir=log_session_dir,
             task_id=task_id,
+            fast_fail_timeout=_load_fast_fail_timeout(),
         )
 
         # Restart AI to analyze the result
@@ -1521,6 +1550,7 @@ class SubtaskExecutor:
         exec_script_path = _write_autoagent_exec_script(
             session_dir=log_session_dir,
             task_id=subtask_id,
+            fast_fail_timeout=_load_fast_fail_timeout(),
         )
         
         logger.info(f"Executing long-running subtask {subtask_id}: {subtask['name']}")

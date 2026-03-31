@@ -118,6 +118,11 @@ autoagent/
   # Timeout for each AI call (in seconds).
   bash_timeout: 3600
 
+  # Fast-fail timeout for autoagent-exec (in seconds).
+  # Default: 10. Configures how long autoagent-exec waits before
+  # treating a command as long-running.
+  fast_fail_timeout: 10
+
   # Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
   # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
   backoff_max_wait: 300
@@ -161,6 +166,7 @@ autoagent/
   - `system_prompt_prefix`: 全局系统提示词前缀，附加到所有任务的系统提示词中，可在 todos.yaml 中按任务覆盖
   - `default_model`: 默认 AI 模型，当 CLI `--model` 和 preset 均未指定时使用
   - `bash_timeout`: 提供默认超时配置值
+  - `fast_fail_timeout`: autoagent-exec 快速失败超时时间（默认 10 秒），命令在此时间内退出则立即报告结果，否则转为后台运行
   - `backoff_max_wait`: AI CLI 连续失败时的最大退避等待时间（指数退避：5s→10s→20s→...→上限）
   - `truncation_limits`: 控制各类提示词字段的最大字符数，防止上下文过长
   - `preset`: 定义常用参数预设，通过 `--preset <name>` 快速切换配置
