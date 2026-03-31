@@ -1,0 +1,83 @@
+"""
+Prompt builder for simple task execution.
+
+Corresponds to ``SimpleTaskExecutor._build_prompt()`` in task_executor.py.
+"""
+
+from prompts.shared import (
+    build_sibling_context,
+    build_history_section,
+    build_previous_subtask_section,
+    build_suggested_fix_section,
+    build_timeout_guidance,
+)
+
+
+def build_simple_task_prompt(
+    task: dict,
+    attempt: int,
+    state: dict,
+    extract_summary_fn,
+    parent_context: dict = None,
+    timeout_feedback: str = None,
+    exec_script_path: str = "",
+) -> str:
+    """Build the prompt sent to AI for a simple task execution.
+
+    Args:
+        task: Task configuration dict (must contain 'id', 'name',
+            'completion_criteria'; may contain 'initial_hint').
+        attempt: Current attempt number (1-based).
+        state: Current task state from state_manager.
+        extract_summary_fn: Callable(ai_response: str) -> str used to
+            extract a summary from a previous AI response.
+        parent_context: Optional context from the parent task, containing:
+            - subtasks: list of all sibling subtasks (for orientation)
+            - suggested_fix: AI's suggested fix from failure analysis
+            - main_task_criteria: completion criteria of the parent task
+        timeout_feedback: If set, the previous AI call timed out.  This
+            string contains the error message.
+        exec_script_path: Absolute path to the generated ``autoagent-exec``
+            convenience script (forward-slash normalised).
+    """
+    parts = [
+        f"Task: {task['name']}",
+        f"Completion Criteria: {task['completion_criteria']}",
+    ]
+
+    # Show main task goal if this is a subtask
+    if parent_context and parent_context.get('main_task_criteria'):
+        parts.append(f"Main Task Goal: {parent_context['main_task_criteria']}")
+
+    # Previous subtask summary (when context isolation is enabled)
+    prev_section = build_previous_subtask_section(parent_context)
+    if prev_section:
+        parts.append(prev_section)
+
+    if task.get('initial_hint') and attempt == 1:
+        parts.append(f"Initial Hint: {task['initial_hint']}")
+
+    # Sibling subtask orientation
+    sibling = build_sibling_context(task, parent_context)
+    if sibling:
+        parts.append(sibling)
+
+    # Retry context
+    if attempt > 1:
+        history = state.get('history', [])
+        history_section = build_history_section(history, extract_summary_fn)
+        if history_section:
+            parts.append(history_section)
+
+        parts.append(build_suggested_fix_section(parent_context))
+
+    # Timeout feedback with autoagent-exec guidance
+    if timeout_feedback:
+        parts.append(
+            build_timeout_guidance(
+                exec_script_path=exec_script_path,
+                timeout_feedback=timeout_feedback,
+            )
+        )
+
+    return "\n\n".join(parts)

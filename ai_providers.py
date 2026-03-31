@@ -3,8 +3,8 @@ AI Providers - Abstracts differences between AI CLI tools.
 
 Supported providers:
 - codebuddy: CodeBuddy CLI (default)
-- claude: Claude Code Internal CLI
-- gemini: Gemini CLI Internal
+- claude: Claude Code CLI
+- gemini: Gemini Cli
 
 Each provider knows how to:
 - Build the correct command-line arguments for its tool
@@ -13,9 +13,28 @@ Each provider knows how to:
 
 import os
 import logging
-from typing import Optional
+from typing import Optional, List
+
+import yaml
 
 logger = logging.getLogger(__name__)
+
+
+def _load_default_model():
+    """Load default model from config.yaml."""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f) or {}
+            return config.get('default_model', 'deepseek-v3.2')
+        except Exception:
+            pass
+    return 'deepseek-v3.2'
+
+
+# Default model loaded from config.yaml, fallback to deepseek-v3.2
+DEFAULT_MODEL = _load_default_model()
 
 
 class AIProvider:
@@ -39,6 +58,11 @@ class AIProvider:
     # Default model
     default_model: str = ""
 
+    # Whether this provider supports --append-system-prompt CLI parameter.
+    # If True, system_prompt is passed via CLI; otherwise it must be
+    # prepended to the user prompt by the caller.
+    supports_system_prompt: bool = False
+
     def __init__(
         self,
         executable: str = None,
@@ -57,15 +81,19 @@ class AIProvider:
         self.model = model or self.default_model
         self.extra_args = extra_args
 
-    def build_command(self, continue_session: bool = False) -> str:
+    def build_command(self, session_id: str = None, system_prompt: str = None) -> str:
         """
         Build the CLI command string (without prompt).
-        
+
         The prompt is always passed via stdin pipe.
-        
+
         Args:
-            continue_session: Whether to continue an existing session
-            
+            session_id: Session ID to resume. If provided, the CLI will
+                continue an existing conversation. If None, starts a new session.
+            system_prompt: Optional system prompt to append via
+                ``--append-system-prompt``.  Ignored by providers that
+                do not support it (``supports_system_prompt = False``).
+
         Returns:
             str: The command string
         """
@@ -90,6 +118,20 @@ class AIProvider:
     def __repr__(self):
         return f"{self.__class__.__name__}(executable={self.executable!r}, model={self.model!r})"
 
+    def set_model(self, model_name: str):
+        """
+        Switch the model used by this provider.
+
+        Since task execution is single-threaded, mutating self.model
+        in-place is safe.
+
+        Args:
+            model_name: New model name to use
+        """
+        if model_name and model_name != self.model:
+            logger.info(f"[{self.name}] Switching model: {self.model} → {model_name}")
+            self.model = model_name
+
 
 class CodeBuddyProvider(AIProvider):
     """
@@ -97,41 +139,47 @@ class CodeBuddyProvider(AIProvider):
     
     Command pattern:
         type prompt.txt | codebuddy --debug --verbose --max-turns 500 --print
-            --output-format stream-json [--continue] --model <model> -y -
+            --output-format stream-json [--resume <session_id>] --model <model> -y -
     """
 
     name = "codebuddy"
     default_executable = "codebuddy"
-    default_model = "glm-5.0-ioa"
+    default_model = DEFAULT_MODEL
+    supports_system_prompt = True
 
-    def build_command(self, continue_session: bool = False) -> str:
+    def build_command(self, session_id: str = None, system_prompt: str = None) -> str:
         parts = [self.executable]
-        
+
         parts.append("--debug --verbose --print")
         parts.extend(["--output-format", "stream-json"])
-        
-        if continue_session:
-            parts.append("--continue")
-        
+
+        if session_id:
+            parts.extend(["--resume", session_id])
+
         parts.extend(["--model", self.model])
-        
+
+        if system_prompt:
+            # Escape double quotes for shell safety
+            escaped = system_prompt.replace('"', '\\"')
+            parts.extend(["--append-system-prompt", f'"{escaped}"'])
+
         if self.extra_args:
             parts.append(self.extra_args)
-        
+
         # -y - means: accept all, read prompt from stdin
         parts.extend(["-y", "-"])
-        
+
         return " ".join(parts)
 
 
 class ClaudeCodeProvider(AIProvider):
     """
-    Provider for Claude Code Internal CLI.
-    
+    Provider for Claude Code CLI.
+
     Command pattern:
-        type prompt.txt | claude-internal --print --output-format stream-json
-            [--continue] --model <model> --dangerously-skip-permissions -
-    
+        type prompt.txt | claude --print --output-format stream-json
+            [--resume <session_id>] --model <model> --dangerously-skip-permissions -
+
     Key differences from CodeBuddy:
     - Uses --dangerously-skip-permissions instead of -y
     - The stdin sentinel is also '-'
@@ -139,21 +187,27 @@ class ClaudeCodeProvider(AIProvider):
     """
 
     name = "claude"
-    default_executable = "claude-internal"
+    default_executable = "claude"
     default_model = "claude-sonnet-4-6"
+    supports_system_prompt = True
 
-    def build_command(self, continue_session: bool = False) -> str:
+    def build_command(self, session_id: str = None, system_prompt: str = None) -> str:
         parts = [self.executable]
-        
+
         parts.append("--verbose --print")
         parts.extend(["--output-format", "stream-json"])
-        
-        if continue_session:
-            parts.append("--continue")
-        
+
+        if session_id:
+            parts.extend(["--resume", session_id])
+
         parts.extend(["--model", self.model])
         parts.append("--dangerously-skip-permissions")
-        
+
+        if system_prompt:
+            # Escape double quotes for shell safety
+            escaped = system_prompt.replace('"', '\\"')
+            parts.extend(["--append-system-prompt", f'"{escaped}"'])
+
         if self.extra_args:
             parts.append(self.extra_args)
         
@@ -165,41 +219,124 @@ class ClaudeCodeProvider(AIProvider):
 
 class GeminiCLIProvider(AIProvider):
     """
-    Provider for Gemini CLI Internal.
+    Provider for Gemini Cli.
     
     Command pattern:
-        type prompt.txt | gemini-internal --output-format stream-json
+        type prompt.txt | gemini --output-format stream-json
             -p - [--resume latest] --model <model> --yolo
+            [--include-directories <dir1>,<dir2>,...]
     
     Key differences from CodeBuddy:
     - Uses -p (--prompt) for non-interactive mode instead of --print
     - Uses --yolo or -y instead of -y for auto-accept
-    - Uses --resume latest for session continuation (not --continue)
+    - Uses --resume <session_id> for session continuation
     - Prompt is passed via -p with '-' to read from stdin
+    - Supports --include-directories to allow access to directories outside workspace
     """
 
     name = "gemini"
-    default_executable = "gemini-internal"
+    default_executable = "gemini"
     default_model = "gemini-2.5-pro"
 
-    def build_command(self, continue_session: bool = False) -> str:
+    def __init__(
+        self,
+        executable: str = None,
+        model: str = None,
+        extra_args: Optional[str] = None,
+        include_directories: Optional[List[str]] = None,
+    ):
+        """
+        Initialize Gemini CLI provider.
+        
+        Args:
+            executable: Path to the CLI executable (None = use default)
+            model: AI model to use (None = use provider default)
+            extra_args: Additional CLI arguments to append
+            include_directories: List of additional directories Gemini is
+                allowed to read/write outside the workspace sandbox.
+        """
+        super().__init__(executable=executable, model=model, extra_args=extra_args)
+        self.include_directories = include_directories or []
+
+    def build_command(self, session_id: str = None, system_prompt: str = None) -> str:
         parts = [self.executable]
-        
+
         parts.extend(["--output-format", "stream-json"])
-        
-        if continue_session:
-            parts.extend(["--resume", "latest"])
+
+        if session_id:
+            parts.extend(["--resume", session_id])
         
         parts.extend(["--model", self.model])
         parts.append("--yolo")
         
+        # Add --include-directories if specified
+        if self.include_directories:
+            dirs_str = ",".join(self.include_directories)
+            parts.extend(["--include-directories", dirs_str])
+        
         if self.extra_args:
             parts.append(self.extra_args)
         
+        # system_prompt is ignored — Gemini CLI does not support it
+
         # -p - means: non-interactive mode, read prompt from stdin
         parts.extend(["-p", "-"])
         
         return " ".join(parts)
+
+
+class OpenCodeProvider(AIProvider):
+    """
+    Provider for OpenCode CLI (https://opencode.ai).
+
+    OpenCode is a terminal-based AI coding agent that supports multiple
+    AI backends (Claude, GPT, Gemini, etc.) through its own configuration.
+
+    Command pattern (new session):
+        opencode run --format json -m <model> "prompt text"
+
+    Command pattern (continue session):
+        opencode run --format json -m <model> -s <session_id> "prompt text"
+
+    Key differences from other providers:
+    - Prompt is passed as a positional argument, NOT via stdin
+    - Session continuation uses -s <session_id>
+    - The session ID is extracted from the first JSON event
+    - Output format uses line-delimited JSON with types:
+      step_start, text, tool_call, tool_result, step_finish
+    - The --format json flag is required for machine-readable output
+    """
+
+    name = "opencode"
+    default_executable = "opencode"
+    default_model = ""  # Uses opencode's configured default
+
+    def build_command(self, session_id: str = None, system_prompt: str = None) -> str:
+        parts = [self.executable, "run"]
+
+        parts.extend(["--format", "json"])
+
+        if self.model:
+            parts.extend(["-m", self.model])
+
+        if session_id:
+            parts.extend(["-s", session_id])
+
+        if self.extra_args:
+            parts.append(self.extra_args)
+
+        # system_prompt is ignored — OpenCode does not support it
+
+        return " ".join(parts)
+
+    def get_stdin_command(self, prompt_file_path: str, cmd_args: str) -> str:
+        """
+        OpenCode supports stdin pipe for the message, just like other providers.
+        """
+        if os.name == 'nt':
+            return f'type "{prompt_file_path}" | {cmd_args}'
+        else:
+            return f'cat "{prompt_file_path}" | {cmd_args}'
 
 
 class TestProvider(AIProvider):
@@ -324,7 +461,7 @@ class TestProvider(AIProvider):
         """Return the number of remaining unused rules."""
         return max(0, len(self._rules) - self._rule_index)
 
-    def build_command(self, continue_session: bool = False) -> str:
+    def build_command(self, session_id: str = None, system_prompt: str = None) -> str:
         # Not used for test provider
         return "echo test-provider"
 
@@ -340,6 +477,7 @@ PROVIDERS = {
     "codebuddy": CodeBuddyProvider,
     "claude": ClaudeCodeProvider,
     "gemini": GeminiCLIProvider,
+    "opencode": OpenCodeProvider,
     "test": TestProvider,
 }
 
@@ -347,9 +485,10 @@ PROVIDERS = {
 PROVIDER_ALIASES = {
     "cb": "codebuddy",
     "claude-code": "claude",
-    "claude-internal": "claude",
+    "claude": "claude",
     "gemini-cli": "gemini",
-    "gemini-internal": "gemini",
+    "gemini": "gemini",
+    "oc": "opencode",
 }
 
 
@@ -359,6 +498,7 @@ def get_provider(
     model: str = None,
     extra_args: str = None,
     test_rules_file: str = None,
+    include_directories: List[str] = None,
 ) -> AIProvider:
     """
     Create an AI provider by name.
@@ -369,6 +509,7 @@ def get_provider(
         model: Override the default model
         extra_args: Additional CLI arguments
         test_rules_file: Path to test rules file (only for "test" provider)
+        include_directories: List of additional directories for Gemini sandbox
         
     Returns:
         AIProvider: Configured provider instance
@@ -399,6 +540,14 @@ def get_provider(
             extra_args=extra_args,
         )
     
+    if resolved == 'gemini':
+        return GeminiCLIProvider(
+            executable=executable,
+            model=model,
+            extra_args=extra_args,
+            include_directories=include_directories,
+        )
+    
     return provider_class(
         executable=executable,
         model=model,
@@ -409,7 +558,7 @@ def get_provider(
 def list_providers() -> dict:
     """
     List all available providers with their info.
-    
+
     Returns:
         dict: Provider name -> info dict
     """
@@ -422,3 +571,71 @@ def list_providers() -> dict:
             "aliases": [k for k, v in PROVIDER_ALIASES.items() if v == name],
         }
     return result
+
+
+# Valid model roles for multimodel support
+MODEL_ROLES = ("plan", "default", "simple")
+
+
+def parse_model_spec(model_str: str) -> dict:
+    """
+    Parse a model specification string into a role→model dict.
+
+    Supports two formats:
+    1. Single model: "glm-5" → all three roles use the same model
+    2. Multi-role: "plan:glm-4-flash;default:glm-5;simple:glm-4-flash"
+       - Separator is ';', key-value separator is ':'
+       - Only 'plan', 'default', 'simple' keys are allowed
+       - Missing roles are filled with the 'default' value
+
+    Args:
+        model_str: Model specification string
+
+    Returns:
+        dict: {"plan": "...", "default": "...", "simple": "..."}
+
+    Raises:
+        ValueError: If the spec contains invalid role names
+    """
+    if not model_str:
+        return {"plan": "", "default": "", "simple": ""}
+
+    # Check if it's a multi-role spec (contains both ';' and ':' with a valid role prefix)
+    if ';' in model_str or any(model_str.startswith(f"{role}:") for role in MODEL_ROLES):
+        roles = {}
+        for part in model_str.split(';'):
+            part = part.strip()
+            if not part:
+                continue
+            if ':' not in part:
+                raise ValueError(
+                    f"Invalid model spec segment: {part!r}. "
+                    f"Expected 'role:model' format (roles: {', '.join(MODEL_ROLES)})"
+                )
+            role, model = part.split(':', 1)
+            role = role.strip()
+            model = model.strip()
+            if role not in MODEL_ROLES:
+                raise ValueError(
+                    f"Unknown model role: {role!r}. "
+                    f"Allowed roles: {', '.join(MODEL_ROLES)}"
+                )
+            roles[role] = model
+
+        # 'default' must be present if any role is specified
+        if "default" not in roles:
+            raise ValueError(
+                "Multi-role model spec must include 'default'. "
+                f"Got: {model_str!r}"
+            )
+
+        # Fill missing roles with 'default' value
+        default_model = roles["default"]
+        for role in MODEL_ROLES:
+            if role not in roles:
+                roles[role] = default_model
+
+        return roles
+    else:
+        # Single model string — all roles use the same model
+        return {"plan": model_str, "default": model_str, "simple": model_str}

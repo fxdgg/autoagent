@@ -26,12 +26,16 @@ class TodoOrchestrator:
     def __init__(
         self,
         todos_file: str = "todos.yaml",
+        state_file: str = None,
         provider: AIProvider = None,
         workspace: str = ".",
-        timeout: int = 3600,
+        timeout: int = 300,
         log_dir: str = None,
         ideas_file: str = None,
         idle_interval: int = 30,
+        use_cli: bool = False,
+        backoff_max_wait: int = 300,
+        model_roles: dict = None,
     )
 ```
 
@@ -42,10 +46,13 @@ class TodoOrchestrator:
 | `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
 | `provider` | AIProvider | None | AI 提供者实例（支持 CodeBuddy/Claude/Gemini） |
 | `workspace` | str | "." | 工作目录（项目根目录） |
-| `timeout` | int | 3600 | AI 调用超时时间（秒） |
+| `timeout` | int | 300 | AI 调用超时时间（秒）。CLI 模式下，默认值来自 `config.yaml` 中的 `bash_timeout`（默认 3600），CLI 参数 `--timeout` 可覆盖 |
 | `log_dir` | str | None | 日志根目录（相对于 CWD，默认 `.autoagent`）|
 | `ideas_file` | str | None | ideas.md 文件路径（None 则禁用 ideas 监控） |
 | `idle_interval` | int | 30 | idle 模式检查间隔（秒） |
+| `use_cli` | bool | False | 强制使用 CLI 子进程模式（而非 CodeBuddy Agent SDK）。非 codebuddy provider 自动启用 |
+| `backoff_max_wait` | int | 300 | AI CLI 连续失败时的最大退避等待时间（秒），来自 `config.yaml` 的 `backoff_max_wait` |
+| `model_roles` | dict | None | 模型角色字典（`{"plan": ..., "default": ..., "simple": ...}`），由 `parse_model_spec()` 解析生成 |
 
 > **注意**：`state_file` 参数已废弃。`todos_state.yaml`、`orchestrator.log`、`.ideas_processed.md` 等运行时文件
 > 现在统一放置在由 `log_dir` + `.autoagent_log` 推导出的会话目录下，不再出现在项目目录中。
@@ -154,6 +161,9 @@ class AIProvider:
     default_executable: str = "ai-tool"
     default_model: str = ""
 
+    # Whether this provider supports --append-system-prompt CLI parameter.
+    supports_system_prompt: bool = False
+
     def __init__(
         self,
         executable: str = None,
@@ -175,10 +185,10 @@ class AIProvider:
 #### build_command
 
 ```python
-def build_command(self, continue_session: bool = False) -> str
+def build_command(self, session_id: str = None, system_prompt: str = None) -> str
 ```
 
-构造 CLI 命令字符串（不含 prompt）。Prompt 始终通过 stdin 管道传递。
+构造 CLI 命令字符串（不含 prompt）。Prompt 始终通过 stdin 管道传递。如果提供了 `session_id`，CLI 将恢复该会话；否则启动新会话。如果提供了 `system_prompt` 且 provider 支持，则通过 `--append-system-prompt` 传递。
 
 #### get_stdin_command
 
@@ -188,6 +198,33 @@ def get_stdin_command(self, prompt_file_path: str, cmd_args: str) -> str
 
 构造包含 stdin 管道的完整命令。在 Windows 上使用 `type`，在 Linux/macOS 上使用 `cat`。
 
+#### set_model
+
+```python
+def set_model(self, model_name: str)
+```
+
+切换 provider 使用的模型。由于任务执行是单线程的，直接修改 `self.model` 是安全的。仅在 `model_name` 非空且与当前模型不同时才切换。
+
+### 模块级函数
+
+#### parse_model_spec
+
+```python
+def parse_model_spec(model_str: str) -> dict
+```
+
+解析模型规格字符串为角色→模型字典。
+
+**输入格式**：
+- 单模型：`"glm-5"` → `{"plan": "glm-5", "default": "glm-5", "simple": "glm-5"}`
+- 多角色：`"plan:X;default:Y;simple:Z"` → `{"plan": "X", "default": "Y", "simple": "Z"}`
+
+**规则**：
+- 只允许 `plan`、`default`、`simple` 三个角色
+- 多角色格式必须包含 `default`
+- 缺失的角色用 `default` 值填充
+
 ### 内置 Provider
 
 #### CodeBuddyProvider
@@ -196,11 +233,12 @@ def get_stdin_command(self, prompt_file_path: str, cmd_args: str) -> str
 |------|----|
 | `name` | `"codebuddy"` |
 | `default_executable` | `"codebuddy"` |
-| `default_model` | `"glm-5.0-ioa"` |
+| `default_model` | 从 `config.yaml` 的 `default_model` 加载（回退到 `"deepseek-v3.2"`） |
+| `supports_system_prompt` | `True` |
 
 **命令模式**：
 ```bash
-type prompt.txt | codebuddy --debug --verbose --print --output-format stream-json [--continue] --model <model> -y -
+type prompt.txt | codebuddy --debug --verbose --print --output-format stream-json [--resume <session_id>] --model <model> -y -
 ```
 
 #### ClaudeCodeProvider
@@ -208,12 +246,13 @@ type prompt.txt | codebuddy --debug --verbose --print --output-format stream-jso
 | 属性 | 值 |
 |------|----|
 | `name` | `"claude"` |
-| `default_executable` | `"claude-internal"` |
+| `default_executable` | `"claude"` |
 | `default_model` | `"claude-sonnet-4-6"` |
+| `supports_system_prompt` | `True` |
 
 **命令模式**：
 ```bash
-type prompt.txt | claude-internal --verbose --print --output-format stream-json [--continue] --model <model> --dangerously-skip-permissions -
+type prompt.txt | claude --verbose --print --output-format stream-json [--resume <session_id>] --model <model> --dangerously-skip-permissions -
 ```
 
 与 CodeBuddy 的关键差异：使用 `--dangerously-skip-permissions` 替代 `-y`。
@@ -223,15 +262,40 @@ type prompt.txt | claude-internal --verbose --print --output-format stream-json 
 | 属性 | 值 |
 |------|----|
 | `name` | `"gemini"` |
-| `default_executable` | `"gemini-internal"` |
+| `default_executable` | `"gemini"` |
 | `default_model` | `"gemini-2.5-pro"` |
+| `supports_system_prompt` | `False` |
 
 **命令模式**：
 ```bash
-type prompt.txt | gemini-internal --output-format stream-json [--resume latest] --model <model> --yolo -p -
+type prompt.txt | gemini --output-format stream-json [--resume <session_id>] --model <model> --yolo -p -
 ```
 
-与 CodeBuddy 的关键差异：使用 `-p` 指定非交互模式，使用 `--resume latest` 替代 `--continue`，使用 `--yolo` 替代 `-y`。
+与 CodeBuddy 的关键差异：使用 `-p` 指定非交互模式，使用 `--resume <session_id>` 恢复会话，使用 `--yolo` 替代 `-y`。
+
+#### OpenCodeProvider
+
+| 属性 | 值 |
+|------|----|
+| `name` | `"opencode"` |
+| `default_executable` | `"opencode"` |
+| `default_model` | `""` （使用 opencode 自身配置的默认模型） |
+| `supports_system_prompt` | `False` |
+
+**命令模式**：
+```bash
+# 新会话
+type prompt.txt | opencode run --format json [-m <model>]
+
+# 继续会话
+type prompt.txt | opencode run --format json [-m <model>] -s <session_id>
+```
+
+与 CodeBuddy 的关键差异：
+- 使用 `--format json` 替代 `--output-format stream-json`
+- 会话续接使用 `-s <session_id>`，session ID 从首次 JSON 事件中提取
+- 输出格式使用行分隔 JSON，事件类型包括：`step_start`、`text`、`tool_call`、`tool_result`、`step_finish`
+- 不设默认模型，使用 opencode 自身配置
 
 #### TestProvider
 
@@ -261,8 +325,9 @@ def get_provider(
 | 名称 | 别名 |
 |------|------|
 | `codebuddy` | `cb` |
-| `claude` | `claude-code`, `claude-internal` |
-| `gemini` | `gemini-cli`, `gemini-internal` |
+| `claude` | `claude-code`, `claude` |
+| `gemini` | `gemini-cli`, `gemini` |
+| `opencode` | `oc` |
 | `test` | - |
 
 #### list_providers
@@ -303,26 +368,29 @@ class AIClient:
 |------|------|--------|------|
 | `provider` | AIProvider | None | AI provider 实例（优先于 legacy 参数） |
 | `workspace` | str | "." | 工作目录 |
-| `timeout` | int | 3600 | 超时时间（秒） |
-| `context_id` | str | None | Context 标识符，用于状态记录和日志追踪（注意：`--continue` 只能继续最近一次对话，不支持指定 context ID） |
+| `timeout` | int | 3600 | 超时时间（秒）。实际使用中由 TodoOrchestrator 传入（来自 config.yaml 或 CLI `--timeout`） |
+| `context_id` | str | None | Context 标识符，用于状态记录和日志追踪 |
 | `codebuddy_path` | str | None | （Legacy）CodeBuddy 可执行文件路径 |
 | `model` | str | None | （Legacy）AI 模型名 |
 
-> 如果不提供 `provider`，会根据 legacy 参数或默认值创建 `CodeBuddyProvider(model="glm-5.0-ioa")`。
+> 如果不提供 `provider`，会根据 legacy 参数或默认值创建 `CodeBuddyProvider(model="deepseek-v3.2")`。
 
 ### 属性
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
 | `last_full_log` | str | 最近一次 `ask()` 的完整对话日志（包含工具调用），供 ConversationLogger 使用 |
-| `_session_started` | bool | 内部标志，控制是否使用 `--continue` 参数 |
+| `_session_id` | str | 会话 ID，用于 `--resume` 续接参数。首次调用后自动从 stream 事件中捕获 |
+| `_consecutive_failures` | int | 连续失败计数器，用于指数退避 |
+| `_backoff_base` | int | 退避基础等待时间（默认 5 秒） |
+| `_backoff_max` | int | 退避最大等待时间（默认 300 秒，由 `config.yaml` 的 `backoff_max_wait` 覆盖） |
 
 ### Context 管理策略
 
 | 层级 | 策略 | 说明 |
 |------|------|------|
 | 主任务 | 独立 context | 每个主任务创建独立的 AIClient，互不干扰 |
-| 子任务 | 共享 context | 同一主任务内的子任务使用 `--continue` 共享上下文 |
+| 子任务 | 共享 context | 同一主任务内的子任务通过 session_id 自动共享上下文 |
 
 ```python
 from ai_providers import get_provider
@@ -332,19 +400,19 @@ provider = get_provider("claude", model="claude-sonnet-4-6")
 
 # 主任务 1
 client1 = AIClient(provider=provider, context_id="task_1")
-client1.ask("修改模型代码", continue_session=False)   # 创建新 context
-client1.ask("检查修改结果", continue_session=True)    # 复用 context
+client1.ask("修改模型代码")   # 创建新 session
+client1.ask("检查修改结果")    # 自动通过 session_id 复用 context
 
 # 主任务 2（完全隔离）
 client2 = AIClient(provider=provider, context_id="task_2")
-client2.ask("修改另一个模型", continue_session=False)  # 独立 context
+client2.ask("修改另一个模型")  # 独立 session
 ```
 
 ### 方法
 
 #### ask
 
-向 AI 工具发送提示并获取响应。
+向 AI 工具发送提示并获取响应。会话续接通过 session_id 自动管理：首次调用创建新会话，后续调用自动通过 `--resume <session_id>` 复用会话。
 
 ```python
 def ask(
@@ -352,7 +420,7 @@ def ask(
     prompt: str,
     expect_json: bool = False,
     timeout: int = None,
-    continue_session: bool = False,
+    system_prompt: str = None,
 ) -> Union[str, dict]
 ```
 
@@ -361,7 +429,7 @@ def ask(
 | `prompt` | str | - | 提示词 |
 | `expect_json` | bool | False | 是否期望 JSON 响应 |
 | `timeout` | int | None | 超时时间（覆盖默认值） |
-| `continue_session` | bool | False | 是否使用 `--continue` 保持上下文 |
+| `system_prompt` | str | None | 可选的系统提示词。对于支持 `supports_system_prompt` 的 provider，通过 `--append-system-prompt` CLI 参数传递；否则附加到用户 prompt 末尾 |
 
 **执行流程**：
 1. 将 prompt 写入临时文件（避免 shell 转义问题）
@@ -379,14 +447,14 @@ from codebuddy_client import AIClient
 provider = get_provider("codebuddy")
 client = AIClient(provider=provider, context_id="task_2")
 
-# 第一次调用：创建新 context
-result = client.ask("请阅读 program.md 并开始执行任务 2", continue_session=False)
+# 第一次调用：创建新 session
+result = client.ask("请阅读 program.md 并开始执行任务 2")
 
-# 后续调用：复用 context
-result = client.ask("检查子任务 2.1 的结果", continue_session=True)
+# 后续调用：自动通过 session_id 复用 context
+result = client.ask("检查子任务 2.1 的结果")
 
 # 获取结构化 JSON 响应
-decision = client.ask("分析失败原因", expect_json=True, continue_session=True)
+decision = client.ask("分析失败原因", expect_json=True)
 print(decision['retry_from'])
 
 # 获取包含工具调用的完整日志
@@ -399,7 +467,7 @@ full_log = client.last_full_log
 def reset_session(self)
 ```
 
-重置会话状态，使下一次调用不使用 `--continue`。
+重置会话状态（清除 session_id），使下一次调用启动新会话。
 
 ### stream-json 解析
 
@@ -432,7 +500,8 @@ AI CLI 工具的 `--output-format stream-json` 模式输出逐行 JSON 对象。
 
 ```python
 class SimpleTaskExecutor:
-    def execute(self, task: dict, client: CodeBuddyClient) -> bool
+    def __init__(self, session_dir: str = None)
+    def execute(self, task: dict, client: CodeBuddyClient, ...) -> bool
 ```
 
 **执行逻辑**：
@@ -442,7 +511,7 @@ attempts = 0
 max_attempts = task.get('max_attempts', 20)
 
 while attempts < max_attempts:
-    result = client.ask(prompt, continue_session=(attempts > 0))
+    result = client.ask(prompt)
     if is_completed(result):
         return True
     attempts += 1
@@ -456,7 +525,7 @@ return False
 
 ```python
 class LoopingTaskExecutor:
-    def __init__(self, session_dir: str = None)
+    def __init__(self, session_dir: str = None, model_roles: dict = None)
     def execute(self, task: dict, client: CodeBuddyClient) -> bool
 ```
 
@@ -465,6 +534,7 @@ class LoopingTaskExecutor:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `session_dir` | str | None | 日志会话目录（从 orchestrator 传入） |
+| `model_roles` | dict | None | 模型角色字典，用于子任务模型切换 |
 
 **执行逻辑**：
 
@@ -494,7 +564,7 @@ for loop in range(task['repeat_count']):
 
 ```python
 class NestedTaskExecutor:
-    def __init__(self, session_dir: str = None)
+    def __init__(self, session_dir: str = None, model_roles: dict = None)
     def execute(self, task: dict, client: CodeBuddyClient) -> bool
 ```
 
@@ -503,6 +573,7 @@ class NestedTaskExecutor:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `session_dir` | str | None | 日志会话目录（从 orchestrator 传入，传递给 SubtaskExecutor） |
+| `model_roles` | dict | None | 模型角色字典，用于子任务模型切换 |
 
 **两个 AI 决策点**：
 
@@ -551,7 +622,7 @@ context = {
 
 ```python
 class SubtaskExecutor:
-    def __init__(self, session_dir: str = None)
+    def __init__(self, session_dir: str = None, model_roles: dict = None)
     def execute(self, subtask: dict, client: CodeBuddyClient) -> SubtaskResult
 ```
 
@@ -560,6 +631,7 @@ class SubtaskExecutor:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `session_dir` | str | None | 日志会话目录（long_running 任务必须提供，用于构造 AI prompt 中的 `--log-dir` 参数） |
+| `model_roles` | dict | None | 模型角色字典，根据子任务的 `model` 字段切换 provider 模型 |
 
 支持的子任务类型：
 
@@ -641,6 +713,7 @@ def log_prompt(
     attempt: int,
     parent_task_id: Optional[str] = None,
     metadata: Optional[dict] = None,
+    system_prompt: Optional[str] = None,
 )
 ```
 
@@ -654,6 +727,7 @@ def log_prompt(
 | `attempt` | int | 尝试次数 |
 | `parent_task_id` | str | 父任务 ID（子任务时提供） |
 | `metadata` | dict | 额外信息（如 `{"type": "failure_analysis"}`） |
+| `system_prompt` | str | 可选的系统提示词（如果提供，会在 prompt 之前记录） |
 
 #### log_response（推荐：崩溃安全写入）
 
@@ -937,7 +1011,7 @@ def reset(self)
 
 ## StateManager
 
-任务状态持久化管理器，负责加载、保存和更新任务执行状态。
+任务状态持久化管理器，负责加载、保存和更新任务执行状态。写入操作通过 `threading.Lock` 保证线程安全。
 
 ### 类定义
 
@@ -1065,7 +1139,7 @@ class SubtaskState(TypedDict, total=False):
 class TaskConfig(TypedDict, total=False):
     id: Union[int, str]                               # 必填，唯一标识
     name: str                                          # 必填，任务名称
-    type: Literal["simple", "nested", "looping", "long_running"]  # 必填，任务类型
+    type: Literal["simple", "nested", "looping"]  # 必填，任务类型（顶层）
     completion_criteria: str                            # 必填，完成标准
     initial_hint: str                                  # simple 可选
     max_attempts: int                                  # 可选，默认 20
@@ -1080,7 +1154,7 @@ class TaskConfig(TypedDict, total=False):
 class SubtaskConfig(TypedDict, total=False):
     id: Union[int, str]                                # 必填
     name: str                                          # 必填
-    type: Literal["simple", "long_running"]            # 必填
+    type: Literal["simple", "long_running", "simple_once", "long_running_once"]  # 必填
     completion_criteria: str                            # 必填
     initial_hint: str                                  # simple 可选
     max_attempts: int                                  # 可选，默认 5
@@ -1113,26 +1187,66 @@ class AICallError(Exception):
 |------|------|--------|------|
 | `--config` | `-c` | `todos.yaml` | 任务配置文件路径 |
 | `--task` | `-t` | None | 只执行指定任务 ID |
-| `--provider` | `-P` | `codebuddy` | AI provider：`codebuddy`、`claude`、`gemini` |
+| `--provider` | `-P` | `codebuddy` | AI provider：`codebuddy`、`claude`、`gemini`、`opencode` |
 | `--executable` | - | None | 覆盖 provider 默认可执行文件路径 |
 | `--extra-args` | - | None | 传递给 AI 工具的额外 CLI 参数 |
 | `--use-cli` | - | - | 强制使用 CLI 模式（而非 SDK 模式） |
 | `--test-rules` | - | None | 测试规则文件路径（使用 `test` provider 时必须指定） |
+| `--include-directories` | - | None | 逗号分隔的额外目录列表，允许 AI 工具访问工作区外的目录（仅 Gemini） |
 | `--list-providers` | - | - | 列出所有可用 AI provider 并退出 |
 | `--codebuddy-path` | - | None | （Legacy）CodeBuddy 可执行文件路径，建议用 `--provider` + `--executable` |
-| `--model` | `-m` | 取决于 provider | AI 模型（codebuddy=glm-5.0-ioa, claude=claude-sonnet-4-6, gemini=gemini-2.5-pro） |
+| `--model` | `-m` | 取决于 provider | AI 模型。支持单模型（如 `glm-5`）和多角色格式（如 `"plan:X;default:Y;simple:Z"`）。codebuddy 默认从 config.yaml 的 `default_model` 加载 |
 | `--workspace` | `-w` | `.` | 工作目录 |
-| `--timeout` | - | 3600 | AI 调用超时时间（秒） |
+| `--timeout` | - | 3600 | AI 调用超时时间（秒），默认值来自 `config.yaml` 的 `bash_timeout`（如果 config.yaml 不存在则为 300） |
 | `--log-dir` | - | `.autoagent` | 日志根目录（相对于 CWD） |
 | `--ideas` | - | None | ideas.md 文件路径 |
 | `--ideas-only` | - | - | 只处理 ideas.md（带人工审核），不运行 todo list（需搭配 `--ideas`） |
 | `--no-idle` | - | - | 禁用 idle 模式（默认当 `--ideas` 指定时自动开启 idle） |
 | `--idle-interval` | - | 30 | idle 轮询间隔（秒） |
+| `--preset` | - | `default` | Preset 配置名称，从 config.yaml 加载预设参数 |
+| `--human-review` | - | - | 启用 ideas 处理的人工审核。AI 审查通过后暂停等待人工确认 |
 | `--status` | - | - | 显示当前任务状态并退出 |
 | `--reset` | - | - | 重置所有状态并退出 |
 | `--validate` | - | - | 验证配置文件并退出 |
 | `--no-skip` | - | - | 不跳过已完成的任务 |
 | `--verbose` | `-v` | - | 启用 debug 级别日志 |
+
+**Preset 配置**：
+
+通过 `--preset <name>` 从 `config.yaml` 加载预设配置。Preset 支持的字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `config` | str | 任务配置文件路径 |
+| `ideas` | str | ideas.md 文件路径 |
+| `provider` | str | AI provider 名称 |
+| `model` | str | AI 模型名称 |
+| `executable` | str | 可执行文件路径 |
+| `workspace` | str | 工作目录 |
+| `timeout` | int | AI 调用超时时间 |
+| `log_dir` | str | 日志根目录 |
+| `idle_interval` | int | idle 轮询间隔 |
+| `include_directories` | str | 额外目录列表（Gemini 专用） |
+| `test_rules` | str | 测试规则文件路径 |
+| `verbose` | bool | 是否启用详细日志 |
+| `no_skip` | bool | 是否不跳过已完成任务 |
+| `no_idle` | bool | 是否禁用 idle 模式 |
+| `use_cli` | bool | 是否使用 CLI 模式 |
+| `ideas_only` | bool | 是否仅处理 ideas |
+| `human_review` | bool | 是否启用人工审核 |
+
+**示例**：
+
+```bash
+# 使用 default preset
+python orchestrator.py
+
+# 使用 claude preset
+python orchestrator.py --preset claude
+
+# 使用 preset 但覆盖特定参数
+python orchestrator.py --preset default --model claude-sonnet-4-6
+```
 
 **示例**：
 
@@ -1145,6 +1259,9 @@ python orchestrator.py --provider claude --task 2
 
 # 使用 Gemini CLI 并指定模型
 python orchestrator.py --provider gemini --model gemini-2.5-pro
+
+# 使用 OpenCode
+python orchestrator.py --provider opencode
 
 # 使用自定义可执行文件路径
 python orchestrator.py --provider claude --executable /usr/local/bin/claude
@@ -1167,6 +1284,40 @@ python orchestrator.py --validate
 # 不跳过已完成任务，全部重新执行
 python orchestrator.py --no-skip
 ```
+
+---
+
+## truncation_limits（config.yaml）
+
+控制自动构建提示词时各字段的最大字符数，防止上下文过长。通过 `truncation_limits.py` 模块加载，所有 prompt 构造器和 task_executor 共享。
+
+### 配置字段
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `suggested_fix` | 1500 | AI 失败分析建议（保留尾部） |
+| `history_summary` | 300 | 历史尝试摘要 |
+| `nested_latest_fix` | 2000 | 嵌套任务的修复上下文（含 evaluation 建议） |
+| `looping_latest_fix` | 1500 | 循环任务的修复上下文 |
+| `log_section` | 6000 | 长时间任务日志汇总（保留头尾） |
+| `execution_results` | 4000 | 子任务执行结果汇总（保留头尾） |
+| `idea_content` | 8000 | Ideas 原文（保留头部） |
+| `tasks_yaml` | 10000 | 生成的任务 YAML（保留头部） |
+| `review_feedback` | 3000 | AI 审查反馈（保留头部） |
+| `human_feedback` | 3000 | 人工审核反馈（保留头部） |
+| `error_text` | 2000 | 错误信息 |
+| `log_file` | 2000 | 单个日志文件内容（保留尾部） |
+
+### 使用方式
+
+```python
+from truncation_limits import limits
+
+max_len = limits.get('suggested_fix')  # 返回配置值或默认值
+limits.reload()                        # 重新从 config.yaml 加载
+```
+
+所有字段都有内置默认值，`config.yaml` 中只需配置想调整的项。
 
 ---
 
@@ -1245,7 +1396,7 @@ orchestrator.run_with_idle()  # 不会退出，直到 Ctrl+C
 |------|------|
 | **TodoOrchestrator** | 任务调度、状态管理、配置解析、ideas 处理、idle 模式 |
 | **AIProvider** | AI CLI 工具抽象基类、命令构造 |
-| **CodeBuddyProvider / ClaudeCodeProvider / GeminiCLIProvider** | 具体 AI 工具的命令构造 |
+| **CodeBuddyProvider / ClaudeCodeProvider / GeminiCLIProvider / OpenCodeProvider** | 具体 AI 工具的命令构造 |
 | **AIClient** (别名 CodeBuddyClient) | AI 调用、Context 管理、stream-json 解析 |
 | **SimpleTaskExecutor** | 简单任务执行（三层完成检测） |
 | **NestedTaskExecutor** | 嵌套任务执行、AI 决策调度 |

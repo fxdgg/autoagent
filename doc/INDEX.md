@@ -22,6 +22,7 @@
 | 快速上手 | [README.md](../README.md) → 快速开始 |
 | 了解系统架构 | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | 配置任务 | [USAGE.md](USAGE.md) → 配置文件 |
+| 使用 Preset 配置 | [USAGE.md](USAGE.md) → 使用 Preset 配置 |
 | 看使用示例 | [EXAMPLES.md](EXAMPLES.md) |
 | 了解 AI 决策机制 | [ARCHITECTURE.md](ARCHITECTURE.md) → AI 决策点 |
 | 了解长时间任务处理 | [ARCHITECTURE.md](ARCHITECTURE.md) → 长时间任务处理 |
@@ -36,6 +37,7 @@
 
 ## 📝 文档更新记录
 
+- **2026-03-29 v4**: 添加 Preset 配置文档
 - **2026-03-24 v3**: 精简索引页，去除重复内容
 - **2026-03-23 v2**: 更新为统一任务模型
 - **2026-03-23 v1**: 初始版本发布

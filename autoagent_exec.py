@@ -23,11 +23,10 @@ Output log:  <log-dir>/lr_tasks/lr_<task_id>_output.log
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
-import signal as signal_mod
-
 
 # Timeout in seconds for fast-fail detection
 FAST_FAIL_TIMEOUT = 10
@@ -43,7 +42,19 @@ def _ensure_utf8_stdio():
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="AutoAgent long-running task launcher",
+        description="AutoAgent long-running task launcher.\n\n"
+            "Runs a command with fast-fail detection:\n"
+            "  - If the command exits within 10s with an error, the error is shown immediately.\n"
+            "  - If the command is still running after 10s, it is detached to the background\n"
+            "    and a signal file is created for the orchestrator to monitor.\n\n"
+            "Examples:\n"
+            "  python autoagent_exec.py --log-dir /path/to/logs --task-id 1.2 -- make -j8\n"
+            "  python autoagent_exec.py --log-dir /path/to/logs --task-id 2.1 -- python train.py --epochs 100\n"
+            "  python autoagent_exec.py --log-dir /path/to/logs --task-id 1.3 -- ncu --set full ./main.exe\n\n"
+            "Output files (created under <log-dir>/lr_tasks/):\n"
+            "  lr_<task-id>_signal.json  - Status signal file (running/finished/error)\n"
+            "  lr_<task-id>_output.log   - Full stdout+stderr output of the command",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         usage="autoagent_exec.py --log-dir <dir> --task-id <id> -- <command...>",
     )
     parser.add_argument(
@@ -75,11 +86,9 @@ def write_signal_file(path: str, data: dict):
     tmp_path = path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
-    # Atomic rename (works on Windows for replacing existing files in Python 3.3+)
-    if os.path.exists(path):
-        os.replace(tmp_path, path)
-    else:
-        os.rename(tmp_path, path)
+    # os.replace works on all platforms in Python 3.3+ and handles
+    # both existing and non-existing targets atomically.
+    os.replace(tmp_path, path)
 
 
 def main():
@@ -88,7 +97,13 @@ def main():
     log_dir = args.log_dir
     task_id = args.task_id
     command = args.command
-    command_str = " ".join(command)
+    # Re-quote the command list into a single shell string.
+    # On Windows, use subprocess.list2cmdline (handles "C:/Program Files/...").
+    # On POSIX, use shlex.join which produces /bin/sh-compatible quoting.
+    if os.name == "nt":
+        command_str = subprocess.list2cmdline(command)
+    else:
+        command_str = shlex.join(command)
 
     # Ensure lr_tasks subdirectory exists
     lr_tasks_dir = os.path.join(log_dir, "lr_tasks")
@@ -98,8 +113,10 @@ def main():
     signal_file = os.path.join(lr_tasks_dir, f"lr_{task_id}_signal.json")
     output_log = os.path.join(lr_tasks_dir, f"lr_{task_id}_output.log")
 
-    # Open output log file
-    log_fh = open(output_log, "w", encoding="utf-8", errors="replace")
+    # Open output log file in binary mode so that the subprocess's raw
+    # bytes (which may be GBK on Chinese Windows) are preserved as-is.
+    # We will decode properly when reading the file back.
+    log_fh = open(output_log, "wb")
 
     # Start the command
     try:
@@ -163,8 +180,7 @@ def main():
 
             # Print the log content so AI can see the error
             try:
-                with open(output_log, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
+                content = _read_log_file(output_log)
                 if content.strip():
                     # Show last 3000 chars
                     tail = content[-3000:] if len(content) > 3000 else content
@@ -173,8 +189,8 @@ def main():
                     print(f"--- End of Output ---")
                 else:
                     print(f"   (no output captured)")
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"   (failed to read output log: {e})")
 
             # Do NOT write a signal file — let the AI fix and retry
             sys.exit(exit_code)
@@ -183,6 +199,11 @@ def main():
     # Detach: we don't need to do anything special since stdout/stderr
     # are already redirected to the log file. The process will continue
     # running even after this script exits.
+
+    # Close our file handle so the subprocess owns the only handle to
+    # the log file.  On Windows this avoids sharing-violation issues.
+    # The subprocess will continue writing via its inherited fd.
+    log_fh.close()
 
     print(f"\n[RUNNING] Command is still running after {FAST_FAIL_TIMEOUT}s -- treating as long-running task.")
     print(f"   PID: {pid}")
@@ -339,19 +360,72 @@ def _wait_for_process_windows(pid: int) -> 'int | None':
 
 
 def _wait_for_process_unix(pid: int) -> 'int | None':
-    """Wait for a Unix process by polling os.kill."""
+    """Wait for a Unix process by polling /proc status.
+
+    Uses /proc/<pid>/status to detect zombie processes (State: Z),
+    which os.kill(pid, 0) cannot distinguish from running processes.
+    Falls back to os.kill if /proc is unavailable (e.g. macOS).
+    """
     while True:
         try:
-            os.kill(pid, 0)  # Check if alive
-            time.sleep(2)
-        except OSError:
-            # Process no longer exists
+            with open(f"/proc/{pid}/status") as f:
+                for line in f:
+                    if line.startswith("State:"):
+                        if "Z" in line:  # zombie — process finished
+                            return None
+                        break
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            # /proc entry gone → process exited, or /proc not available
             break
+        except OSError:
+            # Fallback: try os.kill for platforms without /proc
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                break
+        time.sleep(2)
     return None  # Can't determine exit code from another process on Unix
 
 
 def _is_monitor_mode():
     return "--monitor" in sys.argv
+
+
+def _read_log_file(path: str) -> str:
+    """Read a log file with smart encoding detection.
+
+    The log file is written in binary mode (raw bytes from the subprocess),
+    so we need to detect the encoding. Strategy:
+      1. Try UTF-8 (strict) — works for most modern tools.
+      2. Fall back to the system's default encoding (e.g. GBK on Chinese Windows).
+      3. Last resort: latin-1 (never fails, 1:1 byte mapping).
+    """
+    with open(path, "rb") as f:
+        raw = f.read()
+
+    # Try UTF-8 first
+    try:
+        return raw.decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        pass
+
+    # Try system default encoding (e.g. 'gbk' on Chinese Windows)
+    sys_enc = sys.getdefaultencoding()
+    # Also try the console encoding on Windows
+    console_enc = None
+    if os.name == "nt":
+        import locale
+        console_enc = locale.getpreferredencoding(False)
+
+    for enc in (sys_enc, console_enc):
+        if enc and enc.lower() not in ("utf-8", "utf8"):
+            try:
+                return raw.decode(enc)
+            except (UnicodeDecodeError, ValueError, LookupError):
+                pass
+
+    # Last resort: latin-1 never fails
+    return raw.decode("latin-1")
 
 
 if __name__ == "__main__":

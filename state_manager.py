@@ -12,6 +12,7 @@ import os
 import time
 import yaml
 import logging
+import threading
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class StateManager:
             state_file: Path to the state persistence file
         """
         self.state_file = state_file
+        self._lock = threading.Lock()
         self.state = self._load_state()
 
     def _load_state(self) -> dict:
@@ -56,19 +58,20 @@ class StateManager:
         return {"tasks": {}}
 
     def save_state(self):
-        """Save current state to file."""
-        try:
-            with open(self.state_file, 'w', encoding='utf-8') as f:
-                yaml.dump(
-                    self.state, f,
-                    default_flow_style=False,
-                    allow_unicode=True,
-                    sort_keys=False,
-                )
-            logger.debug(f"State saved to {self.state_file}")
-        except Exception as e:
-            logger.error(f"Failed to save state: {e}")
-            raise
+        """Save current state to file (thread-safe)."""
+        with self._lock:
+            try:
+                with open(self.state_file, 'w', encoding='utf-8') as f:
+                    yaml.dump(
+                        self.state, f,
+                        default_flow_style=False,
+                        allow_unicode=True,
+                        sort_keys=False,
+                    )
+                logger.debug(f"State saved to {self.state_file}")
+            except Exception as e:
+                logger.error(f"Failed to save state: {e}")
+                raise
 
     def get_task_state(self, task_id: str) -> dict:
         """
@@ -98,6 +101,22 @@ class StateManager:
         
         self.state["tasks"][task_id]["status"] = status
         self.state["tasks"][task_id].update(kwargs)
+        self.save_state()
+
+    def update_task_field(self, task_id: str, field: str, value):
+        """
+        Update a single field in a task's state.
+        
+        Args:
+            task_id: Task identifier
+            field: Field name to update
+            value: New value for the field
+        """
+        task_id = str(task_id)
+        if task_id not in self.state["tasks"]:
+            self.state["tasks"][task_id] = {}
+        
+        self.state["tasks"][task_id][field] = value
         self.save_state()
 
     def add_task_history(self, task_id: str, entry: dict):
@@ -182,3 +201,47 @@ class StateManager:
                 summary[status] += 1
         
         return summary
+
+    def get_in_progress_tasks(self) -> list:
+        """
+        Get list of task IDs that are currently in_progress.
+        
+        Returns:
+            list: List of task_id strings with status 'in_progress'
+        """
+        in_progress = []
+        for task_id, task_state in self.state["tasks"].items():
+            if task_state.get("status") == "in_progress":
+                in_progress.append(task_id)
+        return in_progress
+
+    def record_interrupt(self, task_id: str, attempt: int = 0):
+        """
+        Record an interruption (e.g., Ctrl+C) in the task's history.
+        
+        Args:
+            task_id: Task identifier
+            attempt: Current attempt number (uses existing if not provided)
+        """
+        task_id = str(task_id)
+        if task_id not in self.state["tasks"]:
+            return
+        
+        task_state = self.state["tasks"][task_id]
+        current_attempt = task_state.get("attempts", 0)
+        if attempt == 0:
+            attempt = current_attempt
+        
+        entry = {
+            "attempt": attempt,
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "result": "interrupted",
+            "summary": "Interrupted by user (Ctrl+C)",
+        }
+        
+        if "history" not in self.state["tasks"][task_id]:
+            self.state["tasks"][task_id]["history"] = []
+        
+        self.state["tasks"][task_id]["history"].append(entry)
+        self.save_state()
+        logger.info(f"Recorded interrupt for task {task_id}")

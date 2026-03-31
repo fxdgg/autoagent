@@ -2,8 +2,67 @@
 # This file provides default settings for the orchestrator.
 # Command-line arguments (e.g. --timeout) will override these values.
 
+# System prompt prefix
+# This text is appended to the system prompt (after the "# Task Description"
+# heading for providers without native system-prompt support, or at the end
+# of the system prompt for providers that support --append-system-prompt).
+# Use it to set the AI's persona, role, or any global instructions.
+# Example: "You are a senior CUDA engineer specializing in GPU optimization."
+# This can be overridden per-task in todos.yaml via the system_prompt_prefix field.
+# Leave empty or remove to skip.
+system_prompt_prefix: "You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task."
+
+# Default AI model for providers that support model selection
+# This is used when no model is specified via CLI --model or preset
+# Supported models depend on the provider (e.g., codebuddy supports deepseek-v3.2, claude-*)
+default_model: glm-5.0-ioa
+
 # Timeout for each AI call (in seconds).
 # If an AI call exceeds this limit, the session is killed and the next
 # prompt will include a timeout notification with guidance on using
 # autoagent-exec for long-running commands.
 bash_timeout: 3600
+
+# Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
+# Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
+backoff_max_wait: 300
+
+# Truncation limits for auto-built prompts (in characters).
+# These cap the length of various fields embedded into AI prompts
+# to prevent context from growing too large.
+truncation_limits:
+  suggested_fix: 1500
+  history_summary: 300
+  nested_latest_fix: 2000
+  looping_latest_fix: 1500
+  log_section: 6000
+  execution_results: 4000
+  idea_content: 8000
+  tasks_yaml: 10000
+  review_feedback: 3000
+  human_feedback: 3000
+  error_text: 2000
+  log_file: 2000
+
+# Preset configurations
+# Each preset can define default values for command-line arguments.
+# Use ${workspace} to refer to the current working directory.
+# Command-line arguments will override preset values.
+preset:
+  - name: default
+    ideas: ${workspace}/ideas.md
+    config: ${workspace}/todos.yaml
+    provider: codebuddy
+    use_cli: false
+    model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:claude-haiku-4.5"
+    human_review: true  # When processing ideas, force human review After AI review
+    verbose: true
+  
+  - name: test
+    ideas: ${workspace}/../ideas.md
+    config: ${workspace}/../todos.yaml
+    provider: codebuddy
+    use_cli: false
+    model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;simple:deepseek-v3-2-volc-ioa"
+    human_review: true  # When processing ideas, force human review After AI review
+    verbose: true

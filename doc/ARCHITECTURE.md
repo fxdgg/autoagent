@@ -13,6 +13,8 @@
 - [对话日志系统](#对话日志系统)
 - [Ideas 监控与 Idle 模式](#ideas-监控与-idle-模式)
 - [错误处理](#错误处理)
+- [提示词截断机制](#提示词截断机制)
+- [多模型支持](#多模型支持)
 - [扩展性设计](#扩展性设计)
 
 ## 系统架构
@@ -24,6 +26,7 @@
 │  应用层 (Application Layer)             │
 │  - orchestrator.py                      │
 │  - CLI 命令行接口                        │
+│  - Preset 配置管理                       │  ← 从 config.yaml 加载预设参数
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
@@ -31,6 +34,7 @@
 │  - TodoOrchestrator 类                  │
 │  - 任务调度器                           │
 │  - 配置解析器                           │
+│  - Preset 合并器                        │  ← 合并 preset 与命令行参数
 │  - Context 管理器                       │  ← 管理 CodeBuddy context 生命周期
 │  - IdeasWatcher                         │  ← 监控 ideas.md 并转换为 TODO
 │  - AI 审查 + 人工审核                   │  ← Ideas 拆解质量保障
@@ -51,10 +55,12 @@
 │  - AIClient 类                           │  ← 统一 AI 客户端（原 CodeBuddyClient）
 │  - AIProvider 抽象基类                   │  ← 多 Provider 支持
 │  - CodeBuddyProvider / ClaudeCodeProvider│
-│  - GeminiCLIProvider / TestProvider      │
+│  - GeminiCLIProvider / OpenCodeProvider  │
+│  - TestProvider                          │
 │  - 提示词构造器                         │
 │  - 响应解析器（stream-json）             │  ← 实时解析 stream-json 输出
-│  - Context 管理（--continue 参数）       │  ← 保持对话上下文连续性
+│  - Context 管理（session_id 自动续接）   │  ← 保持对话上下文连续性
+│  - 指数退避（Exponential Backoff）       │  ← CLI 连续失败时自动等待
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
@@ -78,24 +84,33 @@
 ```
 orchestrator.py
     ├── yaml (配置解析)
+    ├── config.yaml (全局配置，包含 preset 定义)
+    │   └── preset (预设配置列表)
     ├── ai_providers.py (Provider 抽象层)
     │   ├── AIProvider (基类)
     │   ├── CodeBuddyProvider
     │   ├── ClaudeCodeProvider
     │   ├── GeminiCLIProvider
+    │   ├── OpenCodeProvider
     │   └── TestProvider
     ├── task_executor.py (任务执行)
     │   ├── codebuddy_client.py → AIClient (AI 能力)
     │   │   └── ai_providers.py → subprocess (调用各 AI CLI)
     │   ├── autoagent_exec.py (long_running 任务启动器)
     │   │   └── subprocess (启动后台进程 + 信号文件)
+    │   ├── truncation_limits.py (截断限制配置)
     │   └── subprocess (执行命令)
     ├── state_manager.py (状态持久化)
     ├── conversation_logger.py (对话日志)
     ├── ideas_watcher.py          # Ideas 文件监控与任务分解
     │   ├── codebuddy_client.py → AIClient (AI 分解 Ideas)
     │   ├── codebuddy_client.py → AIClient (AI 审查 + 修订)
+    │   ├── truncation_limits.py (截断限制配置)
     │   └── yaml (追加任务到 todos.yaml)
+    └── prompts/                  # Prompt 模板
+        ├── shared.py → truncation_limits.py
+        ├── ideas_decompose.py → truncation_limits.py
+        └── ideas_review.py → truncation_limits.py
 ```
 
 ## 核心组件
@@ -131,9 +146,10 @@ class TodoOrchestrator:
 **核心类**：
 
 - `AIProvider` — 抽象基类，定义 `build_command()` 和 `get_stdin_command()` 接口
-- `CodeBuddyProvider` — CodeBuddy CLI（默认 provider，默认模型 `glm-5.0-ioa`）
-- `ClaudeCodeProvider` — Claude Code Internal CLI（默认模型 `claude-sonnet-4-6`）
-- `GeminiCLIProvider` — Gemini CLI Internal（默认模型 `gemini-2.5-pro`）
+- `CodeBuddyProvider` — CodeBuddy CLI（默认 provider，默认模型从 `config.yaml` 的 `default_model` 加载，回退到 `deepseek-v3.2`）
+- `ClaudeCodeProvider` — Claude Code CLI（默认模型 `claude-sonnet-4-6`）
+- `GeminiCLIProvider` — Gemini Cli（默认模型 `gemini-2.5-pro`）
+- `OpenCodeProvider` — OpenCode CLI（https://opencode.ai，不设默认模型，使用 opencode 自身配置）
 
 **工厂函数**：
 
@@ -144,13 +160,16 @@ class TodoOrchestrator:
 
 ```bash
 # CodeBuddyProvider
-type prompt.txt | codebuddy --debug --verbose --print --output-format stream-json --model glm-5.0-ioa -y -
+type prompt.txt | codebuddy --debug --verbose --print --output-format stream-json --model <default_model> -y -
 
 # ClaudeCodeProvider
-type prompt.txt | claude-internal --verbose --print --output-format stream-json --model claude-sonnet-4-6 --dangerously-skip-permissions -
+type prompt.txt | claude --verbose --print --output-format stream-json --model claude-sonnet-4-6 --dangerously-skip-permissions -
 
 # GeminiCLIProvider
-type prompt.txt | gemini-internal --output-format stream-json --model gemini-2.5-pro --yolo -p -
+type prompt.txt | gemini --output-format stream-json --model gemini-2.5-pro --yolo -p -
+
+# OpenCodeProvider
+type prompt.txt | opencode run --format json -m <model>
 ```
 
 **Provider 注册表与别名**：
@@ -160,14 +179,16 @@ PROVIDERS = {
     "codebuddy": CodeBuddyProvider,
     "claude": ClaudeCodeProvider,
     "gemini": GeminiCLIProvider,
+    "opencode": OpenCodeProvider,
 }
 
 PROVIDER_ALIASES = {
     "cb": "codebuddy",
     "claude-code": "claude",
-    "claude-internal": "claude",
+    "claude": "claude",
     "gemini-cli": "gemini",
-    "gemini-internal": "gemini",
+    "gemini": "gemini",
+    "oc": "opencode",
 }
 ```
 
@@ -186,7 +207,7 @@ PROVIDER_ALIASES = {
   - `user` 事件：工具执行结果
   - `result` 事件：最终结果摘要
 - 维护 `last_full_log` 属性，记录包含工具调用的完整对话日志
-- 通过 `_session_started` 标志管理 `--continue` 参数的使用
+- 通过 `session_id` 自动管理会话续接（`--resume <session_id>`）
 
 **stream-json 解析**：
 
@@ -433,11 +454,11 @@ class TodoOrchestrator:
         context_id = f"task_{task['id']}"
         client = CodeBuddyClient(context_id=context_id)
         
-        # 第一次调用，不使用 --continue（创建新的 context）
+        # 第一次调用，自动创建新 session
         initial_prompt = self._build_initial_prompt(task)
-        client.ask(initial_prompt, continue_session=False)
+        client.ask(initial_prompt)
         
-        # 后续所有子任务都使用 --continue（保持 context）
+        # 后续所有子任务自动通过 session_id 保持 context
         for subtask in task['subtasks']:
             result = self._execute_subtask(client, subtask)
             # ...
@@ -448,7 +469,7 @@ class TodoOrchestrator:
 - ✅ 避免 context 污染（比如任务1修改了代码，任务2不受影响）
 - ✅ 便于调试和分析（可以追溯特定任务的完整对话历史）
 
-> **注意**：由于 CodeBuddy CLI 的 `--continue` 只能继续最近一次对话，当前主任务必须串行执行。`context_id` 主要用于状态记录和日志追踪。
+> **注意**：每个主任务使用独立的 AIClient 实例，session_id 自动管理会话续接。`context_id` 主要用于状态记录和日志追踪。
 
 #### 2. 子任务级别的 Context 共享
 
@@ -457,20 +478,19 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
     """执行子任务，共享主任务的 context"""
     
     if subtask['type'] == 'simple':
-        # 简单任务：使用 --continue 保持上下文，AI 自主完成
+        # 简单任务：自动通过 session_id 保持上下文
         prompt = self._build_subtask_prompt(subtask)
-        result = client.ask(prompt, continue_session=True)
+        result = client.ask(prompt)
         
     elif subtask['type'] == 'long_running':
-        # 长时间任务：启动后台进程，使用 --continue 继续监控
+        # 长时间任务：启动后台进程，自动保持上下文
         command = self._build_nohup_command(subtask)
         self._start_background_task(command)
         
-        # 监控完成后，使用 --continue 让 AI 分析结果
+        # 监控完成后，AI 分析结果（自动续接 session）
         monitor_result = self._monitor_task(subtask)
         analysis = client.ask(
-            f"分析任务结果：\n{monitor_result}",
-            continue_session=True
+            f"分析任务结果：\n{monitor_result}"
         )
 ```
 
@@ -498,17 +518,17 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
     ↓
 创建新的 CodeBuddyClient (context_id="task_x")
     ↓
-第一次调用：continue_session=False
+第一次调用：自动创建新 session
     ↓
-执行子任务 1：continue_session=True
+执行子任务 1：自动通过 session_id 续接
     ↓
-执行子任务 2：continue_session=True
+执行子任务 2：自动通过 session_id 续接
     ↓
-执行子任务 3：continue_session=True
+执行子任务 3：自动通过 session_id 续接
     ↓
 所有子任务完成
     ↓
-调用 AI 评估主任务：continue_session=True
+调用 AI 评估主任务：自动通过 session_id 续接
     ↓
 主任务完成/失败
     ↓
@@ -540,20 +560,20 @@ tasks:
 codebuddy -m "glm-4.7" -y "请阅读 program.md 并开始执行任务 2"
 ```
 
-#### 后续调用（继续现有 context）
+#### 后续调用（继续现有 session）
 
 ```bash
-codebuddy --continue -m "glm-4.7" -y "检查子任务 2.1 的执行结果"
+codebuddy --resume <session_id> -m "glm-4.7" -y "检查子任务 2.1 的执行结果"
 ```
 
 #### 长时间任务的特殊处理
 
 ```bash
-# 启动后台训练（不使用 --continue，因为是独立的子进程）
+# 启动后台训练（独立的子进程）
 nohup python train.py --config config.yaml > logs/2.2.log 2>&1 &
 
-# 训练完成后，使用 --continue 继续 context 分析结果
-codebuddy --continue -m "glm-4.7" -y "分析训练日志并判断是否满足完成条件"
+# 训练完成后，通过 session_id 续接 context 分析结果
+codebuddy --resume <session_id> -m "glm-4.7" -y "分析训练日志并判断是否满足完成条件"
 ```
 
 ### 错误处理与 Context 恢复
@@ -577,12 +597,12 @@ for task in state['tasks']:
 1. **Context ID 生成规则**：
    - 使用任务 ID 作为 context ID：`task_{task_id}`
    - 确保唯一性：不同主任务的 context ID 不会冲突
-   - **注意**：`context_id` 是系统内部标识，用于状态记录和日志追踪。CodeBuddy CLI 的 `--continue` 参数只能继续**最近一次**对话，不支持指定某个 context ID 精确恢复。因此同一时刻只能有一个主任务在执行，或者需要额外的机制（如多用户隔离）来管理多 context。
+   - **注意**：`context_id` 是系统内部标识，用于状态记录和日志追踪。会话续接通过 `session_id` + `--resume` 实现，每个 AIClient 实例独立管理自己的 session_id。
 
-2. **--continue 参数的使用**：
-   - 第一次调用：`continue_session=False`
-   - 后续调用：`continue_session=True`
-   - 跨系统重启后：如果 context 仍然存在，使用 `continue_session=True`
+2. **session_id 的自动管理**：
+   - 首次调用：不传 session_id，CLI 创建新会话
+   - 后续调用：自动使用从 stream 事件中捕获的 session_id
+   - 跨系统重启后：从 `todos_state.yaml` 恢复 session_id，通过 `resume_session()` 设置
 
 3. **Context 清理策略**：
    - 主任务成功：保留 context 24小时（用于审计和分析）
@@ -590,9 +610,8 @@ for task in state['tasks']:
    - 超过最大尝试次数：清理 context 并记录日志
 
 4. **并发控制**：
-   - 由于 `--continue` 只能继续最近一次对话，主任务必须串行执行
-   - 同一个主任务的子任务必须串行执行（共享 context）
-   - 如果未来 CodeBuddy 支持指定 context ID，可以扩展为并发执行
+   - 每个主任务使用独立的 AIClient 实例和 session_id，理论上可以并发执行
+   - 同一个主任务的子任务必须串行执行（共享 session）
 
 ## 任务类型
 
@@ -649,7 +668,6 @@ for task in state['tasks']:
     - id: 2.2
       name: "运行训练"
       type: long_running
-      command: "python train.py --config modified_config.yaml"
       completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
@@ -1143,7 +1161,7 @@ def _ai_analyze_long_running_result(self, subtask, client, status, output_log):
     prompt = f"""Task completed with status: {status}
     Output log: {output_log}
     Please read the log and evaluate..."""
-    result = client.ask(prompt, continue_session=True)
+    result = client.ask(prompt)
     return result
 ```
 
@@ -1346,6 +1364,39 @@ stateDiagram-v2
 
 ## 错误处理
 
+### 指数退避（Exponential Backoff）
+
+当 AI CLI 调用连续失败时，AIClient / AIClientSDK 会自动在下一次调用前等待一段时间，避免频繁重试浪费资源。
+
+**退避策略**：
+- 基础等待时间：5 秒
+- 指数增长：5s → 10s → 20s → 40s → 80s → ...
+- 最大等待时间：由 `config.yaml` 的 `backoff_max_wait` 配置（默认 300 秒）
+- 成功后立即重置计数器
+- 永远不会主动退出程序，只设置等待上限
+
+```python
+delay = min(5 * 2^(consecutive_failures - 1), backoff_max_wait)
+```
+
+### 健壮性增强
+
+#### retry_from 验证
+
+NestedTaskExecutor 和 LoopingTaskExecutor 的 `_reset_subtasks_from()` 方法会验证 AI 返回的 `retry_from` ID 是否存在于子任务列表中。如果 ID 无效，回退到第一个子任务，避免无限循环。
+
+#### process.wait() 超时
+
+AIClient 在 stdout 关闭后调用 `process.wait(timeout=30)` 等待进程退出。如果 30 秒内未退出，强制 kill 并再等待 10 秒。避免在 Windows 上因僵尸进程导致挂起。
+
+#### StateManager 线程安全
+
+`StateManager.save_state()` 使用 `threading.Lock` 保护文件写入，防止并发写入导致状态文件损坏。
+
+#### 信号文件容错
+
+`SubtaskExecutor._poll_signal_file()` 对信号文件读取错误（JSON 解析失败、IO 错误）进行计数。连续 10 次读取失败后，将任务视为已完成（error 状态），避免无限轮询。
+
 ### 错误分类
 
 1. **配置错误**
@@ -1397,9 +1448,90 @@ def execute_task(self, task: dict) -> bool:
         return False
 ```
 
+## 多模型支持
+
+### 概述
+
+autoagent 支持在不同阶段使用不同的 AI 模型，通过 `--model` 参数的多角色格式指定：
+
+```
+--model "plan:glm-4-flash;default:glm-5;simple:glm-4-flash"
+```
+
+### 模型角色
+
+| 角色 | 用途 | 使用场景 |
+|------|------|---------|
+| `plan` | Idea 分解为 TODO 任务 | `check_and_process_ideas()` 中的 AI 调用 |
+| `default` | 任务执行默认模型 | 复杂任务、AI 决策点 |
+| `simple` | 轻量模型 | 简单任务（运行命令、简单文件编辑） |
+
+### 模型规格解析
+
+`parse_model_spec()` 函数（`ai_providers.py`）支持两种格式：
+
+1. **单模型**：`"glm-5"` → 三个角色使用同一模型
+2. **多角色**：`"plan:X;default:Y;simple:Z"` → 各角色使用指定模型
+   - 缺失的角色继承 `default` 的值
+   - `default` 角色必须存在
+
+### 模型切换流程
+
+```
+main() 解析 --model → model_roles dict
+    │
+    ├─ TodoOrchestrator.__init__(model_roles=...)
+    │   ├─ NestedTaskExecutor(model_roles=...)
+    │   │   └─ SubtaskExecutor(model_roles=...)
+    │   └─ LoopingTaskExecutor(model_roles=...)
+    │       └─ SubtaskExecutor(model_roles=...)
+    │
+    ├─ check_and_process_ideas()
+    │   └─ provider.set_model(plan_model) → 处理 → 恢复原模型
+    │
+    └─ execute_task(task)
+        └─ provider.set_model(model_roles[task.model])
+            └─ SubtaskExecutor.execute(subtask)
+                └─ provider.set_model(model_roles[subtask.model])
+```
+
+### 任务级模型指定
+
+在 `todos.yaml` 中，任务和子任务可以通过 `model` 字段指定使用的模型角色：
+
+```yaml
+- id: 1
+  name: "运行代码检查"
+  type: simple
+  model: simple  # 使用轻量模型
+  completion_criteria: "pylint 评分 >= 9.0"
+```
+
+`model` 字段只接受 `"default"` 或 `"simple"` 两个值，默认为 `"default"`。
+
+### 线程安全
+
+由于任务执行是单线程的，`provider.set_model()` 直接修改 `self.model` 属性是安全的。
+
 ## 扩展性设计
 
-### 1. 新增任务类型
+### 1. 新增 Preset
+
+在 `config.yaml` 中添加新的 preset 配置：
+
+```yaml
+preset:
+  - name: my_preset
+    ideas: ${workspace}/my_ideas.md
+    config: ${workspace}/my_todos.yaml
+    provider: gemini
+    model: gemini-2.5-pro
+    verbose: true
+```
+
+使用 `--preset my_preset` 即可应用该配置。
+
+### 2. 新增任务类型
 
 ```yaml
 # 并行任务
@@ -1412,7 +1544,7 @@ def execute_task(self, task: dict) -> bool:
     - "python process_part3.py"
 ```
 
-### 2. 新增验证器
+### 3. 新增验证器
 
 ```python
 class CompletionValidator:
@@ -1423,7 +1555,7 @@ class CompletionValidator:
         # 可以使用 AI 或规则引擎
         
         # 示例：简单的关键词匹配
-        if "accuracy >=" in criteria:
+        if "accuracy >= " in criteria:
             threshold = float(criteria.split("accuracy >= ")[1].split()[0])
             return context['accuracy'] >= threshold
         
@@ -1431,7 +1563,7 @@ class CompletionValidator:
         return self._ask_ai(criteria, context)
 ```
 
-### 3. 新增通知方式
+### 4. 新增通知方式
 
 ```python
 class Notifier:
@@ -1441,6 +1573,37 @@ class Notifier:
         # 支持：邮件、企业微信、Slack 等
         pass
 ```
+
+## 提示词截断机制
+
+### 设计目标
+
+自动构建的提示词中包含多种动态内容（AI 分析建议、历史记录、日志、YAML 等），这些内容可能随迭代次数增长而膨胀。截断机制确保发送给 AI 的上下文保持在合理范围内，避免 token 浪费和上下文溢出。
+
+### 架构
+
+```
+config.yaml (truncation_limits)
+        │
+        ▼
+truncation_limits.py (_Limits 单例)
+        │
+    ┌───┼───────────────┐
+    ▼   ▼               ▼
+prompts/  task_executor.py  ideas_watcher.py
+```
+
+- `truncation_limits.py` 从 `config.yaml` 的 `truncation_limits` 段加载配置，所有字段都有内置默认值
+- 各 prompt 构造器和执行器通过 `from truncation_limits import limits` 获取阈值
+- 用户只需在 `config.yaml` 中配置想调整的项
+
+### 截断策略
+
+| 内容类型 | 策略 | 原因 |
+|---------|------|------|
+| AI 生成的分析/建议 | 保留尾部 | 最新的分析最相关 |
+| 用户输入（idea、feedback） | 保留头部 | 开头通常包含核心意图 |
+| 结构化数据（YAML、日志、结果） | 保留头尾，中间截断 | 头部有结构信息，尾部有最新数据 |
 
 ## AI与系统的职责分工
 
@@ -1904,7 +2067,7 @@ graph TD
 
 **审查标准**（由 reviewer AI 判断）：
 1. 任务 ID 是否正确且一致（包括子任务点号表示法）
-2. 任务类型是否合适（simple vs nested vs looping，simple vs long_running）
+2. 任务类型是否合适（顶层：simple vs nested vs looping，子任务：simple vs long_running vs simple_once vs long_running_once）
 3. 完成标准是否清晰、具体、可衡量
 4. 分解是否完整覆盖了原始想法
 5. 是否有遗漏或冗余的任务
@@ -2037,8 +2200,8 @@ python orchestrator.py --ideas ideas.md --log-dir logs
 本架构设计实现了：
 
 - ✅ 统一的任务执行模型（不再区分简单任务和循环任务）
-- ✅ 精简的任务类型体系（simple / nested / looping / long_running）
-- ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI / Test）
+- ✅ 精简的任务类型体系（顶层：simple / nested / looping；子任务：simple / long_running / simple_once / long_running_once）
+- ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI / OpenCode / Test）
 - ✅ AI完全自主判断完成条件（三层检测策略）
 - ✅ 支持嵌套任务
 - ✅ 支持长时间任务处理（autoagent-exec 10 秒快速失败 + 信号文件轮询）
@@ -2053,3 +2216,5 @@ python orchestrator.py --ideas ideas.md --log-dir logs
 - ✅ Ideas AI 审查（独立上下文的 AI 审查生成的任务质量，支持多轮修订）
 - ✅ Ideas 人工审核（`--ideas-only` 模式，AI 审查通过后挂起等待人工确认）
 - ✅ Idle 模式（任务完成后持续等待新输入，实现持续工作流）
+- ✅ 指数退避（AI CLI 连续失败时自动等待，避免频繁重试）
+- ✅ 健壮性增强（retry_from 验证、process.wait 超时、StateManager 线程安全、信号文件容错）

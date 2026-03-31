@@ -13,12 +13,12 @@ Test objectives:
 
 Usage:
     python run_test.py                                # Run with defaults (CodeBuddy)
-    python run_test.py --provider claude              # Use Claude Code Internal
-    python run_test.py --provider gemini              # Use Gemini CLI Internal
+    python run_test.py --provider claude              # Use Claude Code
+    python run_test.py --provider gemini              # Use Gemini Cli
     python run_test.py --dry-run                      # Validate config only
     python run_test.py --status                       # Check current status
     python run_test.py --reset                        # Reset and start over
-    python run_test.py --model glm-5.0-ioa            # Override model
+    python run_test.py --model deepseek-v3.2            # Override model
     python run_test.py --project-root /path/to        # Override project root
     python run_test.py --autoagent-dir /path/to       # Override autoagent dir
     python run_test.py --list-providers               # List available AI providers
@@ -94,8 +94,8 @@ def check_prerequisites(project_root, autoagent_dir, **kwargs):
     # Map provider to its default executable
     provider_executables = {
         "codebuddy": "codebuddy",
-        "claude": "claude-internal",
-        "gemini": "gemini-internal",
+        "claude": "claude",
+        "gemini": "gemini",
     }
     check_exe = executable or provider_executables.get(provider_name, provider_name)
     
@@ -223,7 +223,8 @@ def run_orchestrator(
         "--config", todos_yaml,
         "--provider", provider_name,
         "--workspace", project_root,
-        # "--verbose",
+        "--preset", "none",  # Disable preset to avoid injecting ideas/model from config.yaml
+        "--verbose",
     ]
 
     if model:
@@ -240,7 +241,7 @@ def run_orchestrator(
 
     # Resolve display model
     provider_default_models = {
-        "codebuddy": "glm-5.0-ioa",
+        "codebuddy": "deepseek-v3.2",
         "claude": "claude-sonnet-4-6",
         "gemini": "gemini-2.5-pro",
     }
@@ -332,24 +333,25 @@ Test Flow:
   6. Repeat until >= 20% cumulative speedup is achieved
 
 Supported AI Providers:
-  codebuddy  - CodeBuddy CLI (default, model: glm-5.0-ioa)
-  claude     - Claude Code Internal (model: claude-sonnet-4-6)
-  gemini     - Gemini CLI Internal (model: gemini-2.5-pro)
+  codebuddy  - CodeBuddy CLI (default, model: deepseek-v3.2)
+  claude     - Claude Code (model: claude-sonnet-4-6)
+  gemini     - Gemini Cli (model: gemini-2.5-pro)
 
 Examples:
   python run_test.py                              # Run full test (CodeBuddy)
-  python run_test.py --provider claude             # Use Claude Code Internal
-  python run_test.py --provider gemini             # Use Gemini CLI Internal
+  python run_test.py --provider claude             # Use Claude Code
+  python run_test.py --provider gemini             # Use Gemini Cli
   python run_test.py --dry-run                     # Validate config only
   python run_test.py --status                      # Show current progress
   python run_test.py --reset                       # Reset and start fresh
-  python run_test.py --model glm-5.0-ioa           # Use specific model
+  python run_test.py --model deepseek-v3.2           # Use specific model
   python run_test.py --project-root /path/to/project  # Custom project root
   python run_test.py --autoagent-dir /path/to/agent   # Custom autoagent dir
   python run_test.py --results                     # Show results summary
   python run_test.py --list-providers              # List available AI providers
   python run_test.py --ideas ideas.md              # Process ideas.md into TODOs
-  python run_test.py --ideas ideas.md --ideas-only # Process ideas only (with human review)
+  python run_test.py --ideas ideas.md --ideas-only # Process ideas only (no task execution)
+  python run_test.py --ideas ideas.md --human-review # Process ideas with human review
 python run_test.py --ideas ideas.md               # Run then idle for new ideas (idle is default)
         """,
     )
@@ -364,7 +366,7 @@ python run_test.py --ideas ideas.md               # Run then idle for new ideas 
         "--model", "-m",
         default=None,
         help="AI model to use (default depends on provider: "
-             "codebuddy=glm-5.0-ioa, claude=claude-sonnet-4-6, gemini=gemini-2.5-pro)",
+             "codebuddy=deepseek-v3.2, claude=claude-sonnet-4-6, gemini=gemini-2.5-pro)",
     )
     parser.add_argument(
         "--executable",
@@ -436,8 +438,14 @@ python run_test.py --ideas ideas.md               # Run then idle for new ideas 
     parser.add_argument(
         "--ideas-only",
         action="store_true",
-        help="Only process ideas.md (with human review), do not run the TODO task list. "
-             "Requires --ideas. After AI review passes, pauses for human approval.",
+        help="Only process ideas.md, do not run the TODO task list. "
+             "Requires --ideas.",
+    )
+    parser.add_argument(
+        "--human-review",
+        action="store_true",
+        help="Enable human review for ideas processing. After AI review passes, "
+             "pauses for human approval. (default: disabled)",
     )
     parser.add_argument(
         "--no-idle",
@@ -574,10 +582,14 @@ python run_test.py --ideas ideas.md               # Run then idle for new ideas 
             print("\n❌ --ideas-only mode requires --ideas to be set.")
             sys.exit(1)
         extra.append("--ideas-only")
+    if args.human_review:
+        extra.append("--human-review")
     # Idle mode is enabled by default when --ideas is set
     idle_mode = bool(args.ideas) and not args.no_idle
     if idle_mode:
         extra.extend(["--idle-interval", str(args.idle_interval)])
+    else:
+        extra.append("--no-idle")
     if args.use_cli:
         extra.append("--use-cli")
     if args.test_rules:

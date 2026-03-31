@@ -15,8 +15,32 @@ import logging
 import tempfile
 from typing import Optional, List
 
+
+class _BlockStyleDumper(yaml.SafeDumper):
+    """Custom YAML dumper that uses block scalar (|) style for multiline strings."""
+    pass
+
+
+def _str_representer(dumper, data):
+    """Represent strings with block scalar style when they contain newlines."""
+    if '\n' in data:
+        # Strip trailing whitespace on each line to avoid YAML issues,
+        # but preserve the overall structure.
+        return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
+    return dumper.represent_scalar('tag:yaml.org,2002:str', data)
+
+
+_BlockStyleDumper.add_representer(str, _str_representer)
+
 from codebuddy_client import AIClient, CodeBuddyClient, AICallError
 from conversation_logger import ConversationLogger
+from truncation_limits import limits
+from prompts.ideas_decompose import build_ideas_decompose_prompt
+from prompts.ideas_review import (
+    build_ideas_review_prompt,
+    build_ideas_revision_prompt,
+    build_human_feedback_revision_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +282,7 @@ class IdeasWatcher:
 
         # Validate task type
         if is_subtask:
-            valid_types = ['simple', 'long_running']
+            valid_types = ['simple', 'long_running', 'simple_once', 'long_running_once']
         else:
             valid_types = ['simple', 'nested', 'looping']
         if task_type not in valid_types:
@@ -289,6 +313,14 @@ class IdeasWatcher:
                 errors.append(f"Looping task {task_id} must have 'repeat_count' field")
             elif not isinstance(repeat_count, int) or repeat_count < 1:
                 errors.append(f"Looping task {task_id}: 'repeat_count' must be a positive integer")
+
+        # Validate optional model field
+        model = task.get('model')
+        if model is not None and model not in ('default', 'simple'):
+            errors.append(
+                f"Task {task_id} has invalid model: '{model}'. "
+                f"Allowed values: 'default', 'simple'"
+            )
 
         return errors
 
@@ -406,137 +438,18 @@ class IdeasWatcher:
         # Clean up any leftover temp file from a previous run
         self._cleanup_temp_file()
 
-        prompt = f"""You are a task planner. Your job is to decompose a given idea into concrete, actionable
-TODO tasks in YAML format.
-
-These tasks will be executed by an AI coding agent that can read/modify files, run shell
-commands, and analyze code and outputs. Design your tasks and completion criteria accordingly.
-
-## Idea
-
-{idea['content']}
-
-## Task Types
-
-There are 4 task types. Choose the most appropriate one for each task:
-
-1. **simple** — A single-step task the AI agent completes autonomously (code changes, running
-   commands, analysis, etc.). Can be a top-level task or a subtask.
-2. **nested** — A multi-step task containing ordered subtasks. After all subtasks finish, the
-   AI evaluates whether the overall completion criteria are met. Top-level only.
-3. **looping** — An iterative task that repeats all its subtasks for a fixed number of cycles
-   (e.g., profile → optimize → benchmark → commit). No completion evaluation between cycles.
-   Top-level only.
-4. **long_running** — A task that runs in the background via nohup to avoid timeouts (e.g.,
-   model training, large data processing). Subtask only (inside nested or looping).
-
-**Hierarchy rules:**
-- Top-level tasks can be: simple, nested, or looping.
-- Subtasks (inside nested/looping) can only be: simple or long_running.
-
-**When to use which:**
-- If the idea can be done in one step → use a single **simple** task.
-- If the idea requires multiple ordered steps and the AI should evaluate overall success
-  after all steps → use **nested**.
-- If the idea involves repeating an optimize-test cycle N times → use **looping** with
-  repeat_count.
-- If a subtask runs a long-running process (training, heavy computation) → use **long_running**.
-
-## Task Schema
-
-Common fields (all types):
-- id: integer for top-level tasks (starting from {next_id}), dot notation for subtasks (e.g., {next_id}.1)
-- name: string — concise task name
-- type: "simple" | "nested" | "looping" | "long_running"
-- completion_criteria: string — clear, specific, and measurable
-
-Type-specific fields:
-- simple: initial_hint (optional — helpful context for the AI executor)
-- nested: subtasks (list), max_attempts (optional, default 20)
-- looping: subtasks (list), repeat_count (required, positive integer), max_attempts_per_loop (optional, default 20)
-- long_running: (no extra required fields)
-
-## Constraints
-
-1. Do NOT over-decompose. If the idea is simple, a single "simple" task is perfectly fine.
-   Prefer fewer, well-scoped tasks over many trivial ones.
-2. Do NOT write vague completion_criteria. Each criterion must be objectively verifiable.
-   ✅ Good: "All unit tests pass with 0 failures"
-   ✅ Good: "Response time < 200ms on the /api/users endpoint"
-   ❌ Bad: "Code is optimized"
-   ❌ Bad: "Performance is improved"
-3. Do NOT use "long_running" or "simple" as a top-level task type when the idea clearly
-   requires multiple coordinated steps — use "nested" or "looping" instead.
-4. Do NOT use "nested" or "looping" as subtask types.
-
-## Output Format
-
-Write ONLY valid YAML (a list of tasks) into the following file:
-  {temp_tasks_path}
-
-Do NOT include markdown code fences or any extra text in the file.
-The file content must be a YAML list of task objects. Below are examples covering all task types:
-
-### simple (top-level)
-
-- id: {next_id}
-  name: "Refactor logging module"
-  type: simple
-  completion_criteria: |
-    1. All log calls use the new structured format.
-    2. No references to the old logging helper remain.
-  initial_hint: |
-    The old helper is in utils/legacy_logger.py.
-
-### nested (with simple and long_running subtasks)
-
-- id: {next_id}
-  name: "Add user authentication"
-  type: nested
-  max_attempts: 10
-  completion_criteria: |
-    1. Login and registration endpoints return correct status codes.
-    2. All auth-related unit tests pass.
-  subtasks:
-    - id: {next_id}.1
-      name: "Implement auth endpoints"
-      type: simple
-      completion_criteria: |
-        POST /login and POST /register are functional.
-    - id: {next_id}.2
-      name: "Train fraud-detection model"
-      type: long_running
-      completion_criteria: |
-        Model checkpoint saved to checkpoints/ with accuracy > 0.95.
-
-### looping
-
-- id: {next_id}
-  name: "Iterative kernel optimization"
-  type: looping
-  repeat_count: 5
-  max_attempts_per_loop: 10
-  completion_criteria: |
-    Kernel execution time reduced by at least 30%.
-  subtasks:
-    - id: {next_id}.1
-      name: "Profile and optimize"
-      type: simple
-      completion_criteria: |
-        At least one optimization applied and benchmarked.
-    - id: {next_id}.2
-      name: "Run full benchmark suite"
-      type: long_running
-      completion_criteria: |
-        Benchmark results saved to results/bench_latest.json.
-"""
+        prompt = build_ideas_decompose_prompt(
+            idea_content=idea['content'],
+            next_id=next_id,
+            temp_tasks_path=temp_tasks_path,
+        )
 
         try:
             # Log prompt before AI call (crash-safe)
             if conv_logger:
                 conv_logger.log_ideas_prompt(idea['title'], idea_index, prompt)
 
-            result = client.ask(prompt, continue_session=True)
+            result = client.ask(prompt)
 
             # Log response after AI call
             if conv_logger:
@@ -708,7 +621,12 @@ The file content must be a YAML list of task objects. Below are examples coverin
                    revised_tasks contains reviewer's corrected tasks if it rejected and
                    directly modified the file (None otherwise).
         """
-        tasks_yaml = yaml.dump(tasks, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        # Reset reviewer session so each review round starts with a fresh context.
+        # Without this, the reviewer AI would see the full conversation history
+        # from previous review rounds, which pollutes its judgment.
+        review_client.reset_session()
+
+        tasks_yaml = yaml.dump(tasks, Dumper=_BlockStyleDumper, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
         temp_tasks_path = self._get_temp_tasks_path()
         # Write current tasks to temp file so reviewer can modify it in-place
@@ -721,6 +639,9 @@ The file content must be a YAML list of task objects. Below are examples coverin
 
         last_feedback_section = ""
         if last_feedback:
+            _rf = limits.get('review_feedback')
+            if len(last_feedback) > _rf:
+                last_feedback = last_feedback[:_rf] + "\n\n(previous feedback truncated)"
             last_feedback_section = f"""## Last Feedback
 
 The following feedback was provided in the previous review round. Check whether
@@ -730,82 +651,18 @@ the issues have been addressed:
 
 """
 
-        review_prompt = f"""You are a task review expert. Review the following TODO task decomposition
-for quality, completeness, and correctness.
-
-These tasks will be executed by an AI coding agent that can read/modify files, run shell
-commands, and analyze code and outputs.
-
-## Original Idea
-
-{idea['content']}
-
-## Generated Tasks (YAML)
-
-```yaml
-{tasks_yaml}```
-
-{last_feedback_section}## Task Types
-
-There are 4 task types:
-
-1. **simple** — A single-step task. Can be top-level or subtask.
-2. **nested** — A multi-step task with ordered subtasks. Top-level only.
-3. **looping** — An iterative task repeating subtasks for N cycles. Top-level only.
-4. **long_running** — A background task via nohup. Subtask only.
-
-**Hierarchy rules:**
-- Top-level: simple, nested, or looping.
-- Subtasks (inside nested/looping): simple or long_running only.
-
-## Task Schema
-
-Common fields (all types): id, name, type, completion_criteria
-
-Type-specific fields:
-- simple: initial_hint (optional)
-- nested: subtasks (list), max_attempts (optional, default 20)
-- looping: subtasks (list), repeat_count (required), max_attempts_per_loop (optional, default 20)
-- long_running: (no extra required fields)
-
-## Review Criteria
-
-1. **Schema correctness**: Does every task have the required fields for its type?
-   (e.g., nested/looping must have subtasks; looping must have repeat_count)
-2. **ID consistency**: Are task IDs sequential integers and subtask IDs use correct
-   dot notation (e.g., 2.1, 2.2)?
-3. **Type appropriateness**: Are task types chosen correctly?
-   - Multi-step ideas should use nested/looping, not a single simple task.
-   - Iterative optimize-test cycles should use looping, not nested.
-   - long_running is only used as a subtask, never top-level.
-   - nested/looping are never used as subtask types.
-4. **Completion criteria quality**: Is every completion_criteria specific, measurable,
-   and objectively verifiable by an AI agent?
-   ✅ Good: "All unit tests pass with 0 failures"
-   ❌ Bad: "Code is optimized" or "Performance is improved"
-5. **Decomposition granularity**: Does the decomposition fully cover the idea without
-   over-decomposing into trivial subtasks or leaving gaps?
-6. **YAML validity**: Is the YAML structure well-formed and parseable?
-
-## Instructions
-
-If the tasks pass ALL criteria, respond with EXACTLY:
-✅ completed
-
-If the tasks need improvement:
-1. Respond with: ❌ not completed
-2. Briefly explain what needs to be fixed.
-3. Then DIRECTLY modify the YAML file at:
-     {temp_tasks_path}
-   Write the corrected full task list into that file.
-   Do NOT include markdown code fences or any extra text in the file.
-"""
+        review_prompt = build_ideas_review_prompt(
+            idea_content=idea['content'],
+            tasks_yaml=tasks_yaml,
+            temp_tasks_path=temp_tasks_path,
+            last_feedback_section=last_feedback_section,
+        )
 
         try:
             if conv_logger:
                 conv_logger.log_ideas_review_prompt(review_round, review_prompt)
 
-            review_result = review_client.ask(review_prompt, continue_session=False)
+            review_result = review_client.ask(review_prompt)
 
             if conv_logger:
                 conv_logger.log_ideas_review_response(review_result)
@@ -852,26 +709,16 @@ If the tasks need improvement:
         temp_tasks_path = self._get_temp_tasks_path()
         self._cleanup_temp_file()
 
-        revision_prompt = f"""Your previous task decomposition was reviewed and needs revision.
-
-## Reviewer Feedback
-
-{review_feedback}
-
-## Instructions
-
-Please revise the task decomposition based on the feedback above.
-Write ONLY valid YAML (a list of tasks) into the following file:
-  {temp_tasks_path}
-
-Do NOT include markdown code fences or any extra text in the file.
-"""
+        revision_prompt = build_ideas_revision_prompt(
+            review_feedback=review_feedback,
+            temp_tasks_path=temp_tasks_path,
+        )
 
         try:
             if conv_logger:
                 conv_logger.log_ideas_revision_prompt(revision_round, revision_prompt)
 
-            result = client.ask(revision_prompt, continue_session=True)
+            result = client.ask(revision_prompt)
 
             if conv_logger:
                 conv_logger.log_ideas_revision_response(result)
@@ -957,7 +804,7 @@ Do NOT include markdown code fences or any extra text in the file.
         while True:
             # Write current tasks to temp file so human can edit directly
             tasks_yaml = yaml.dump(
-                tasks, default_flow_style=False,
+                tasks, Dumper=_BlockStyleDumper, default_flow_style=False,
                 allow_unicode=True, sort_keys=False,
             )
             try:
@@ -1057,31 +904,16 @@ Do NOT include markdown code fences or any extra text in the file.
 
                     # Build revision prompt with current tasks context
                     current_tasks_yaml = yaml.dump(
-                        tasks, default_flow_style=False,
+                        tasks, Dumper=_BlockStyleDumper, default_flow_style=False,
                         allow_unicode=True, sort_keys=False,
                     )
-                    revision_prompt = f"""Your task decomposition needs revision based on human feedback.
-
-## Current Tasks
-
-```yaml
-{current_tasks_yaml}
-```
-
-## Human Feedback
-
-{human_feedback}
-
-## Instructions
-
-Please revise the task decomposition based on the feedback above.
-Write ONLY valid YAML (a list of tasks) into the following file:
-  {temp_tasks_path}
-
-Do NOT include markdown code fences or any extra text in the file.
-"""
+                    revision_prompt = build_human_feedback_revision_prompt(
+                        current_tasks_yaml=current_tasks_yaml,
+                        human_feedback=human_feedback,
+                        temp_tasks_path=temp_tasks_path,
+                    )
                     try:
-                        result = client.ask(revision_prompt, continue_session=True)
+                        result = client.ask(revision_prompt)
 
                         if conv_logger:
                             conv_logger.log_ideas_revision_response(result)
@@ -1220,6 +1052,7 @@ Do NOT include markdown code fences or any extra text in the file.
             with open(self.todos_file, 'w', encoding='utf-8') as f:
                 yaml.dump(
                     config, f,
+                    Dumper=_BlockStyleDumper,
                     default_flow_style=False,
                     allow_unicode=True,
                     sort_keys=False,

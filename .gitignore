@@ -33,14 +33,8 @@ env/
 *~
 
 # 项目特定
-.orchestrator_state/
-.orchestrator_state.json
-.codebuddy_cache/
-todos_state.yaml
+.autoagent/
 logs/
-monitors/
-orchestrator.log
-*.log
 
 # 测试
 .pytest_cache/

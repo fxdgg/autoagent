@@ -85,7 +85,6 @@ tasks:
       - id: 1.2
         name: "训练模型"
         type: long_running
-        command: "python train.py --config config.yaml"
         completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
@@ -151,7 +150,6 @@ tasks:
       - id: 2.2
         name: "训练模型"
         type: long_running
-        command: "python train.py --data augmented_data --model model.yaml"
         completion_criteria: "训练正常完成，模型文件保存成功"
 
       - id: 2.3
@@ -187,7 +185,6 @@ tasks:
       - id: 1.2
         name: "训练压缩模型"
         type: long_running
-        command: "python train_compressed.py --prune-ratio 0.5"
         completion_criteria: "训练完成，模型保存成功"
 
       - id: 1.3
@@ -370,7 +367,7 @@ tasks:
 
 - ✅ 任务描述清晰明确
 - ✅ 完成标准可量化验证
-- ✅ 合理使用任务类型（simple / nested / looping / long_running）
+- ✅ 合理使用任务类型（顶层：simple / nested / looping；子任务：simple / long_running / simple_once / long_running_once）
 - ✅ 子任务粒度适中
 - ✅ 充分利用 AI 的决策能力
 

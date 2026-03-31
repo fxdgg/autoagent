@@ -17,8 +17,8 @@
 ### 1. 环境要求
 
 - Python 3.8+
-- CodeBuddy 2.63.5+
-- Linux/macOS 系统
+- CodeBuddy 2.63.5+ (或其他 AI Provider)
+- Linux/macOS/Windows 系统
 
 ### 2. 安装依赖
 
@@ -26,19 +26,97 @@
 pip install pyyaml
 ```
 
-### 3. 配置 CodeBuddy
+### 3. 配置 AI Provider
 
-确保 CodeBuddy 已正确安装：
+确保 AI Provider 已正确安装：
 
 ```bash
-# 检查版本
+# CodeBuddy
 codebuddy --version
 
-# 如果需要登录（在交互式终端执行一次）
-codebuddy -p "login_test"
+# Claude Code
+claude --version
+
+# Gemini CLI
+gemini --version
+
+# OpenCode
+opencode --version
 ```
 
-**重要**：如果使用 nohup 后台运行，必须先在交互式终端完成登录，确保 `~/.codebuddy/settings.json` 存在。
+### 4. 配置 Preset（可选）
+
+在 `config.yaml` 中定义常用配置预设：
+
+```yaml
+# config.yaml
+bash_timeout: 3600
+
+# Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
+# Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
+backoff_max_wait: 300
+
+# System prompt prefix (appended to the system prompt for all tasks)
+system_prompt_prefix: "You are an AI coding agent. ..."
+
+# Default AI model (used when no model is specified via CLI --model or preset)
+default_model: glm-5.0-ioa
+
+preset:
+  - name: default
+    ideas: ${workspace}/ideas.md
+    config: ${workspace}/todos.yaml
+    provider: codebuddy
+    use_cli: false
+    model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:claude-haiku-4.5"
+    human_review: true
+    verbose: true
+  
+  - name: test
+    ideas: ${workspace}/../ideas.md
+    config: ${workspace}/../todos.yaml
+    provider: codebuddy
+    use_cli: false
+    model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;simple:deepseek-v3-2-volc-ioa"
+    human_review: true
+    verbose: true
+```
+
+使用 `--preset` 参数选择预设：
+
+```bash
+# 使用 default 预设
+python orchestrator.py
+
+# 使用 claude 预设
+python orchestrator.py --preset claude
+
+# 使用 debug 预设（覆盖 verbose 为 true）
+python orchestrator.py --preset debug --verbose
+```
+
+### 5. 配置截断限制（可选）
+
+在 `config.yaml` 中可以调整提示词各字段的截断长度（单位：字符），防止上下文过长导致 token 浪费：
+
+```yaml
+# config.yaml
+truncation_limits:
+  suggested_fix: 1500        # AI 失败分析建议
+  history_summary: 300       # 历史尝试摘要
+  nested_latest_fix: 2000    # 嵌套任务的修复上下文
+  looping_latest_fix: 1500   # 循环任务的修复上下文
+  log_section: 6000          # 长时间任务日志汇总
+  execution_results: 4000    # 子任务执行结果汇总
+  idea_content: 8000         # Ideas 原文
+  tasks_yaml: 10000          # 生成的任务 YAML
+  review_feedback: 3000      # AI 审查反馈
+  human_feedback: 3000       # 人工审核反馈
+  error_text: 2000           # 错误信息
+  log_file: 2000             # 单个日志文件内容
+```
+
+所有字段都有内置默认值，只需配置你想调整的项。
 
 ## 快速开始
 
@@ -69,7 +147,6 @@ tasks:
       - id: 2.2
         name: "运行训练"
         type: long_running
-        command: "python train.py --config modified_config.yaml"
         completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
@@ -79,7 +156,7 @@ tasks:
 # 使用默认 provider（CodeBuddy）运行所有任务
 python orchestrator.py
 
-# 使用 Claude Code Internal
+# 使用 Claude Code
 python orchestrator.py --provider claude
 
 # 使用 Gemini CLI
@@ -151,7 +228,6 @@ tasks:
       - id: 2.2
         name: "训练模型"
         type: long_running
-        command: "python train.py --config config.yaml"
         completion_criteria: "训练成功完成且指标达标"
 ```
 
@@ -169,7 +245,7 @@ tasks:
 |------|------|------|------|
 | `id` | int/string | 是 | 任务 ID（唯一标识） |
 | `name` | string | 是 | 任务名称 |
-| `type` | string | 是 | 任务类型：`simple`、`nested`、`looping`、`long_running` |
+| `type` | string | 是 | 顶层任务类型：`simple`、`nested`、`looping`；子任务类型：`simple`、`long_running`、`simple_once`、`long_running_once` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
 
 #### 简单任务 (type: simple)
@@ -247,11 +323,10 @@ tasks:
       type: simple
       completion_criteria: "代码修改完成"
       
-    - id: 2.2
-      name: "运行训练"
-      type: long_running
-      command: "python train.py --config modified_config.yaml"
-      completion_criteria: "训练正常退出且验证集指标满足要求"
+      - id: 2.2
+        name: "运行训练"
+        type: long_running
+        completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
 **执行流程**：
@@ -350,7 +425,44 @@ tasks:
 
 ## 执行方式
 
-### 1. 交互式执行
+### 1. 使用 Preset 配置
+
+通过 `config.yaml` 中的 preset 快速切换常用配置：
+
+```bash
+# 使用 default 预设
+python orchestrator.py
+
+# 使用 codebuddy 预设
+python orchestrator.py --preset codebuddy
+
+# 使用 claude 预设
+python orchestrator.py --preset claude
+
+# 使用预设但覆盖特定参数
+python orchestrator.py --preset default --model claude-sonnet-4-6
+```
+
+**Preset 优先级**：命令行参数 > Preset 配置 > 默认值
+
+支持的 Preset 字段：
+- `config`: 任务配置文件路径
+- `ideas`: ideas.md 文件路径
+- `provider`: AI Provider 名称
+- `model`: AI 模型名称
+- `verbose`: 是否启用详细日志
+- `no_skip`: 是否不跳过已完成任务
+- `no_idle`: 是否禁用 idle 模式
+- `use_cli`: 是否使用 CLI 模式
+- `ideas_only`: 是否仅处理 ideas
+- `human_review`: 是否启用人工审核
+- `timeout`: AI 调用超时时间
+- `log_dir`: 日志目录
+- `idle_interval`: idle 轮询间隔
+- `include_directories`: 额外目录（Gemini 专用）
+- `test_rules`: 测试规则文件路径
+
+### 2. 交互式执行
 
 默认模式，实时输出日志：
 
@@ -360,20 +472,23 @@ python orchestrator.py
 
 ### 2. 选择 AI Provider
 
-支持三种 AI CLI 工具：
+支持多种 AI CLI 工具：
 
 ```bash
-# CodeBuddy（默认，默认模型 glm-5.0-ioa）
+# CodeBuddy（默认，默认模型从 config.yaml 的 default_model 加载）
 python orchestrator.py
 
-# Claude Code Internal（默认模型 claude-sonnet-4-6）
+# Claude Code（默认模型 claude-sonnet-4-6）
 python orchestrator.py --provider claude
 
-# Gemini CLI Internal（默认模型 gemini-2.5-pro）
+# Gemini Cli（默认模型 gemini-2.5-pro）
 python orchestrator.py --provider gemini
 
+# OpenCode（使用 opencode 自身配置的默认模型）
+python orchestrator.py --provider opencode
+
 # 指定模型
-python orchestrator.py --provider codebuddy --model glm-5.0-ioa
+python orchestrator.py --provider codebuddy --model deepseek-v3.2
 python orchestrator.py --provider gemini --model gemini-2.5-pro
 
 # 使用自定义可执行文件路径
@@ -424,6 +539,12 @@ python orchestrator.py --reset
 
 # 启用详细日志
 python orchestrator.py --verbose
+
+# 使用预设配置
+python orchestrator.py --preset claude
+
+# 列出所有可用 provider
+python orchestrator.py --list-providers
 ```
 
 ## 最佳实践
@@ -507,11 +628,10 @@ completion_criteria: |
       completion_criteria: "代码修改完成"
       
     # 步骤2：长时间训练（避免超时）
-    - id: 2.2
-      name: "运行训练"
-      type: long_running
-      command: "python train.py --config modified_config.yaml"
-      completion_criteria: "训练正常退出且验证集指标满足要求"
+      - id: 2.2
+        name: "运行训练"
+        type: long_running
+        completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
 ### 4. 长时间任务使用
@@ -656,6 +776,14 @@ ps aux | grep train.py
 - 重新设计任务，拆分为更小的任务
 - 设置更合理的初始提示
 
+### 问题 3.5：AI CLI 连续调用失败
+
+**现象**：AI CLI 工具反复返回错误（网络问题、认证过期、服务端限流等）
+
+**内置机制**：系统自动使用指数退避策略（5s → 10s → 20s → 40s → ... → `backoff_max_wait`），成功后自动重置。系统永远不会因为连续失败而主动退出。
+
+**配置**：在 `config.yaml` 中调整 `backoff_max_wait`（默认 300 秒）。
+
 ### 问题 4：状态文件损坏
 
 **解决方案**：
@@ -707,13 +835,14 @@ python orchestrator.py
 
 ### Q: 支持哪些 AI 工具和模型？
 
-支持四种 AI CLI 工具：
+支持五种 AI CLI 工具：
 
 | Provider | 命令 | 默认模型 | 别名 |
 |----------|------|----------|------|
-| CodeBuddy | `codebuddy` | `glm-5.0-ioa` | `cb` |
-| Claude Code | `claude-internal` | `claude-sonnet-4-6` | `claude-code`, `claude-internal` |
-| Gemini CLI | `gemini-internal` | `gemini-2.5-pro` | `gemini-cli`, `gemini-internal` |
+| CodeBuddy | `codebuddy` | 从 config.yaml 的 `default_model` 加载 | `cb` |
+| Claude Code | `claude` | `claude-sonnet-4-6` | `claude-code`, `claude` |
+| Gemini CLI | `gemini` | `gemini-2.5-pro` | `gemini-cli`, `gemini` |
+| OpenCode | `opencode` | （使用自身配置默认） | `oc` |
 | Test | `test` | `test` | - |
 
 > **Test Provider** 不调用真实 AI，而是从 `--test-rules` 指定的规则文件中按顺序读取预定义响应，用于测试编排逻辑。
@@ -725,11 +854,18 @@ python orchestrator.py
 通过命令行 `--model` 参数指定：
 
 ```bash
-# 指定 CodeBuddy 模型
-python orchestrator.py --model glm-5.0-ioa
+# 单模型（所有阶段使用同一模型）
+python orchestrator.py --model deepseek-v3.2
 
-# 指定 Gemini 模型
-python orchestrator.py --provider gemini --model gemini-2.5-pro
+# 多模型（不同阶段使用不同模型）
+# 格式: "plan:模型A;default:模型B;simple:模型C"
+# - plan: idea 分解为 TODO 阶段
+# - default: 任务执行默认模型
+# - simple: 简单任务使用的轻量模型
+python orchestrator.py --model "plan:GLM-4-Flash;default:GLM-5;simple:GLM-4-Flash"
+
+# 只指定部分角色（缺失的角色使用 default 的值）
+python orchestrator.py --model "default:GLM-5;simple:GLM-4-Flash"
 ```
 
 或在代码中指定：
@@ -738,7 +874,7 @@ python orchestrator.py --provider gemini --model gemini-2.5-pro
 from ai_providers import get_provider
 from orchestrator import TodoOrchestrator
 
-provider = get_provider("codebuddy", model="glm-5.0-ioa")
+provider = get_provider("codebuddy", model="deepseek-v3.2")
 orchestrator = TodoOrchestrator(provider=provider)
 ```
 
@@ -748,7 +884,7 @@ orchestrator = TodoOrchestrator(provider=provider)
 
 - ✅ 完整的安装和配置流程
 - ✅ 详细的任务类型说明
-- ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI）
+- ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI / OpenCode）
 - ✅ 完整的使用指南
 - ✅ 最佳实践建议
 - ✅ 常见问题和解决方案

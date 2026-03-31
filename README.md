@@ -1,198 +1,106 @@
-# CodeBuddy Todo Orchestrator
+<div align="center">
 
-基于 CodeBuddy AI 编程助手的智能任务编排系统。
+# AutoAgent
 
-## 📋 项目简介
+**AI 驱动的智能任务编排系统**
 
-本项目实现了一个灵活的 Todo 任务执行系统，能够：
+让 AI 自主规划、执行、评估和迭代，自动完成复杂的多步骤工作流。
 
-- 📝 通过简洁的 YAML 配置定义任务
-- 🤖 利用 CodeBuddy 的 AI 能力自动执行复杂任务
-- 🔄 AI 自主判断完成条件，持续尝试直到达标
-- 🎯 支持简单任务和嵌套任务
-- 🚀 支持长时间任务的 nohup 后台运行
-- 📊 完整的状态追踪和执行日志
+[快速开始](#-快速开始) · [核心特性](#-核心特性) · [使用场景](#-使用场景) · [文档](#-文档)
 
-## 🎯 核心特性
+</div>
 
-### 1. 统一的任务执行模型
-**不再区分"循环任务"和"简单任务"，所有任务都遵循统一的执行模式：**
-- 尝试执行 → AI 自主评估 → 未达标则改进 → 重新尝试
-- AI 完全自主判断是否满足完成条件
-- 持续迭代直到达成目标或达到最大尝试次数
+---
 
-### 2. 嵌套任务与循环任务支持
-支持任务包含子任务，每个子任务可以是：
-- **简单任务**：AI 自主完成（含代码修改、命令执行等）
-- **长时间任务**：使用 autoagent-exec 后台运行（避免超时）
+## 什么是 AutoAgent？
 
-**嵌套任务（nested）**：AI 每轮评估是否完成，可能提前结束或继续重试
-**循环任务（looping）**：固定循环 N 次，每轮重置所有子任务状态重新执行
+AutoAgent 是一个 **AI 任务编排引擎**，通过简洁的 YAML 配置定义任务目标和完成标准，由 AI 自主完成代码修改、命令执行、结果评估和迭代优化的全过程。
 
-**示例场景：**
-```
-嵌套任务：优化模型性能
-├── 子任务1：修改训练代码（AI 操作）
-├── 子任务2：运行训练（长时间任务）
-└── 根据子任务2的结果判断主任务是否完成
-
-循环任务：迭代优化 CUDA 内核（5 轮）
-├── 子任务1：ncu 性能分析（长时间任务）
-├── 子任务2：优化代码（AI 操作）
-└── 子任务3：基准测试（AI 操作）
-    → 每轮重置，固定执行 5 次
-```
-
-### 3. AI 驱动的智能执行
-
-#### 完全自主的AI决策机制
-
-系统会在两个关键决策点调用AI：
-
-1. **子任务失败时**：
-   - 系统自动收集失败信息、历史记录、错误日志等上下文
-   - AI分析失败原因，识别根本原因（是当前子任务的问题，还是前面子任务的问题）
-   - AI决定从哪个子任务开始重试（`retry_from`字段）
-   - AI提出具体的修复建议（`suggested_fix`字段）
-   - 系统完全听从AI的决策，重置相应的子任务状态
-
-2. **主任务评估时**：
-   - 系统提供所有子任务的执行结果、训练日志、指标数据等上下文
-   - AI判断主任务是否满足完成条件（`main_task_completed`字段）
-   - AI分析结果与目标的差距
-   - AI提出下一轮的优化方向（`next_strategy`字段）
-   - AI给出具体的改进措施（`suggested_improvements`字段）
-
-#### 系统与AI的职责分工
-
-**系统职责**：
-- 执行框架：管理任务队列、执行命令、监控状态
-- 状态管理：维护任务状态、追踪尝试次数、持久化数据
-- AI调用：在关键时刻调用AI、提供结构化上下文、解析AI决策
-- 流程控制：根据AI决策执行后续操作、控制最大重试次数
-
-**AI职责**：
-- 失败分析：分析子任务失败原因、识别根本原因
-- 重试决策：决定从哪个子任务开始重试、提出修复方案
-- 完成判断：判断主任务是否完成、评估结果与目标的差距
-- 策略建议：提出下一轮的优化方向、给出具体的改进措施
-
-#### 设计优势
-
-- ✅ **避免死循环**：AI能够识别跨子任务的依赖问题，不会盲目重复失败的操作
-- ✅ **完全自主性**：AI完全掌控重试策略，可以基于实际情况调整
-- ✅ **灵活性**：AI可以要求从任意子任务重试，提出各种修复方案
-- ✅ **可追踪性**：所有AI决策都被记录，可以回顾AI的推理过程
-- ✅ **符合用户理念**：AI自主判断完成条件，系统只提供框架和支持
-
-### 4. CodeBuddy 负责代码修改和完成判断
-- Orchestrator 负责流程控制和状态管理
-- AI 完全自主决定如何改进、何时停止
-
-### 5. 灵活的配置方式
-```yaml
-tasks:
-  - id: 1
-    name: "下载数据集"
-    type: simple
-    completion_criteria: "data.csv 文件存在且大小 > 10MB"
-    initial_hint: "使用 python download.py"
-    
-  - id: 2
-    name: "优化模型性能"
-    type: nested
-    completion_criteria: "训练成功完成且 val_loss < 0.5"
-    subtasks:
-      - id: 2.1
-        name: "修改训练代码"
-        type: simple
-        completion_criteria: "代码修改完成"
-        
-      - id: 2.2
-        name: "运行训练"
-        type: long_running
-        command: "python train.py --config modified_config.yaml"
-        completion_criteria: "训练正常退出且验证集指标满足要求"
-```
-
-## 🏗️ 架构设计
+**核心理念**：你只需要描述"做什么"和"做到什么程度"，AutoAgent 负责"怎么做"和"做到为止"。
 
 ```
-┌─────────────────────────────────────────┐
-│  Todo Orchestrator                      │
-│  - 解析 todos.yaml                      │
-│  - 调度任务执行                         │
-│  - 管理任务队列                         │
-└────────────────┬────────────────────────┘
-                 │
-         ┌───────┼───────┐
-         ▼       ▼       ▼
-┌──────────┐ ┌──────────┐ ┌──────────┐
-│  Simple  │ │  Nested  │ │ Looping  │
-│  Task    │ │  Task    │ │  Task    │
-│ -AI 判断 │ │ -AI 决策 │ │ -固定N轮 │
-└──────────┘ └────┬─────┘ └────┬─────┘
-                  │            │
-                  └──────┬─────┘
-                  ┌──────┴────────┐
-                  │  子任务执行流程 │
-                  │  - simple      │
-                  │  - long_running│
-                  └──────┬────────┘
-                             │
-                    ┌────────▼────────┐
-                    │  CodeBuddy      │
-                    │  - AI 修改代码  │
-                    │  - AI 判断完成  │
-                    │  - Nohup 监控   │
-                    └─────────────────┘
+你的目标 → YAML 配置 → AutoAgent 编排 → AI 自主执行 → 任务完成
 ```
 
-## 📚 文档导航
+## 为什么选择 AutoAgent？
 
-| 文档 | 说明 |
-|------|------|
-| **[README.md](README.md)** | 项目介绍和快速开始（本文档） |
-| **[ARCHITECTURE.md](doc/ARCHITECTURE.md)** | 架构设计和核心概念 |
-| **[USAGE.md](doc/USAGE.md)** | 使用指南和最佳实践 |
-| **[API_REFERENCE.md](doc/API_REFERENCE.md)** | API 参考文档 |
-| **[EXAMPLES.md](doc/EXAMPLES.md)** | 实际使用示例 |
-| **[FILES.md](doc/FILES.md)** | 项目文件说明 |
-| **[INDEX.md](doc/INDEX.md)** | 文档索引 |
+| 传统方式 | 使用 AutoAgent |
+|---------|---------------|
+| 手动拆解任务，逐步指导 AI | 一次配置，全自动执行 |
+| 遇到失败需要人工介入分析 | AI 自主分析失败原因并重试 |
+| 长时间任务需要人工监控 | 后台运行，自动监控和回调 |
+| 多步骤流程难以持续跟踪 | 完整的状态持久化和断点续传 |
+| 单一 AI 工具绑定 | 多 AI Provider 灵活切换 |
+
+## ✨ 核心特性
+
+### 智能任务执行
+
+- **AI 自主决策** — AI 完全掌控任务的执行策略、完成判断和失败恢复
+- **自动迭代优化** — 尝试 → 评估 → 改进 → 重试，持续迭代直到达标
+- **智能失败分析** — AI 自动分析失败根因，决定从哪个步骤重试
+
+### 灵活的任务模型
+
+- **简单任务（simple）** — AI 自主完成的单步任务
+- **嵌套任务（nested）** — 包含多个子任务的复杂工作流，AI 评估整体完成度
+- **循环任务（looping）** — 固定 N 轮迭代，适合 profile → optimize → benchmark 场景
+- **长时间任务（long_running）** — 后台运行，避免超时，自动监控状态
+
+### 多 AI Provider 支持
+
+内置支持多种 AI 编程助手，轻松切换：
+
+```bash
+# CodeBuddy（默认）
+python orchestrator.py --provider codebuddy
+
+# Claude Code
+python orchestrator.py --provider claude --model claude-sonnet-4-6
+
+# Gemini
+python orchestrator.py --provider gemini --model gemini-2.5-pro
+
+# OpenCode
+python orchestrator.py --provider opencode
+```
+
+### 其他能力
+
+- **Ideas 自动拆解** — 将自然语言 ideas 自动拆解为结构化任务
+- **状态持久化** — 支持断点续传，中断后从上次进度继续
+- **Idle 模式** — 任务完成后持续监听，检测到新 ideas 自动执行
+- **完整日志系统** — 记录 AI 对话全过程，支持回溯和调试
 
 ## 🚀 快速开始
 
-### 1. 安装依赖
+### 1. 安装
 
 ```bash
-pip install pyyaml
+pip install -r requirements.txt
 ```
 
-### 2. 配置 CodeBuddy
+### 2. 配置 AI 工具
 
-确保 CodeBuddy 已正确安装并配置：
+确保已安装并登录你选用的 AI 编程助手（如 CodeBuddy、Claude Code 等）：
 
 ```bash
-# 检查 CodeBuddy 版本
+# 以 CodeBuddy 为例
 codebuddy --version
-
-# 如果需要登录（在交互式终端执行）
-codebuddy -p "login_test"
 ```
-
-**重要**：如果使用 nohup 后台运行，必须先在交互式终端完成登录，确保 `~/.codebuddy/settings.json` 存在。
 
 ### 3. 创建任务配置
 
+创建 `todos.yaml`（可参考 `todos.example.yaml`）：
+
 ```yaml
-# todos.yaml
 tasks:
   - id: 1
     name: "下载数据集"
     type: simple
     completion_criteria: "data.csv 文件存在且大小 > 10MB"
     initial_hint: "使用 python download.py"
-    
+
   - id: 2
     name: "优化模型性能"
     type: nested
@@ -202,289 +110,237 @@ tasks:
         name: "修改训练代码"
         type: simple
         completion_criteria: "代码修改完成"
-        
+
       - id: 2.2
         name: "运行训练"
         type: long_running
-        command: "python train.py --config modified_config.yaml"
         completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
-### 4. 运行 Orchestrator
+### 4. 运行
 
-**基本运行**（使用默认配置 `todos.yaml`）：
 ```bash
+# 基本运行
 python orchestrator.py
-```
 
-**常见命令行参数**：
+# 全自动模式：从 ideas 自动拆解并执行
+python orchestrator.py --ideas ideas.md --config todos.yaml --workspace ./my_project
 
-```bash
-# 全自动运行：指定 ideas 文件、配置文件、工作目录和模型
-python orchestrator.py --ideas ideas.md --config todos.yaml --workspace ./my_project --model glm-5.0-ioa
-
-# 先人工审核 ideas 拆解结果，再手动运行任务
-python orchestrator.py --ideas ideas.md --config todos.yaml --workspace ./my_project --ideas-only
-python orchestrator.py --config todos.yaml --workspace ./my_project
-
-# 使用不同的 AI Provider
-python orchestrator.py --provider claude --model claude-sonnet-4-6
-python orchestrator.py --provider gemini --model gemini-2.5-pro
-
-# 只运行指定任务
-python orchestrator.py --task 2
-
-# 查看当前任务状态 / 重置所有状态
+# 查看状态
 python orchestrator.py --status
-python orchestrator.py --reset
-
-# 禁用 idle 模式（默认 --ideas 时自动开启 idle，任务完成后持续等待新 ideas）
-python orchestrator.py --ideas ideas.md --config todos.yaml --no-idle
-
-# 指定日志目录和超时时间
-python orchestrator.py --log-dir ./logs --timeout 600
 ```
 
-**完整参数列表**：
+## 📖 使用指南
+
+### 命令行参数
 
 | 参数 | 简写 | 说明 |
 |------|------|------|
 | `--config` | `-c` | 任务配置文件路径（默认 `todos.yaml`） |
 | `--task` | `-t` | 只执行指定的任务 ID |
-| `--provider` | `-P` | AI Provider（`codebuddy`/`claude`/`gemini`，默认 `codebuddy`） |
-| `--model` | `-m` | AI 模型名称（默认取决于 provider） |
+| `--provider` | `-P` | AI Provider（`codebuddy` / `claude` / `gemini` / `opencode`） |
+| `--model` | `-m` | AI 模型名称 |
 | `--workspace` | `-w` | 工作目录（默认当前目录） |
-| `--ideas` | - | ideas.md 文件路径，启用 ideas 自动拆解 |
-| `--ideas-only` | - | 仅处理 ideas（含人工审核），不运行任务 |
-| `--no-idle` | - | 禁用 idle 模式（默认 `--ideas` 时自动开启） |
-| `--idle-interval` | - | idle 模式检查间隔秒数（默认 30） |
-| `--timeout` | - | AI 调用超时秒数（默认从 `config.yaml` 读取） |
-| `--log-dir` | - | 日志根目录（默认 `.autoagent`） |
-| `--status` | - | 显示当前任务状态并退出 |
-| `--reset` | - | 重置所有任务状态并退出 |
+| `--ideas` | | ideas 文件路径，启用自动拆解 |
+| `--ideas-only` | | 仅拆解 ideas，不运行任务（支持人工审核） |
+| `--no-idle` | | 禁用 idle 模式 |
+| `--idle-interval` | | idle 模式检查间隔秒数（默认 30） |
+| `--preset` | | Preset 配置名称（默认 `default`），从 config.yaml 加载预设参数 |
+| `--timeout` | | AI 调用超时秒数 |
+| `--log-dir` | | 日志目录（默认 `.autoagent`） |
+| `--status` | | 显示当前任务状态 |
+| `--reset` | | 重置所有任务状态 |
 | `--verbose` | `-v` | 启用详细日志 |
-| `--list-providers` | - | 列出所有可用 AI Provider 并退出 |
+| `--list-providers` | | 列出所有可用 AI Provider |
 
-> 💡 更多参数详情请参考 [USAGE.md](doc/USAGE.md) 和 [API_REFERENCE.md](doc/API_REFERENCE.md)。
+### 常用工作流
 
-## 💡 核心概念
+```bash
+# 全自动：ideas → 任务拆解 → 执行
+python orchestrator.py --ideas ideas.md --config todos.yaml --workspace ./project
 
-### 统一的任务执行模型
+# 半自动：先拆解 ideas 并人工审核，再运行
+python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
+# （审核 todos.yaml 后）
+python orchestrator.py --config todos.yaml --workspace ./project
 
-**不再有"循环任务"的概念，所有任务都遵循相同的执行逻辑：**
+# 重跑某个任务
+python orchestrator.py --task 2
 
-```
-for task in tasks:
-    while True:
-        # 1. AI 尝试完成任务
-        result = call_codebuddy(task)
-        
-        # 2. AI 自己判断是否达标
-        if result.completed:
-            mark_task_completed(task.id)
-            break
-        
-        # 3. AI 决定如何改进，然后继续循环
-        # （AI 自己决定改什么、怎么改）
+# 全部重来
+python orchestrator.py --reset
 ```
 
-**关键点：**
-- ✅ AI 自主判断完成条件
-- ✅ AI 自主决定如何改进
-- ✅ 持续迭代直到达标
-- ✅ 防止无限循环（设置最大尝试次数）
+### Preset 配置
 
-### 嵌套任务
-
-**主任务可以包含多个子任务，子任务按顺序执行：**
+通过 `config.yaml` 中的 preset 快速切换常用配置组合，避免每次输入大量参数：
 
 ```yaml
-- id: 2
-  name: "优化模型性能"
-  type: nested
-  completion_criteria: "训练成功完成且 val_loss < 0.5"
-  subtasks:
-    - id: 2.1
-      name: "修改训练代码"
-      type: simple
-      
-    - id: 2.2
-      name: "运行训练"
-      type: long_running
+# config.yaml
+preset:
+  - name: default
+    ideas: ${workspace}/ideas.md
+    config: ${workspace}/todos.yaml
+    provider: opencode
+    model: deepseek-v3.2
+
+  - name: claude
+    provider: claude
+    model: claude-sonnet-4-6
+
+  - name: debug
+    provider: codebuddy
+    verbose: true
+    no_skip: true
 ```
 
-**执行流程：**
-1. 执行子任务 2.1（AI 修改代码）
-2. 如果子任务失败：立即停止，AI 分析并决定重试策略
-3. 执行子任务 2.2（运行训练）
-4. 所有子任务完成后，AI 判断主任务是否完成
-5. 如果未完成，AI 决定从哪个子任务重新开始
+```bash
+# 使用 default 预设
+python orchestrator.py
 
-### 长时间任务
+# 使用 claude 预设
+python orchestrator.py --preset claude
 
-**使用 nohup 后台运行，避免 CodeBuddy timeout：**
+# 使用预设但覆盖特定参数（命令行参数优先级更高）
+python orchestrator.py --preset default --model claude-sonnet-4-6
+```
+
+Preset 支持所有命令行参数对应的字段（`config`、`ideas`、`provider`、`model`、`workspace`、`timeout`、`verbose` 等），详见 [使用指南](doc/USAGE.md)。
+
+## 🏗️ 架构概览
+
+```
+┌───────────────────────────────────┐
+│         TodoOrchestrator          │
+│     任务解析 · 调度 · 状态管理      │
+└──────────────┬────────────────────┘
+               │
+       ┌───────┼───────┐
+       ▼       ▼       ▼
+ ┌──────────┐ ┌──────────┐ ┌──────────┐
+ │  Simple  │ │  Nested  │ │ Looping  │
+ │ Executor │ │ Executor │ │ Executor │
+ └──────────┘ └────┬─────┘ └────┬─────┘
+                   └──────┬─────┘
+                          ▼
+                  ┌─────────────────┐
+                  │   AI Provider   │
+                  │ CodeBuddy/Claude│
+                  │ /Gemini/OpenCode│
+                  └─────────────────┘
+```
+
+**核心模块**：
+
+| 模块 | 说明 |
+|------|------|
+| `orchestrator.py` | 主入口，任务调度引擎 |
+| `task_executor.py` | 任务执行器（Simple / Nested / Looping） |
+| `ai_providers.py` | AI Provider 抽象层，支持多种 AI 工具 |
+| `codebuddy_client.py` | AI 客户端，封装与 AI 工具的交互 |
+| `state_manager.py` | 状态持久化管理 |
+| `conversation_logger.py` | 对话日志记录 |
+| `ideas_watcher.py` | Ideas 文件监控与任务分解 |
+| `autoagent_exec.py` | 长时间任务后台执行器 |
+
+## 🎯 使用场景
+
+### 模型训练与优化
 
 ```yaml
-- id: 2.2
-  name: "运行训练"
-  type: long_running
-  command: "python train.py --config modified_config.yaml"
-  completion_criteria: "训练正常退出且验证集指标满足要求"
+tasks:
+  - id: 1
+    name: "优化模型精度"
+    type: nested
+    completion_criteria: "accuracy >= 0.9 且 loss < 0.1"
+    subtasks:
+      - id: 1.1
+        name: "修改模型配置"
+        type: simple
+        completion_criteria: "配置修改完成"
+      - id: 1.2
+        name: "训练模型"
+        type: long_running
+        completion_criteria: "训练正常完成且指标达标"
 ```
 
-**技术实现：**
-- 使用 `nohup` 在后台运行
-- 启动监控进程持续检查日志
-- 完成后自动通知 AI 检查结果
-
-### Orchestrator 是什么？
-
-Orchestrator 是任务编排引擎，它：
-- ✅ 管理任务队列和状态
-- ✅ 执行任务调度
-- ✅ 根据 AI 决策控制流程
-- ✅ 持久化状态支持断点续传
-- ❌ 不提供 AI 能力
-- ❌ 不调用 LLM API
-
-### CodeBuddy 是什么？
-
-CodeBuddy 是 AI 编程助手，它：
-- ✅ 提供代码修改能力
-- ✅ 提供任务判断能力
-- ✅ 调用 LLM API
-- ❌ 不管理流程状态
-
-### 两者的协作关系
-
-```
-Orchestrator: "执行任务 2"
-    ↓
-Orchestrator: "执行子任务 2.1（simple）"
-    ↓
-Orchestrator: "调用 CodeBuddy"
-    ↓
-CodeBuddy: "让我看看任务描述...返回修改方案"
-    ↓
-Orchestrator: "执行子任务 2.2（long_running）"
-    ↓
-Orchestrator: "使用 nohup 后台运行，启动监控"
-    ↓
-Monitor: "检测到训练完成，通知 AI"
-    ↓
-CodeBuddy: "检查结果...判断是否满足完成条件"
-    ↓
-Orchestrator: "更新任务状态"
-```
-
-## 🎨 使用场景
-
-### 场景 1：自动化实验流程
+### CUDA 内核迭代优化
 
 ```yaml
-- id: 1
-  name: "准备数据集"
-  type: simple
-  completion_criteria: "data.csv 存在且包含 10000 条数据"
-  initial_hint: "运行 bash prepare_data.sh"
-  
-- id: 2
-  name: "优化模型精度"
-  type: nested
-  completion_criteria: "accuracy >= 0.9 且 loss < 0.1"
-  subtasks:
-    - id: 2.1
-      name: "修改模型配置"
-      type: simple
-      completion_criteria: "配置修改完成"
-      
-    - id: 2.2
-      name: "训练模型"
-      type: long_running
-      command: "python train.py --config config.yaml"
-      completion_criteria: "训练成功完成且指标达标"
+tasks:
+  - id: 1
+    name: "迭代优化 CUDA 内核"
+    type: looping
+    repeat_count: 5
+    subtasks:
+      - id: 1.1
+        name: "性能分析"
+        type: long_running
+        completion_criteria: "ncu 分析完成"
+      - id: 1.2
+        name: "优化代码"
+        type: simple
+        completion_criteria: "代码优化完成，编译通过"
+      - id: 1.3
+        name: "基准测试"
+        type: simple
+        completion_criteria: "基准测试完成，记录性能数据"
 ```
 
-### 场景 2：代码质量改进
+### 代码质量改进
 
 ```yaml
-- id: 1
-  name: "运行代码检查"
-  type: simple
-  completion_criteria: "pylint 评分 >= 9.0"
-  initial_hint: "运行 pylint src/"
-  
-- id: 2
-  name: "修复所有警告"
-  type: nested
-  completion_criteria: "pylint 输出无警告且符合 PEP8 规范"
-  subtasks:
-    - id: 2.1
-      name: "分析警告信息"
-      type: simple
-      completion_criteria: "警告分析完成"
-      
-    - id: 2.2
-      name: "修复代码"
-      type: simple
-      completion_criteria: "代码修复完成"
+tasks:
+  - id: 1
+    name: "修复代码质量问题"
+    type: nested
+    completion_criteria: "pylint 评分 >= 9.0，无严重警告"
+    subtasks:
+      - id: 1.1
+        name: "分析代码警告"
+        type: simple
+        completion_criteria: "警告分析完成"
+      - id: 1.2
+        name: "修复代码"
+        type: simple
+        completion_criteria: "所有问题已修复"
 ```
 
-### 场景 3：性能优化
+## 📚 文档
 
-```yaml
-- id: 1
-  name: "分析性能瓶颈"
-  type: simple
-  completion_criteria: "生成性能分析报告"
-  initial_hint: "运行 python profile.py"
-  
-- id: 2
-  name: "优化代码性能"
-  type: nested
-  completion_criteria: "运行时间 < 5 秒且功能不变"
-  subtasks:
-    - id: 2.1
-      name: "优化热点代码"
-      type: simple
-      completion_criteria: "热点代码优化完成"
-      
-    - id: 2.2
-      name: "运行基准测试"
-      type: simple
-      completion_criteria: "基准测试完成且性能达标"
-      initial_hint: "运行 python benchmark.py"
+| 文档 | 说明 |
+|------|------|
+| [架构设计](doc/ARCHITECTURE.md) | 系统架构和核心概念详解 |
+| [使用指南](doc/USAGE.md) | 完整使用指南和最佳实践 |
+| [API 参考](doc/API_REFERENCE.md) | 模块接口和配置项说明 |
+| [示例集合](doc/EXAMPLES.md) | 更多实际使用示例 |
+| [文件说明](doc/FILES.md) | 项目文件结构说明 |
+
+## 📁 项目结构
+
+```
+autoagent/
+├── orchestrator.py          # 主入口
+├── task_executor.py         # 任务执行器
+├── ai_providers.py          # AI Provider 抽象
+├── codebuddy_client.py      # AI 客户端
+├── state_manager.py         # 状态管理
+├── conversation_logger.py   # 日志系统
+├── ideas_watcher.py         # Ideas 监控
+├── truncation_limits.py     # 提示词截断限制配置
+├── autoagent_exec.py        # 后台执行器
+├── prompts/                 # AI Prompt 模板
+├── config.yaml              # 默认配置
+├── todos.example.yaml       # 任务配置模板
+├── sample/                  # 示例项目
+├── doc/                     # 详细文档
+└── test/                    # 测试
 ```
 
-## 🛠️ 开发计划
-
-- [x] 基础架构设计
-- [x] 完整文档编写
-- [x] 实现 TodoOrchestrator 核心类
-- [x] 实现简单任务执行器 (SimpleTaskExecutor)
-- [x] 实现嵌套任务支持 (NestedTaskExecutor)
-- [x] 实现循环任务支持 (LoopingTaskExecutor)
-- [x] 实现长时间任务处理 (autoagent-exec + 信号文件轮询)
-- [x] 实现 AI 调用封装 (AIClient / AIClientSDK)
-- [x] 实现多 AI Provider 支持 (CodeBuddy / Claude / Gemini / Test)
-- [x] 添加配置验证
-- [x] 添加错误处理
-- [x] 添加日志系统 (ConversationLogger)
-- [x] 实现 Ideas 文件监控与任务分解 (IdeasWatcher)
-- [x] 实现状态持久化 (StateManager)
-- [x] 实现 Idle 模式（自动等待新 ideas）
-- [x] 编写示例 (sample/)
-- [ ] 编写单元测试
-
-## 🤝 贡献指南
+## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！
 
 ## 📄 许可证
 
 MIT License
-
-## 🔗 相关链接
-
-- [CodeBuddy 文档](https://iwiki.woa.com/space/CodeBuddy)
-- [Karpathy AutoResearch](https://github.com/karpathy/autoresearch)

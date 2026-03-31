@@ -1,2 +1,2 @@
-python ../../run_test.py --project-root ../cufftdx_optimization --autoagent-dir ../.. --reset --skip-checks
-python ../../run_test.py --project-root ../cufftdx_optimization --autoagent-dir ../.. --log-dir logs --skip-checks --provider test --test-rules test_rules_4.txt --ideas ../cufftdx_optimization/ideas.md
+python -X utf8 ../../run_test.py --project-root ../cufftdx_optimization --autoagent-dir ../.. --reset --skip-checks
+python -X utf8 ../../run_test.py --project-root ../cufftdx_optimization --autoagent-dir ../.. --log-dir logs --skip-checks --provider test --test-rules test_rules_4.txt --ideas ../cufftdx_optimization/ideas.md --no-idle
