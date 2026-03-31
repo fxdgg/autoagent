@@ -564,8 +564,8 @@ codebuddy --resume <session_id> -m "glm-4.7" -y "上次尝试失败，请根据�
 #### 长时间任务的特殊处理
 
 ```bash
-# AI 通过 autoagent-exec 启动后台任务
-python autoagent_exec.py --log-dir <session_dir> --task-id 2.2 -- python train.py --config config.yaml
+# AI 通过 autoagent-exec wrapper 脚本启动后台任务（内部参数由 wrapper 预填）
+autoagent-exec.bat python train.py --config config.yaml
 
 # 任务完成后，新 session 分析结果
 codebuddy -m "glm-4.7" -y "分析训练日志并判断是否满足完成条件"
@@ -744,14 +744,14 @@ for task in state['tasks']:
 
 **执行流程**：
 ```
-1. AutoAgent 构造 prompt，告知 AI 使用 autoagent-exec 执行长时间命令
+1. AutoAgent 构造 prompt，告知 AI 使用 autoagent-exec wrapper 脚本执行长时间命令
    ↓
-2. AI 通过 Bash 工具调用 autoagent-exec
+2. AI 通过 wrapper 脚本调用 autoagent-exec（内部参数由 wrapper 预填）
    ↓
-3. autoagent-exec 启动命令并监视 10 秒：
-   ├─ 10 秒内失败（退出码非零）：立即报告错误，AI 可修复并重试
-   ├─ 10 秒内成功（退出码 0）：直接完成
-   └─ 10 秒后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
+3. autoagent-exec 启动命令并监视 N 秒（由 config.yaml 的 fast_fail_timeout 配置）：
+   ├─ N 秒内失败（退出码非零）：智能输出（短输出内联打印，长输出只给路径），AI 可修复并重试
+   ├─ N 秒内成功（退出码 0）：智能输出（短输出内联打印并标注 not truncated，长输出只给路径）
+   └─ N 秒后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
    ↓
 4. AI 看到 "TASK SUBMITTED" 后输出 LONG_RUNNING_IN_PROGRESS
    ↓
@@ -1025,7 +1025,7 @@ CodeBuddy 有超时限制（通常 1 小时），但某些任务（如模型训�
 ┌──────────────┐     prompt      ┌───────────┐     bash call     ┌──────────────────┐
 │  AutoAgent   │ ──────────────→ │    AI     │ ───────────────→ │  autoagent-exec  │
 │ (Orchestrator│                 │ (CodeBuddy│                   │  (独立脚本)       │
-│  轮询信号文件)│ ←── 读取状态 ── │  会话结束) │                   │  10s 快速失败检测 │
+│  轮询信号文件)│ ←── 读取状态 ── │  会话结束) │                   │  快速失败检测     │
 └──────────────┘                 └───────────┘                   │  后台进程管理     │
                                                                  │  信号文件写入     │
                                                                  └──────────────────┘
@@ -1033,41 +1033,54 @@ CodeBuddy 有超时限制（通常 1 小时），但某些任务（如模型训�
 
 ### autoagent_exec.py（long_running 任务启动器）
 
-**职责**：作为 AI 通过 Bash 调用的独立脚本，负责启动命令、快速失败检测、后台管理和信号文件写入。
+**职责**：作为 AI 通过 wrapper 脚本（`autoagent-exec.bat` / `autoagent-exec.sh`）调用的独立脚本，负责启动命令、快速失败检测、后台管理和信号文件写入。
 
-**调用方式**：
+**调用方式**（AI 通过 wrapper 脚本调用，内部参数由 wrapper 预填）：
 ```bash
-python autoagent_exec.py --log-dir <log_session_dir> --task-id <id> -- <command...>
+# Windows
+autoagent-exec.bat <command...>
+# Linux/macOS
+bash autoagent-exec.sh <command...>
 ```
 
-**参数说明**：
+**内部参数**（由 wrapper 脚本预填，AI 不需要也不应该手动指定）：
 
 | 参数 | 说明 |
 |------|------|
-| `--log-dir` | 日志会话目录的绝对路径（由 AutoAgent 传递给 AI prompt） |
+| `--log-dir` | 日志会话目录的绝对路径（由 AutoAgent 传递给 wrapper 脚本） |
 | `--task-id` | 子任务 ID（如 `1.2`） |
+| `--fast-fail-timeout` | 快速失败超时时间（秒），由 `config.yaml` 的 `fast_fail_timeout` 配置 |
 | `-- <command>` | 要执行的命令（`--` 之后的所有内容） |
 
-**10 秒快速失败检测机制**：
+**快速失败检测机制**（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置，默认 10 秒）：
 
 ```
 启动命令
   ↓
-等待 10 秒
+等待 N 秒（fast_fail_timeout）
   ↓
-┌──────────────────────────────────────┐
-│ 10 秒内退出？                        │
-│ ├─ 退出码 = 0 → ✅ 命令快速完成     │
-│ │   写入 "finished" 信号文件         │
-│ ├─ 退出码 ≠ 0 → ❌ 快速失败         │
-│ │   打印错误输出（供 AI 查看并修复）  │
-│ │   不写信号文件（AI 可直接重试）     │
-│ └─ 仍在运行 → 🚀 转为后台任务       │
-│     写入 "running" 信号文件          │
-│     打印 "TASK SUBMITTED" 消息       │
-│     启动监控线程等待进程结束          │
-└──────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│ N 秒内退出？                                      │
+│ ├─ 退出码 = 0 → ✅ 命令快速完成                  │
+│ │   智能输出：短输出直接内联打印，长输出只给路径   │
+│ │   写入 "finished" 信号文件                      │
+│ ├─ 退出码 ≠ 0 → ❌ 快速失败                      │
+│ │   智能输出：短输出直接内联打印，长输出只给路径   │
+│ │   不写信号文件（AI 可直接重试）                  │
+│ └─ 仍在运行 → 🚀 转为后台任务                    │
+│     写入 "running" 信号文件                       │
+│     打印 "TASK SUBMITTED" 消息                    │
+│     启动监控线程等待进程结束                       │
+└──────────────────────────────────────────────────┘
 ```
+
+**智能输出策略**（命令在 N 秒内退出时）：
+
+| 输出长度 | 行为 |
+|----------|------|
+| 无输出 | 打印 `(no output captured)` |
+| ≤ 3000 字符 | 直接内联打印完整内容，标注 `(complete, not truncated)` 避免 AI 再去读文件 |
+| > 3000 字符 | 只打印 output log 文件路径，AI 可自行读取 |
 
 **信号文件格式**（`lr_tasks/lr_<task_id>_signal.json`）：
 
@@ -1090,8 +1103,8 @@ python autoagent_exec.py --log-dir <log_session_dir> --task-id <id> -- <command.
 
 ```python
 def _execute_long_running_subtask(self, subtask, client, ...):
-    # 1. 构造 prompt，告知 AI 使用 autoagent-exec
-    #    --log-dir 使用 self.session_dir（从 orchestrator 传入）
+    # 1. 构造 prompt，告知 AI 使用 autoagent-exec wrapper 脚本
+    #    wrapper 脚本中已预填 --log-dir（使用 self.session_dir）等内部参数
     prompt = self._build_long_running_prompt(
         subtask, autoagent_exec_path, self.session_dir, ...
     )
@@ -1167,7 +1180,7 @@ autoagent/
 ├── orchestrator.py           # 主程序、CLI 入口
 ├── ai_providers.py           # AI Provider 抽象层（多 CLI 工具支持）
 ├── task_executor.py          # 任务执行器 (Simple/Nested/SubtaskExecutor)
-├── autoagent_exec.py         # long_running 任务启动器（AI 通过 Bash 调用）
+├── autoagent_exec.py         # long_running 任务启动器（AI 通过 wrapper 脚本调用）
 ├── codebuddy_client.py       # AIClient（统一 AI 客户端）
 ├── state_manager.py          # 状态持久化管理
 ├── conversation_logger.py    # 对话日志记录

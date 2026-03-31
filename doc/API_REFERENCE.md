@@ -623,7 +623,7 @@ class SubtaskExecutor:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `session_dir` | str | None | 日志会话目录（long_running 任务必须提供，用于构造 AI prompt 中的 `--log-dir` 参数） |
+| `session_dir` | str | None | 日志会话目录（long_running 任务必须提供，用于构造 wrapper 脚本中的 `--log-dir` 参数） |
 | `model_roles` | dict | None | 模型角色字典，根据子任务的 `model` 字段切换 provider 模型 |
 
 支持的子任务类型：
@@ -631,40 +631,51 @@ class SubtaskExecutor:
 | 类型 | 说明 | 执行方式 |
 |------|------|----------|
 | `simple` | AI 自主完成（含代码修改、命令执行等） | 调用 `client.ask()` |
-| `long_running` | 长时间任务 | AI 通过 Bash 调用 `autoagent-exec` 启动，AutoAgent 轮询信号文件 + AI 分析结果 |
+| `long_running` | 长时间任务 | AI 通过 wrapper 脚本调用 `autoagent-exec` 启动，AutoAgent 轮询信号文件 + AI 分析结果 |
 
 **long_running 子任务执行流程**：
 
-1. 构造 prompt，告知 AI 使用 `autoagent-exec` 启动命令（`--log-dir` 使用 `self.session_dir`）
-2. AI 通过 Bash 调用 `autoagent-exec`
+1. 构造 prompt，告知 AI 使用 `autoagent-exec` wrapper 脚本启动命令（内部参数由 wrapper 预填）
+2. AI 通过 wrapper 脚本调用 `autoagent-exec`
 3. 如果 AI 报告 `LONG_RUNNING_IN_PROGRESS`，轮询信号文件等待完成
 4. 完成后重启 AI 会话，让 AI 读取输出日志并评估结果
 
 ### autoagent_exec.py
 
-long_running 任务启动器，AI 通过 Bash 调用的独立脚本。
+long_running 任务启动器，AI 通过 wrapper 脚本（`autoagent-exec.bat` / `autoagent-exec.sh`）调用的独立脚本。
 
-**调用方式**：
+**调用方式**（AI 通过 wrapper 脚本调用，内部参数由 wrapper 预填）：
 ```bash
-python autoagent_exec.py --log-dir <log_session_dir> --task-id <id> [--fast-fail-timeout <seconds>] -- <command...>
+# Windows
+autoagent-exec.bat <command...>
+# Linux/macOS
+bash autoagent-exec.sh <command...>
 ```
 
-**参数**：
+**内部参数**（由 wrapper 脚本预填，AI 不需要手动指定，`--help` 中已隐藏）：
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `--log-dir` | str | 日志会话目录绝对路径（由 SubtaskExecutor 的 `session_dir` 提供） |
 | `--task-id` | str | 子任务 ID（如 `1.2`） |
-| `--fast-fail-timeout` | int | 快速失败超时时间（秒），默认 10，由 `config.yaml` 的 `fast_fail_timeout` 配置 |
+| `--fast-fail-timeout` | int | 快速失败超时时间（秒），由 `config.yaml` 的 `fast_fail_timeout` 配置 |
 | `-- <command>` | str | `--` 之后的所有内容作为要执行的命令 |
 
-**行为**（以下 `N` 秒由 `--fast-fail-timeout` 控制，默认 10）：
+**行为**（以下 `N` 秒由 `--fast-fail-timeout` 控制）：
 
 | 场景 | 行为 |
 |------|------|
-| 命令在 N 秒内失败（退出码≠ 0） | 打印错误输出，不写信号文件，返回非零退出码 |
-| 命令在 N 秒内成功（退出码 = 0） | 写入 `finished` 信号文件，返回 0 |
+| 命令在 N 秒内失败（退出码≠ 0） | 智能输出（短输出内联打印，长输出只给路径），不写信号文件，返回非零退出码 |
+| 命令在 N 秒内成功（退出码 = 0） | 智能输出（短输出内联打印，长输出只给路径），写入 `finished` 信号文件，返回 0 |
 | 命令 N 秒后仍在运行 | 写入 `running` 信号文件，打印 `TASK SUBMITTED`，启动监控线程 |
+
+**智能输出策略**（命令在 N 秒内退出时，无论成功或失败）：
+
+| 输出长度 | 行为 |
+|----------|------|
+| 无输出 | 打印 `(no output captured)` |
+| ≤ 3000 字符 | 直接内联打印完整内容，标注 `(complete, not truncated)` 避免 AI 再去读文件 |
+| > 3000 字符 | 只打印 output log 文件路径，AI 可自行读取 |
 
 **生成的文件**：
 

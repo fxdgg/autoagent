@@ -411,17 +411,17 @@ tasks:
 > **注意**：`long_running` 类型不需要在 YAML 中指定 `command` 字段。AI 会根据任务描述和上下文自主决定要运行的命令，并通过 `autoagent-exec` 启动。
 
 **执行流程**：
-1. AutoAgent 构造 prompt，告知 AI 使用 `autoagent-exec` 启动长时间命令
-2. AI 通过 Bash 调用 `autoagent-exec --log-dir <session_dir> --task-id <id> -- <command>`
-3. `autoagent-exec` 启动命令并监视（默认 10 秒，可通过 `config.yaml` 的 `fast_fail_timeout` 配置）：
-   - 超时内失败：立即报告错误，AI 可修复并重试（避免重启会话）
-   - 超时内成功：直接完成
+1. AutoAgent 构造 prompt，告知 AI 使用 `autoagent-exec` wrapper 脚本启动长时间命令
+2. AI 通过 wrapper 脚本调用 `autoagent-exec.bat <command>`（内部参数由 wrapper 预填）
+3. `autoagent-exec` 启动命令并监视（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置）：
+   - 超时内失败：智能输出（短输出内联打印，长输出只给路径），AI 可修复并重试
+   - 超时内成功：智能输出（短输出内联打印并标注 not truncated，长输出只给路径）
    - 超时后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
 4. AutoAgent 检测到 `LONG_RUNNING_IN_PROGRESS`，开始轮询信号文件
 5. 任务完成后，重新启动 AI 分析输出日志并判断完成条件
 
 **技术细节**：
-- 使用 `autoagent_exec.py` 作为启动器，支持快速失败检测（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置，默认 10 秒）
+- 使用 `autoagent_exec.py` 作为启动器（通过 wrapper 脚本调用），支持快速失败检测（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置）
 - 信号文件（`lr_tasks/lr_<task_id>_signal.json`）用于进程间通信
 - 输出日志（`lr_tasks/lr_<task_id>_output.log`）记录命令完整输出
 - 信号文件和输出日志均位于 `session_dir/lr_tasks/`（由 orchestrator 的 `--log-dir` 参数决定）

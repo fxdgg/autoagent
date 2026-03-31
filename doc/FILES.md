@@ -23,7 +23,7 @@ autoagent/
 ├── orchestrator.py              # 主程序、CLI 入口
 ├── ai_providers.py              # AI Provider 抽象层（多 CLI 工具支持）
 ├── task_executor.py             # 任务执行器 (Simple/Nested/Looping/Subtask)
-├── autoagent_exec.py            # long_running 任务启动器（AI 通过 Bash 调用）
+├── autoagent_exec.py            # long_running 任务启动器（AI 通过 wrapper 脚本调用）
 ├── codebuddy_client.py          # AIClient（统一 AI 客户端，支持 SDK 和 CLI）
 ├── state_manager.py             # 状态持久化管理
 ├── conversation_logger.py       # 对话日志记录
@@ -224,7 +224,7 @@ autoagent/
 
 #### autoagent_exec.py
 - **作用**：long_running 任务启动器
-- **用途**：AI 通过 Bash 调用此脚本启动长时间命令，支持 10 秒快速失败检测 + 信号文件通信
+- **用途**：AI 通过 wrapper 脚本（`autoagent-exec.bat` / `autoagent-exec.sh`）调用此脚本启动长时间命令，支持快速失败检测 + 信号文件通信 + 智能输出（短输出内联打印，长输出只给路径）
 
 #### codebuddy_client.py
 - **作用**：统一 AI 客户端封装

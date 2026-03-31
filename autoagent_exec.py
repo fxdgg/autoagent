@@ -185,7 +185,7 @@ def main():
         if exit_code == 0:
             # Command finished successfully (it was fast, not really long-running)
             print(f"\n[OK] Command finished quickly (exit code 0).")
-            print(f"   Output log: {output_log}")
+            _print_output_smart(output_log)
 
             # Write a "finished" signal file
             signal_data = {
@@ -203,21 +203,7 @@ def main():
         else:
             # Command failed fast — print error for AI to see and retry
             print(f"\n[FAST-FAIL] Command failed within {fast_fail_timeout}s (exit code {exit_code}).")
-            print(f"   Output log: {output_log}")
-
-            # Print the log content so AI can see the error
-            try:
-                content = _read_log_file(output_log)
-                if content.strip():
-                    # Show last 3000 chars
-                    tail = content[-3000:] if len(content) > 3000 else content
-                    print(f"\n--- Command Output (last part) ---")
-                    print(tail)
-                    print(f"--- End of Output ---")
-                else:
-                    print(f"   (no output captured)")
-            except Exception as e:
-                print(f"   (failed to read output log: {e})")
+            _print_output_smart(output_log)
 
             # Do NOT write a signal file — let the AI fix and retry
             sys.exit(exit_code)
@@ -416,6 +402,41 @@ def _wait_for_process_unix(pid: int) -> 'int | None':
 
 def _is_monitor_mode():
     return "--monitor" in sys.argv
+
+
+# Maximum output length (in characters) to print inline.
+# If the output exceeds this, only the log file path is shown.
+_INLINE_OUTPUT_MAX_CHARS = 3000
+
+
+def _print_output_smart(output_log: str):
+    """Print command output inline if short, or show the log path if long.
+
+    - If the output is empty, prints a note saying no output was captured.
+    - If the output length <= _INLINE_OUTPUT_MAX_CHARS, prints the full
+      content inline with an explicit note that it is NOT truncated, so the
+      AI does not attempt to read the file again.
+    - If the output is longer, only prints the log file path so the AI can
+      read it if needed.
+    """
+    try:
+        content = _read_log_file(output_log)
+    except Exception as e:
+        print(f"   (failed to read output log: {e})")
+        return
+
+    stripped = content.strip()
+    if not stripped:
+        print(f"   (no output captured)")
+        return
+
+    if len(stripped) <= _INLINE_OUTPUT_MAX_CHARS:
+        print(f"\n--- Command Output (complete, not truncated) ---")
+        print(stripped)
+        print(f"--- End of Output ---")
+    else:
+        print(f"   Output is too long ({len(stripped)} chars) to display inline.")
+        print(f"   Full output log: {output_log}")
 
 
 def _read_log_file(path: str) -> str:
