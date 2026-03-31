@@ -384,10 +384,10 @@ class IdeasWatcher:
 
         # Validate optional model field
         model = task.get('model')
-        if model is not None and model not in ('default', 'simple'):
+        if model is not None and not isinstance(model, str):
             errors.append(
                 f"Task {task_id} has invalid model: '{model}'. "
-                f"Allowed values: 'default', 'simple'"
+                f"Must be a string: 'default', 'simple', or a direct model name"
             )
 
         return errors

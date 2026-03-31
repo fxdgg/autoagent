@@ -54,7 +54,7 @@ class TodoOrchestrator:
 | `backoff_max_wait` | int | 300 | AI CLI 连续失败时的最大退避等待时间（秒），来自 `config.yaml` 的 `backoff_max_wait` |
 | `model_roles` | dict | None | 模型角色字典（`{"plan": ..., "default": ..., "simple": ...}`），由 `parse_model_spec()` 解析生成 |
 
-> **注意**：`state_file` 参数已废弃。`todos_state.yaml`、`orchestrator.log`、`.ideas_processed.md` 等运行时文件
+> **注意**：`state_file` 参数已废弃。`todos_state.yaml`、`orchestrator.log`、`plans_state.yaml` 等运行时文件
 > 现在统一放置在由 `log_dir` + `.autoagent_log` 推导出的会话目录下，不再出现在项目目录中。
 
 ### 方法
@@ -381,7 +381,8 @@ class AIClient:
 | 层级 | 策略 | 说明 |
 |------|------|------|
 | 主任务 | 独立 context | 每个主任务创建独立的 AIClient，互不干扰 |
-| 子任务 | 共享 context | 同一主任务内的子任务通过 session_id 自动共享上下文 |
+| 子任务 | 独立 session | 每个子任务重置 session，通过 previous_subtask_summary 传递上下文 |
+| 重试 | 共享 session | 同一子任务的重试共享 session，保持对话历史 |
 
 ```python
 from ai_providers import get_provider
@@ -940,7 +941,7 @@ class IdeasWatcher:
 |------|------|--------|------|
 | `ideas_file` | str | "ideas.md" | Ideas 文件路径 |
 | `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
-| `processed_state_file` | str | ".ideas_processed.md" | 已处理 ideas 归档文件（位于会话目录下） |
+| `processed_state_file` | str | "plans_state.yaml" | 已处理 ideas 状态文件（位于会话目录下） |
 
 ### 方法
 

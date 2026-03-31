@@ -442,7 +442,7 @@ execution_results:
 
 ### 设计理念
 
-**重要设计决策**：每个主任务使用独立的 CodeBuddy context，主任务内的所有子任务共享该 context。
+**重要设计决策**：每个主任务使用独立的 CodeBuddy context。子任务之间会重置 session（防止上下文无限增长），通过 previous_subtask_summary 传递上下文。
 
 ### Context 分层策略
 
@@ -455,14 +455,13 @@ class TodoOrchestrator:
         context_id = f"task_{task['id']}"
         client = CodeBuddyClient(context_id=context_id)
         
-        # 第一次调用，自动创建新 session
-        initial_prompt = self._build_initial_prompt(task)
-        client.ask(initial_prompt)
-        
-        # 后续所有子任务自动通过 session_id 保持 context
+        # 子任务之间会重置 session，通过 previous_subtask_summary 传递上下文
+        previous_subtask_summary = ""
         for subtask in task['subtasks']:
-            result = self._execute_subtask(client, subtask)
-            # ...
+            if previous_subtask_summary:
+                client.reset_session()  # 防止上下文无限增长
+            result = self._execute_subtask(client, subtask, previous_subtask_summary)
+            previous_subtask_summary = result.summary
 ```
 
 **优势**：
@@ -472,41 +471,40 @@ class TodoOrchestrator:
 
 > **注意**：每个主任务使用独立的 AIClient 实例，session_id 自动管理会话续接。`context_id` 主要用于状态记录和日志追踪。
 
-#### 2. 子任务级别的 Context 共享
+#### 2. 子任务级别的 Context 隔离
 
 ```python
 def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
-    """执行子任务，共享主任务的 context"""
+    """执行子任务，每个子任务使用独立 session"""
+    
+    # 在执行新子任务前重置 session（除第一个子任务外）
+    # 防止上下文无限增长
+    if previous_subtask_summary:
+        client.reset_session()
     
     if subtask['type'] == 'simple':
-        # 简单任务：自动通过 session_id 保持上下文
-        prompt = self._build_subtask_prompt(subtask)
+        # 简单任务：新 session，prompt 中包含前一个子任务的摘要
+        prompt = self._build_subtask_prompt(subtask, previous_subtask_summary)
         result = client.ask(prompt)
         
     elif subtask['type'] == 'long_running':
-        # 长时间任务：启动后台进程，自动保持上下文
-        command = self._build_nohup_command(subtask)
-        self._start_background_task(command)
-        
-        # 监控完成后，AI 分析结果（自动续接 session）
-        monitor_result = self._monitor_task(subtask)
-        analysis = client.ask(
-            f"分析任务结果：\n{monitor_result}"
-        )
+        # 长时间任务：新 session，AI 通过 autoagent-exec 启动
+        prompt = self._build_long_running_prompt(subtask)
+        result = client.ask(prompt)
 ```
 
 **优势**：
-- ✅ AI 可以记住之前的修改和决策
-- ✅ 子任务之间可以引用前一个子任务的结果
-- ✅ 保持对话的连贯性
-- ✅ 减少重复的上下文信息传递
+- ✅ 防止上下文无限增长（每个子任务独立 session）
+- ✅ 通过 previous_subtask_summary 保持必要的上下文连续性
+- ✅ 子任务之间可以引用前一个子任务创建的文件（文件在磁盘上）
+- ✅ 同一子任务的重试仍共享 session（保持重试上下文）
 
 **完成检测三层策略**：
 
 `SimpleTaskExecutor._check_completion()` 使用三层检测策略判断 AI 是否报告任务完成：
 
-1. **严格否定标记**（最高优先级）：检查 `❌ not completed` 等否定标记，匹配则返回 `False`
-2. **严格肯定标记**：检查 `✅ completed` 等肯定标记，匹配则返回 `True`
+1. **严格否定标记**（最高优先级）：使用正则表达式匹配 `❌` + 可选空格/星号/下划线 + `not` + 可选空格/星号/下划线 + `complete(d)`，匹配则返回 `False`
+2. **严格肯定标记**：使用正则表达式匹配 `✅` + 可选空格/星号/下划线 + `complete(d)`，匹配则返回 `True`
 3. **模糊肯定匹配**（兜底）：使用正则表达式匹配 `✅.*completed`、`all criteria met` 等变体，
    同时排除含有 `not completed`、`fail` 等否定词的情况
 
@@ -519,21 +517,17 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
     ↓
 创建新的 CodeBuddyClient (context_id="task_x")
     ↓
-第一次调用：自动创建新 session
+执行子任务 1：创建新 session
     ↓
-执行子任务 1：自动通过 session_id 续接
+执行子任务 2：重置 session，传入子任务 1 的摘要
     ↓
-执行子任务 2：自动通过 session_id 续接
-    ↓
-执行子任务 3：自动通过 session_id 续接
+执行子任务 3：重置 session，传入子任务 2 的摘要
     ↓
 所有子任务完成
     ↓
-调用 AI 评估主任务：自动通过 session_id 续接
+调用 AI 评估主任务（独立 session）
     ↓
 主任务完成/失败
-    ↓
-（可选）清理 context 或保留用于后续分析
 ```
 
 ### 状态文件中的 Context 信息
@@ -555,26 +549,26 @@ tasks:
 
 ### CodeBuddy 命令构造
 
-#### 第一次调用（创建新 context）
+#### 新子任务调用（创建新 session）
 
 ```bash
-codebuddy -m "glm-4.7" -y "请阅读 program.md 并开始执行任务 2"
+codebuddy -m "glm-4.7" -y "请阅读 program.md 并开始执行子任务 2.1"
 ```
 
-#### 后续调用（继续现有 session）
+#### 同一子任务的重试调用（继续现有 session）
 
 ```bash
-codebuddy --resume <session_id> -m "glm-4.7" -y "检查子任务 2.1 的执行结果"
+codebuddy --resume <session_id> -m "glm-4.7" -y "上次尝试失败，请根据以下建议重试..."
 ```
 
 #### 长时间任务的特殊处理
 
 ```bash
-# 启动后台训练（独立的子进程）
-nohup python train.py --config config.yaml > logs/2.2.log 2>&1 &
+# AI 通过 autoagent-exec 启动后台任务
+python autoagent_exec.py --log-dir <session_dir> --task-id 2.2 -- python train.py --config config.yaml
 
-# 训练完成后，通过 session_id 续接 context 分析结果
-codebuddy --resume <session_id> -m "glm-4.7" -y "分析训练日志并判断是否满足完成条件"
+# 任务完成后，新 session 分析结果
+codebuddy -m "glm-4.7" -y "分析训练日志并判断是否满足完成条件"
 ```
 
 ### 错误处理与 Context 恢复
@@ -611,8 +605,8 @@ for task in state['tasks']:
    - 超过最大尝试次数：清理 context 并记录日志
 
 4. **并发控制**：
-   - 每个主任务使用独立的 AIClient 实例和 session_id，理论上可以并发执行
-   - 同一个主任务的子任务必须串行执行（共享 session）
+   - 每个主任务使用独立的 AIClient 实例，理论上可以并发执行
+   - 同一个主任务的子任务必须串行执行
 
 ## 任务类型
 
@@ -1187,7 +1181,7 @@ autoagent/
 │   └── <project>_<random>/   # 项目专属会话目录（由 .autoagent_log 指定）
 │       ├── orchestrator.log           # Orchestrator 运行日志
 │       ├── todos_state.yaml           # 任务状态（自动生成）
-│       ├── .ideas_processed.md         # Ideas 归档（已处理的 idea 原文）
+│       ├── plans_state.yaml            # Ideas 状态跟踪（替代旧的 .ideas_processed.md）
 │       ├── lr_tasks/                  # long_running 任务文件目录
 │       │   ├── lr_<task_id>_signal.json   # long_running 信号文件（自动生成）
 │       │   └── lr_<task_id>_output.log    # long_running 命令输出日志（自动生成）
@@ -1210,7 +1204,7 @@ autoagent/
 - 首次运行时自动生成：`<项目目录名>_<随机8位字符>`
 - 后续运行读取该文件，确保同一个项目始终写入同一个日志子文件夹
 - 最终日志路径为 `<log_dir>/<.autoagent_log中的内容>/`
-- 所有运行时状态文件（`todos_state.yaml`、`orchestrator.log`、`.ideas_processed.md`、`conversations/`）
+- 所有运行时状态文件（`todos_state.yaml`、`orchestrator.log`、`plans_state.yaml`、`conversations/`）
   均位于该目录下，**不会出现在项目目录中**
 
 ## 系统与AI的协作流程图
@@ -1503,7 +1497,7 @@ main() 解析 --model → model_roles dict
   completion_criteria: "pylint 评分 >= 9.0"
 ```
 
-`model` 字段只接受 `"default"` 或 `"simple"` 两个值，默认为 `"default"`。
+`model` 字段只接受 `"default"`、`"simple"` 或直接的模型名称，默认为 `"default"`。
 
 ### 线程安全
 
@@ -1778,7 +1772,7 @@ class ConversationLogger:
 └── cufftdx_optimization_ko53bi1b/   # 项目专属（由 .autoagent_log 指定）
     ├── orchestrator.log               # Orchestrator 运行日志
     ├── todos_state.yaml               # 任务状态
-    ├── .ideas_processed.md            # Ideas 归档（已处理的 idea 原文）
+    ├── plans_state.yaml               # Ideas 状态跟踪
     └── conversations/                 # 对话日志（固定目录名）
         ├── ideas.md                    # Ideas 拆解日志（prompt + AI 返回的 YAML）
         ├── task_1.md                   # 简单任务：完整对话记录
@@ -1988,20 +1982,19 @@ class IdeasWatcher:
 
 ### 去重与归档机制
 
-已处理的想法会被归档到会话目录的 `.ideas_processed.md` 中（保留原文），同时从 `ideas.md` 中删除对应条目：
+已处理的想法会被记录到会话目录的 `plans_state.yaml` 中（跟踪状态），同时从 `ideas.md` 中删除对应条目：
 
-```markdown
-# Processed Ideas Archive
-
-## 添加单元测试
-
-给 state_manager 添加完整的单元测试覆盖，包括边界情况。
-
----
-
-## 优化内存访问模式
-
-参考 ncu profiling 结果...
+```yaml
+# plans_state.yaml
+ideas:
+  a1b2c3d4e5f6g7h8:  # idea 的 SHA256 hash 前 16 位
+    title: "添加单元测试"
+    status: completed
+    processed_at: "2026-03-30T10:00:00"
+  b2c3d4e5f6g7h8i9:
+    title: "优化内存访问模式"
+    status: completed
+    processed_at: "2026-03-30T10:05:00"
 
 ---
 ```
@@ -2035,7 +2028,7 @@ class IdeasWatcher:
    │   └─ 输入 n → 人工输入反馈 → AI 修订 → AI 重新审查 → 再次人工审核
    │
    ├─ 追加新任务到 todos.yaml
-   ├─ 归档 idea 到 .ideas_processed.md
+   ├─ 归档 idea 到 plans_state.yaml
    └─ 从 ideas.md 中删除该 idea
    ↓
 4. 通知 Orchestrator 重新加载任务列表

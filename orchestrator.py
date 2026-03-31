@@ -318,10 +318,10 @@ class TodoOrchestrator:
 
         # Validate optional model field
         model = task.get('model')
-        if model is not None and model not in ('default', 'simple'):
+        if model is not None and not isinstance(model, str):
             raise ConfigError(
                 f"Task {task['id']} has invalid model: '{model}'. "
-                f"Allowed values: 'default', 'simple'"
+                f"Must be a string: 'default', 'simple', or a direct model name"
             )
 
     def validate_config(self) -> bool:
@@ -438,9 +438,13 @@ class TodoOrchestrator:
         task_id = str(task['id'])
         task_type = task['type']
 
-        # Switch model based on task's model field (default/simple)
+        # Switch model based on task's model field (default/simple or direct model name)
         task_model_role = task.get('model', 'default')
-        task_model = self.model_roles.get(task_model_role, self.model_roles.get('default', self.provider.model))
+        if task_model_role in self.model_roles:
+            task_model = self.model_roles[task_model_role]
+        else:
+            # Treat as a direct model name
+            task_model = task_model_role
         self.provider.set_model(task_model)
         
         # Create a new CodeBuddyClient for this main task (context isolation)

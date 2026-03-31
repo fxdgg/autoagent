@@ -44,7 +44,8 @@ class AIClient:
     - OpenCode (opencode)
     
     Each main task should create its own AIClient instance.
-    Subtasks within the same main task share context via session_id (--resume).
+    Sessions are reset between subtasks to prevent unbounded context growth.
+    Retries within the same subtask share the session via session_id (--resume).
     """
 
     def __init__(

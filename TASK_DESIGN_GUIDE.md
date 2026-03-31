@@ -25,12 +25,14 @@ Key implications for task design:
   read logs, analyze outputs, install packages, use git, etc.
 - The AI agent has a **context window limit** — avoid tasks that require
   reading extremely large files or outputs in a single step.
-- Subtasks within the same parent task share a single AI session — the AI
-  retains context from earlier subtasks and can reference their outputs.
+- Each subtask within a nested or looping task runs in its own independent
+  AI session (session is reset between subtasks to prevent unbounded
+  context growth). A summary of the previous subtask's output is passed
+  to the next subtask via the prompt.
 - Each top-level `simple` task runs in its own independent AI session.
-- The AI session is NOT reset between subtasks, between retry rounds, or
-  between loop iterations. The AI always retains the full conversation
-  history within a parent task.
+- Within a single subtask, the AI session is NOT reset between retry
+  attempts — the AI retains conversation history across retries of the
+  same subtask.
 - The AI's persona/role can be customized per-task via the
   `system_prompt_prefix` field in `todos.yaml` (see §12 below).
 
@@ -189,7 +191,7 @@ When a reset or new iteration would normally set a subtask back to "pending",
 | `name`               | string | Yes      | Concise, descriptive task name                 |
 | `type`               | string | Yes      | `simple`, `nested`, `looping`, `long_running`, `simple_once`, or `long_running_once` |
 | `completion_criteria` | string | Yes     | Clear, specific, measurable success criteria   |
-| `model`              | string | No       | `"default"` or `"simple"`. Default: `"default"` |
+| `model`              | string | No       | `"default"`, `"simple"`, or a direct model name. Default: `"default"` |
 | `system_prompt_prefix` | string | No    | Custom AI persona/instructions for this task (see §12) |
 
 ### 3.2 Type-Specific Fields
@@ -246,10 +248,14 @@ Top-level tasks:  simple | nested | looping
 
 The `model` field controls which AI model executes the task:
 
-- `"default"` (or omitted): Uses the default model, typically a more capable
-  model suited for complex reasoning, multi-step code changes, and analysis.
-- `"simple"`: Uses a lighter/faster model, suitable for straightforward tasks
-  like running a single command, simple file edits, or formatting.
+- `"default"` (or omitted): Uses the default model role, typically a more
+  capable model suited for complex reasoning, multi-step code changes, and
+  analysis.
+- `"simple"`: Uses the simple model role, a lighter/faster model suitable
+  for straightforward tasks like running a single command, simple file
+  edits, or formatting.
+- **Direct model name** (e.g., `"claude-sonnet-4-20250514"`): Uses the
+  specified model directly, bypassing the role mapping.
 
 **Guidelines:**
 - Use `"simple"` for tasks like: "Run `make test`", "Format code with black",
@@ -257,6 +263,8 @@ The `model` field controls which AI model executes the task:
 - Use `"default"` for tasks like: "Analyze profiling results and optimize
   kernel code", "Debug failing test and fix root cause", "Refactor module
   architecture".
+- Use a direct model name when you need a specific model for a particular
+  task, regardless of the role configuration.
 
 ---
 
@@ -576,28 +584,33 @@ are logically independent and may need separate retry strategies.
 
 ---
 
-## 10. Context Sharing Between Subtasks
+## 10. Context Isolation Between Subtasks
 
-Within a nested or looping task, subtasks execute sequentially in the same
-AI session. The session is **never reset** — not between subtasks, not on
-retry, and not between loop iterations. This means:
+Within a nested or looping task, each subtask runs in its own **independent
+AI session** (the session is reset between subtasks). This prevents
+unbounded context growth when there are many subtasks or loop iterations.
 
-- A later subtask can reference files created by an earlier subtask.
-- The AI remembers what it did in previous subtasks (within the same parent).
-- You can design subtasks that build on each other's outputs.
-- When a **retry** happens (e.g., retry_from 1.2), the AI session continues
-  with the full conversation history intact. The retried subtask's prompt
-  includes the `suggested_fix` from the failure analysis and previous
-  attempt summaries, but the AI also retains memory of earlier interactions.
-- In **looping** tasks, the AI session persists across all iterations. The
-  AI in iteration 3 can "remember" what it did in iteration 1. This is
-  useful for iterative optimization where the AI should learn from previous
-  rounds.
+To maintain continuity, the orchestrator passes a **summary of the previous
+subtask's output** to the next subtask via the prompt. This means:
 
-**Implication:** While the AI retains session context, it has a finite
-context window. For very long task sequences, important information should
-be persisted to files rather than relying solely on the AI's memory of
-earlier conversation turns.
+- A later subtask can reference files created by an earlier subtask
+  (because the files exist on disk), but the AI does NOT have direct
+  memory of earlier subtask conversations.
+- Design subtasks to be self-contained: include enough context in
+  `completion_criteria` and `initial_hint` so the AI can work without
+  relying on memory from previous subtasks.
+- When a **retry** happens within the same subtask, the AI session is NOT
+  reset — the AI retains conversation history across retries of the same
+  subtask. The retried subtask's prompt includes the `suggested_fix` from
+  the failure analysis and previous attempt summaries.
+- In **looping** tasks, sessions are also reset between iterations. Each
+  iteration starts fresh, with only the previous subtask summary carried
+  forward within the same iteration.
+
+**Best practice:** Persist important intermediate results to files (e.g.,
+analysis reports, configuration changes, benchmark results) rather than
+relying on AI memory across subtasks. This ensures information survives
+session resets.
 
 ---
 
@@ -614,7 +627,7 @@ Before finalizing your task decomposition, verify:
 - [ ] All `completion_criteria` are specific, measurable, and verifiable
 - [ ] Task IDs are unique and follow the correct notation
 - [ ] The decomposition matches the complexity of the idea (not over/under-decomposed)
-- [ ] `model: simple` is used only for straightforward tasks
+- [ ] `model` field is appropriate (`simple` for easy tasks, `default` for complex, or direct model name)
 - [ ] `initial_hint` provides useful context without duplicating criteria
 - [ ] `system_prompt_prefix` is set on tasks that need a specific AI persona or constraints
 

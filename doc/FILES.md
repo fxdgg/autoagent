@@ -58,7 +58,7 @@ autoagent/
     └── <project>_<random>/      # 项目专属会话目录（由 .autoagent_log 指定）
         ├── orchestrator.log             # Orchestrator 运行日志
         ├── todos_state.yaml             # 任务状态（自动生成）
-        ├── .ideas_processed.md          # Ideas 归档（已处理的 idea 原文）
+        ├── plans_state.yaml             # Ideas 状态跟踪（替代旧的 .ideas_processed.md）
         ├── lr_tasks/                    # long_running 任务文件目录
         │   ├── lr_<task_id>_signal.json # long_running 信号文件
         │   └── lr_<task_id>_output.log  # long_running 命令输出日志
@@ -363,7 +363,7 @@ tasks:
 | `name` | string | 是 | 任务名称 |
 | `type` | string | 是 | 顶层任务类型：`simple`、`nested`、`looping`；子任务类型：`simple`、`long_running`、`simple_once`、`long_running_once` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
-| `model` | string | 否 | 模型选择：`"default"` 或 `"simple"`（默认 `"default"`） |
+| `model` | string | 否 | 模型选择：`"default"`、`"simple"` 或直接模型名称（默认 `"default"`） |
 | `system_prompt_prefix` | string | 否 | 任务级系统提示词前缀，覆盖 config.yaml 中的全局设置 |
 
 #### 简单任务 (type: simple)

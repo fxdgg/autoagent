@@ -400,41 +400,33 @@ class SimpleTaskExecutor:
             None  - No completion/not-completion marker found in response
         """
         response_lower = response.lower()
-        
+        import re
+
         # --- Layer 1: Strict negative markers (check first, most specific) ---
-        strict_failure_markers = [
-            "❌ not_completed",
-            "❌ not completed",
-            "❌ not_complete",
-            "❌ not complete",
-            "❌not_completed",
-            "❌not completed",
-            "❌not_complete",
-            "❌not complete",
-            "❌ 未完成",
-            "❌未完成",
+        # Match: ❌ (optional spaces/stars/underscores) not (optional _) complete(d)
+        # Covers: ❌ not_completed, ❌ **not completed**, ❌not_complete, ❌ 未完成, etc.
+        strict_failure_patterns = [
+            r'❌[\s*_]*not[\s*_]*complete[d]?',
+            r'❌[\s*_]*未完成',
         ]
-        for marker in strict_failure_markers:
-            if marker.lower() in response_lower:
+        for pattern in strict_failure_patterns:
+            if re.search(pattern, response_lower):
                 return False
         
         # --- Layer 2: Strict positive markers ---
-        strict_completion_markers = [
-            "✅ completed",
-            "✅ complete",
-            "✅completed",
-            "✅complete",
-            "✅ 完成",
-            "✅完成",
+        # Match: ✅ (optional spaces/stars/underscores) complete(d)
+        # Covers: ✅ completed, ✅ **completed**, ✅complete, ✅ 完成, etc.
+        strict_success_patterns = [
+            r'✅[\s*_]*complete[d]?',
+            r'✅[\s*_]*完成',
         ]
-        for marker in strict_completion_markers:
-            if marker.lower() in response_lower:
+        for pattern in strict_success_patterns:
+            if re.search(pattern, response_lower):
                 return True
         
         # --- Layer 3: Fuzzy positive patterns (AI often rephrases) ---
         # These catch cases like "✅ Task Completed Successfully",
         # "✅ All criteria met", "✅ Done", etc.
-        import re
         fuzzy_positive_patterns = [
             r'✅.*(?:completed?|done|success|criteria\s+(?:are\s+)?met|finish)',
             r'(?:task|all)\s+(?:has been\s+)?completed?\s+successfully',

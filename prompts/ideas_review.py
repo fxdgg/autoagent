@@ -7,7 +7,11 @@ in ideas_watcher.py.
 """
 
 from truncation_limits import limits
-from prompts.shared import load_task_design_guide, load_system_prompt_prefix
+from prompts.shared import (
+    load_task_design_guide,
+    load_system_prompt_prefix,
+    ROLE_TASK_REVIEWER,
+)
 
 
 def build_ideas_review_prompt(
@@ -27,8 +31,10 @@ def build_ideas_review_prompt(
     """
     task_design_guide = load_task_design_guide()
 
-    prefix = load_system_prompt_prefix()
-    role_line = prefix if prefix else "You are a task review expert."
+    # Reviewer role is fixed — do NOT use the user-configured
+    # system_prompt_prefix here, because the reviewer must be an
+    # independent expert, not the same persona as the coding agent.
+    role_line = ROLE_TASK_REVIEWER
 
     return f"""{role_line} Review the following TODO task decomposition
 for quality, completeness, and correctness.
