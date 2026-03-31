@@ -329,12 +329,15 @@ def monitor_mode():
     except Exception:
         signal_data = {}
 
-    # If we couldn't get exit_code, assume finished (the orchestrator
-    # will check output to determine success/failure)
+    # If we couldn't get exit_code (common on Linux where a non-parent
+    # process cannot retrieve another process's exit code), omit the
+    # exit_code field entirely so that downstream consumers (including
+    # the AI) are not misled by a fake value like -1.
     if exit_code is None:
         signal_data["status"] = "finished"
-        signal_data["exit_code"] = -1
-        signal_data["note"] = "Process exited but exit code unknown"
+        # Do NOT set exit_code — let downstream read it as None / missing
+        signal_data.pop("exit_code", None)
+        signal_data["note"] = "Process exited but exit code unavailable (platform limitation)"
     else:
         signal_data["status"] = "finished" if exit_code == 0 else "error"
         signal_data["exit_code"] = exit_code

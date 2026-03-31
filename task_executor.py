@@ -1796,21 +1796,23 @@ class SubtaskExecutor:
                     status = signal_data.get("status", "unknown")
                     
                     if status == "finished":
-                        exit_code = signal_data.get("exit_code", -1)
+                        exit_code = signal_data.get("exit_code")
+                        ec_display = exit_code if exit_code is not None else "N/A"
                         logger.info(
                             f"Long-running task {subtask_id} finished "
-                            f"(exit code {exit_code})"
+                            f"(exit code {ec_display})"
                         )
-                        print(f"      [OK] Long-running task finished (exit code {exit_code})")
+                        print(f"      [OK] Long-running task finished (exit code {ec_display})")
                         return "finished"
                     
                     elif status == "error":
-                        exit_code = signal_data.get("exit_code", -1)
+                        exit_code = signal_data.get("exit_code")
+                        ec_display = exit_code if exit_code is not None else "N/A"
                         logger.warning(
                             f"Long-running task {subtask_id} failed "
-                            f"(exit code {exit_code})"
+                            f"(exit code {ec_display})"
                         )
-                        print(f"      [ERROR] Long-running task failed (exit code {exit_code})")
+                        print(f"      [ERROR] Long-running task failed (exit code {ec_display})")
                         return "error"
                     
                     # status == "running" — check if process is still alive
