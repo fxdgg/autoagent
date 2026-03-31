@@ -5,7 +5,11 @@ autoagent-exec: Long-running task launcher for AutoAgent.
 This script is called by the AI through a wrapper script (autoagent-exec.bat
 on Windows, autoagent-exec.sh on Linux/macOS).  The wrapper pre-fills all
 internal parameters (log directory, task ID, fast-fail timeout); the AI only
-needs to append the command to run.
+needs to append the command to run (wrapped in double quotes).
+
+The command is passed as a single shell string via ``--cmd``, which means
+shell operators (&&, |, ;, etc.) are preserved and executed correctly.
+This makes autoagent-exec behave like a real terminal for the AI.
 
 It implements a fast-fail mechanism (default 10 seconds, configurable via
 config.yaml ``fast_fail_timeout``):
@@ -16,13 +20,17 @@ config.yaml ``fast_fail_timeout``):
     write a signal file, and tell the AI to end its session
 
 Usage (via wrapper script):
-    autoagent-exec.bat <command...>          (Windows)
-    bash autoagent-exec.sh <command...>      (Linux/macOS)
+    autoagent-exec.bat "<command...>"          (Windows)
+    bash autoagent-exec.sh "<command...>"      (Linux/macOS)
 
-Example:
-    autoagent-exec.bat ncu --set full --csv ./build/Release/main.exe
+Examples:
+    autoagent-exec.bat "cd build && cmake .. && make -j8"
+    autoagent-exec.bat "python train.py --epochs 100 | tee log.txt"
 
 Internal invocation (by the wrapper script, not by the AI directly):
+    python autoagent_exec.py --log-dir <dir> --task-id <id> [--fast-fail-timeout <s>] --cmd "<command>"
+
+Legacy invocation (backward compatible):
     python autoagent_exec.py --log-dir <dir> --task-id <id> [--fast-fail-timeout <s>] -- <command...>
 
 Signal file: <log-dir>/lr_tasks/lr_<task_id>_signal.json
@@ -59,12 +67,16 @@ def parse_args():
             "All internal parameters (log directory, task ID, timeout, etc.) are\n"
             "pre-configured in the wrapper script — you only need to append the\n"
             "command you want to run.\n\n"
+            "The wrapper script forwards your entire command line as a single\n"
+            "shell string, so you can use shell features like cd, &&, |, ;, etc.\n"
+            "just as you would in a real terminal.\n\n"
             "Usage (via wrapper script):\n"
             "  <path>/autoagent-exec.bat <command...>     (Windows)\n"
             "  bash <path>/autoagent-exec.sh <command...>  (Linux/macOS)\n\n"
             "Examples:\n"
             "  autoagent-exec.bat make -j8\n"
-            "  autoagent-exec.bat python train.py --epochs 100\n"
+            "  autoagent-exec.bat cd build && cmake .. && make -j8\n"
+            "  autoagent-exec.bat python train.py --epochs 100 | tee log.txt\n"
             "  bash autoagent-exec.sh ncu --set full ./main.exe\n\n"
             "Behavior:\n"
             "  - If the command fails quickly, the error is shown immediately\n"
@@ -93,17 +105,33 @@ def parse_args():
         default=DEFAULT_FAST_FAIL_TIMEOUT,
         help=argparse.SUPPRESS,
     )
-    # Everything after '--' is the command
+    parser.add_argument(
+        "--cmd",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    # Everything after '--' is the command (legacy mode)
     args, remaining = parser.parse_known_args()
 
     # Remove leading '--' if present
     if remaining and remaining[0] == "--":
         remaining = remaining[1:]
 
-    if not remaining:
+    if args.cmd:
+        # --cmd mode: the wrapper script passes the entire command line
+        # as a single pre-joined string.  Use it verbatim so that shell
+        # operators (&&, |, ;, etc.) are preserved.
+        args.command_str = args.cmd
+    elif remaining:
+        # Legacy mode: command tokens passed after '--'.
+        # Re-join them into a shell string.
+        if os.name == "nt":
+            args.command_str = subprocess.list2cmdline(remaining)
+        else:
+            args.command_str = shlex.join(remaining)
+    else:
         parser.error("No command specified. Append the command after the script path.")
 
-    args.command = remaining
     return args
 
 
@@ -122,15 +150,8 @@ def main():
 
     log_dir = args.log_dir
     task_id = args.task_id
-    command = args.command
+    command_str = args.command_str
     fast_fail_timeout = args.fast_fail_timeout
-    # Re-quote the command list into a single shell string.
-    # On Windows, use subprocess.list2cmdline (handles "C:/Program Files/...").
-    # On POSIX, use shlex.join which produces /bin/sh-compatible quoting.
-    if os.name == "nt":
-        command_str = subprocess.list2cmdline(command)
-    else:
-        command_str = shlex.join(command)
 
     # Ensure lr_tasks subdirectory exists
     lr_tasks_dir = os.path.join(log_dir, "lr_tasks")

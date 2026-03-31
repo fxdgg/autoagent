@@ -1411,28 +1411,16 @@ class AIClientTest:
         print(f"   task_id:   {task_id}")
         print(f"   command:   {cmd}")
 
-        # Build the real autoagent_exec.py command as a list to avoid
-        # shell quoting issues (especially on Linux where /bin/sh handles
-        # quotes differently from cmd.exe).
-        # We use shlex.split to properly tokenize the cmd string (which
-        # may contain quoted arguments like: python -c "import time; ...")
-        import shlex
-        if os.name == 'nt':
-            # On Windows, shlex.split doesn't handle Windows paths well;
-            # use a simple split but preserve quoted strings
-            cmd_parts = shlex.split(cmd, posix=False)
-            # Remove surrounding quotes that shlex.split(posix=False) preserves
-            cmd_parts = [p.strip('"').strip("'") for p in cmd_parts]
-        else:
-            cmd_parts = shlex.split(cmd)
-
+        # Build the real autoagent_exec.py command.
+        # Use --cmd to pass the entire command as a single shell string,
+        # preserving shell operators (&&, |, ;, etc.) correctly.
         full_cmd = [
             sys.executable, exec_path,
             '--log-dir', log_dir,
             '--task-id', task_id,
             '--fast-fail-timeout', str(fast_fail_timeout),
-            '--',
-        ] + cmd_parts
+            '--cmd', cmd,
+        ]
 
         try:
             result = subprocess.run(

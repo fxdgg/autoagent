@@ -72,10 +72,15 @@ def build_long_running_prompt(
 
 You MUST use the `autoagent-exec` launcher to run your command:
 
-"{exec_script_path}" <your command here>
+"{exec_script_path}" "<your entire command here>"
 
-- If the command fails within 10s, the error is shown immediately — fix and retry with autoagent-exec.
-- If the command is still running after 10s, it will be detached and you will see "TASK SUBMITTED".
+**Important:** Always wrap your command in double quotes so that shell operators
+(&&, |, ;, etc.) are passed correctly. For example:
+  "{exec_script_path}" "cd build && cmake .. && make -j8"
+  "{exec_script_path}" "python train.py --epochs 100 2>&1 | tee log.txt"
+
+- If the command fails quickly, the error is shown immediately — fix and retry with autoagent-exec.
+- If the command is still running after the fast-fail window, it will be detached and you will see "TASK SUBMITTED".
 - When you see "TASK SUBMITTED", output: ⏳ LONG_RUNNING_IN_PROGRESS
   AutoAgent will call you back with the results.
 - If the task cannot be done, output: ❌ not completed: <reason>

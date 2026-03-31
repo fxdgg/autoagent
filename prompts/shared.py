@@ -211,9 +211,12 @@ def build_system_prompt_coding_agent(
             "If a Bash command may take more than a few minutes "
             "(e.g. compilation, benchmarking, profiling), do "
             "NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:\n"
-            f'  "{exec_script_path}" <your command>\n'
-            "The launcher will auto-detach after 10s and print \"TASK SUBMITTED\". "
-            "When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS"
+            f'  "{exec_script_path}" "<your entire command>"\n'
+            "Always wrap your command in double quotes so that shell operators "
+            "(&&, |, ;, etc.) are passed correctly. For example:\n"
+            f'  "{exec_script_path}" "cd build && cmake .. && make -j8"\n'
+            "The launcher will auto-detach after the fast-fail window and print \"TASK SUBMITTED\". "
+            "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS"
         )
         parts.append(
             "## ⚠️ IMPORTANT\n"
@@ -336,15 +339,16 @@ def build_autoagent_exec_note(exec_script_path: str) -> str:
         "**Note on long-running commands:** If a Bash command may take more "
         "than a few minutes (e.g. compilation, benchmarking, profiling), do "
         "NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:\n"
-        f'  "{exec_script_path}" <your command>\n'
-        "The launcher will auto-detach after 10s and print \"TASK SUBMITTED\". "
+        f'  "{exec_script_path}" "<your entire command>"\n'
+        "Always wrap your command in double quotes so that shell operators "
+        "(&&, |, ;, etc.) are passed correctly.\n"
+        "The launcher will auto-detach after the fast-fail window and print \"TASK SUBMITTED\". "
         "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS\n\n"
         "**\u26a0\ufe0f IMPORTANT: You MUST always use autoagent-exec for long-running "
         "commands. Running them directly in Bash will cause the session to hang "
         "and be killed. Even if autoagent-exec fails, fix the command arguments "
-        "and retry with autoagent-exec — NEVER fall back to running directly in Bash.**"
+        "and retry with autoagent-exec \u2014 NEVER fall back to running directly in Bash.**"
     )
-
 
 def build_previous_subtask_section(parent_context: dict) -> str:
     """Build the previous-subtask summary section for context-isolated prompts.
@@ -381,14 +385,17 @@ def build_timeout_guidance(
         f"If your task requires running a command that takes more than a few "
         f"minutes (e.g. compilation, benchmarking, data processing), you MUST "
         f"use the `autoagent-exec` launcher to run it as a background task:\n\n"
-        f'"{exec_script_path}" <your command here>\n\n'
-        f"- If the command fails within 10s, the error is shown immediately \u2014 fix and retry.\n"
-        f"- If the command is still running after 10s, it will be detached and you will see "
+        f'"{exec_script_path}" "<your entire command here>"\n\n'
+        f"Always wrap your command in double quotes so that shell operators "
+        f"(&&, |, ;, etc.) are passed correctly. For example:\n"
+        f'  "{exec_script_path}" "cd build && cmake .. && make -j8"\n\n'
+        f"- If the command fails quickly, the error is shown immediately \u2014 fix and retry.\n"
+        f"- If the command is still running after the fast-fail window, it will be detached and you will see "
         f"\"TASK SUBMITTED\".\n"
         f"- When you see \"TASK SUBMITTED\", output: \u23f3 LONG_RUNNING_IN_PROGRESS\n"
         f"  AutoAgent will call you back with the results.\n\n"
         f"**\u26a0\ufe0f CRITICAL: You MUST always use autoagent-exec for long-running "
         f"commands. Running them directly in Bash will cause the session to hang "
         f"and be killed. Even if autoagent-exec fails, fix the command arguments "
-        f"and retry with autoagent-exec — NEVER fall back to running directly in Bash.**"
+        f"and retry with autoagent-exec \u2014 NEVER fall back to running directly in Bash.**"
     )

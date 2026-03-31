@@ -119,18 +119,24 @@ def _write_autoagent_exec_script(
 
     if os.name == "nt":
         script_name = "autoagent-exec.bat"
-        # %* forwards all arguments the caller passes after the script name.
+        # %* forwards all arguments.  The AI is instructed to wrap the
+        # entire command in quotes so that shell operators (&&, |, ;)
+        # are preserved as a single argument.
         content = (
             "@echo off\r\n"
             f'python "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
-            f' --fast-fail-timeout {fast_fail_timeout} -- %*\r\n'
+            f' --fast-fail-timeout {fast_fail_timeout} --cmd %*\r\n'
         )
     else:
         script_name = "autoagent-exec.sh"
+        # "$*" joins all positional parameters into a single string
+        # (separated by the first character of IFS, which is space by
+        # default).  This preserves the command as a single shell string
+        # when the AI wraps it in quotes.
         content = (
             "#!/usr/bin/env bash\n"
             f'python3 "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
-            f' --fast-fail-timeout {fast_fail_timeout} -- "$@"\n'
+            f' --fast-fail-timeout {fast_fail_timeout} --cmd "$*"\n'
         )
 
     script_path = os.path.join(scripts_dir, script_name)
@@ -557,7 +563,10 @@ class SimpleTaskExecutor:
         signal_file = os.path.join(log_session_dir, "lr_tasks", f"lr_{lr_task_id}_signal.json")
         output_log = os.path.join(log_session_dir, "lr_tasks", f"lr_{lr_task_id}_output.log")
         
-        monitor_status = subtask_exec._poll_signal_file(lr_task_id, signal_file)
+        monitor_status = subtask_exec._poll_signal_file(
+            lr_task_id, signal_file,
+            max_initial_wait=_load_fast_fail_timeout() * 2,
+        )
         
         # Generate exec_script_path for the system prompt
         exec_script_path = _write_autoagent_exec_script(
@@ -1627,7 +1636,10 @@ class SubtaskExecutor:
                     signal_file = os.path.join(log_session_dir, "lr_tasks", f"lr_{lr_task_id}_signal.json")
                     output_log = os.path.join(log_session_dir, "lr_tasks", f"lr_{lr_task_id}_output.log")
                     
-                    monitor_status = self._poll_signal_file(subtask_id, signal_file)
+                    monitor_status = self._poll_signal_file(
+                        subtask_id, signal_file,
+                        max_initial_wait=_load_fast_fail_timeout() * 2,
+                    )
                     
                     # Restart AI to analyze the result
                     analyze_result = self._ai_analyze_long_running_result(
@@ -1760,7 +1772,9 @@ class SubtaskExecutor:
             max_initial_wait: Maximum seconds to wait for the signal file
                 to appear. If the file never appears (e.g. autoagent-exec
                 fast-failed and exited without writing one), return "error"
-                after this timeout. Default 20s.
+                after this timeout. Should be set to ~2x fast_fail_timeout
+                to give autoagent-exec enough time to write the signal file.
+                Default 20s (suitable for the default fast_fail_timeout=10s).
         
         Returns:
             str: "finished", "error", or "timeout"
