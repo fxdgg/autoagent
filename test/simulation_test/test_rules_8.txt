@@ -1,0 +1,82 @@
+# =============================================================================
+# Test Rules 8 - max_attempts Exhausted Causing Task Failure
+# =============================================================================
+# This test verifies that when a nested task exhausts its max_attempts,
+# the orchestrator correctly marks the task as failed and continues to
+# execute subsequent tasks.
+#
+# Task structure:
+#   Task 1: nested (max_attempts=2)
+#     - 1.1: simple (succeeds)
+#     - 1.2: simple (max_attempts=1, always fails)
+#   Task 2: simple (should still execute after task 1 fails)
+#
+# Expected call sequence (ask() calls in order):
+#   Rule 1:  Task 1, Round 1: Subtask 1.1 → ✅ completed
+#   Rule 2:  Task 1, Round 1: Subtask 1.2 → ❌ not completed (failure)
+#   Rule 3:  Failure analysis → JSON: retry_from=1.2
+#   Rule 4:  Task 1, Round 2: Subtask 1.2 (retry) → ❌ not completed (failure again)
+#   Rule 5:  Failure analysis → JSON: retry_from=1.2
+#            (max_attempts=2 now exhausted, task 1 marked as FAILED)
+#   Rule 6:  Task 2 → ✅ completed (executes despite task 1 failure)
+#
+# Key verification points:
+#   - Task 1 should be marked as "failed" after 2 rounds
+#   - Task 2 should still execute and complete successfully
+#   - The orchestrator should NOT abort on task 1 failure
+# =============================================================================
+
+# --- Rule 1: Task 1, Round 1, Subtask 1.1 - COMPLETED ---
+I have completed the setup step.
+
+Environment ready, all prerequisites met.
+
+✅ completed
+---RULE---
+# --- Rule 2: Task 1, Round 1, Subtask 1.2 - NOT COMPLETED ---
+# First failure of subtask 1.2
+I attempted to run the processing but it failed.
+
+Error: Connection refused - the external API server is not responding.
+Tried 3 retries with exponential backoff but all failed.
+
+❌ not completed: External API connection refused
+---RULE---
+# --- Rule 3: Failure analysis (Round 1) ---
+# AI analyzes the failure and decides to retry from 1.2
+{
+    "analysis": "Subtask 1.2 failed because the external API server is not responding. This is likely a transient network issue. The setup in 1.1 is still valid.",
+    "retry_from": "1.2",
+    "suggested_fix": "Retry the API call with a longer timeout (30s instead of 10s). Also try the backup API endpoint if available.",
+    "confidence": "medium"
+}
+---RULE---
+# --- Rule 4: Task 1, Round 2, Subtask 1.2 - NOT COMPLETED ---
+# Second failure - this will exhaust max_attempts
+I tried again with longer timeout and backup endpoint but still failed.
+
+Error: Both primary and backup API endpoints are unreachable.
+Primary: api.example.com - Connection timed out (30s)
+Backup: api-backup.example.com - Connection refused
+
+❌ not completed: All API endpoints unreachable
+---RULE---
+# --- Rule 5: Failure analysis (Round 2) ---
+# AI analyzes again, but max_attempts will be exhausted after this
+{
+    "analysis": "Subtask 1.2 failed again. Both primary and backup API endpoints are unreachable. This appears to be a persistent infrastructure issue rather than a transient problem.",
+    "retry_from": "1.2",
+    "suggested_fix": "Check if the API service is running. Consider using a mock API for testing purposes.",
+    "confidence": "low"
+}
+---RULE---
+# --- Rule 6: Task 2 - COMPLETED ---
+# This task should execute even though task 1 failed
+I have completed this task successfully.
+
+This demonstrates that the orchestrator continues executing
+subsequent tasks even when a previous task fails.
+
+Output: success_report.txt created.
+
+✅ completed

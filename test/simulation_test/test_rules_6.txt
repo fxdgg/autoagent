@@ -1,0 +1,144 @@
+# =============================================================================
+# Test Rules 6 - Looping Task + Invalid JSON in AI Decision Points
+# =============================================================================
+# This test exercises:
+#
+#   1. Looping task type (repeat_count=2, 2 subtasks per iteration)
+#   2. Subtask failure within a loop iteration triggering failure_analysis
+#   3. AI returns INVALID JSON in failure_analysis → system falls back to
+#      default (retry from the failed subtask)
+#   4. Nested task (task 2) where AI returns INVALID JSON in
+#      main_task_evaluation → system falls back to "not completed"
+#   5. Second evaluation returns valid JSON → task completes
+#
+# Task structure:
+#   Task 1: looping (repeat_count=2, max_attempts_per_loop=3)
+#     - 1.1: simple
+#     - 1.2: simple (max_attempts=1, fails in loop 1 iteration 1)
+#   Task 2: nested (max_attempts=2)
+#     - 2.1: simple
+#     - 2.2: simple
+#
+# Expected call sequence (ask() calls in order):
+#   Rule 1:  Task 1, Loop 1: Subtask 1.1 → ✅ completed
+#   Rule 2:  Task 1, Loop 1: Subtask 1.2 → ❌ not completed (triggers failure_analysis)
+#   Rule 3:  Failure analysis → INVALID JSON (system falls back to retry_from=1.2)
+#   Rule 4:  Task 1, Loop 1: Subtask 1.2 (retry) → ✅ completed
+#   Rule 5:  Task 1, Loop 2: Subtask 1.1 → ✅ completed
+#   Rule 6:  Task 1, Loop 2: Subtask 1.2 → ✅ completed
+#   Rule 7:  Task 2: Subtask 2.1 → ✅ completed
+#   Rule 8:  Task 2: Subtask 2.2 → ✅ completed
+#   Rule 9:  Main task 2 evaluation → INVALID JSON (system falls back to not completed)
+#   Rule 10: Task 2: Subtask 2.1 (retry) → ✅ completed
+#   Rule 11: Task 2: Subtask 2.2 (retry) → ✅ completed
+#   Rule 12: Main task 2 evaluation → valid JSON, main_task_completed: true
+# =============================================================================
+
+# --- Rule 1: Task 1, Loop 1, Subtask 1.1 - COMPLETED ---
+I have completed the setup step successfully.
+
+All configurations are in place.
+
+✅ completed
+---RULE---
+# --- Rule 2: Task 1, Loop 1, Subtask 1.2 - NOT COMPLETED ---
+# This triggers failure_analysis within the looping task
+I attempted to process the data but encountered an error.
+
+Error: Input data format mismatch - expected CSV but got JSON.
+
+❌ not completed: Data format mismatch
+---RULE---
+# --- Rule 3: Failure analysis - INVALID JSON ---
+# Tests: AI returns garbage instead of valid JSON
+# The system should catch the AICallError from _parse_json_response
+# and fall back to the default: retry_from=1.2 (the failed subtask)
+I think the problem is with the data format. Let me analyze...
+
+The issue is that subtask 1.2 received JSON data instead of CSV.
+We should fix the data conversion in the setup step.
+
+Recommendation: retry from subtask 1.2 with a data format fix.
+
+Note: I forgot to format this as JSON, sorry!
+---RULE---
+# --- Rule 4: Task 1, Loop 1, Subtask 1.2 (retry) - COMPLETED ---
+# After fallback retry, the subtask succeeds
+I fixed the data format issue and processed the data successfully.
+
+Output: processed_data.csv with 1000 records.
+
+✅ completed
+---RULE---
+# --- Rule 5: Task 1, Loop 2, Subtask 1.1 - COMPLETED ---
+# Second loop iteration starts, all subtasks reset
+I have completed the setup step for iteration 2.
+
+All configurations refreshed.
+
+✅ completed
+---RULE---
+# --- Rule 6: Task 1, Loop 2, Subtask 1.2 - COMPLETED ---
+I processed the data successfully in iteration 2.
+
+Output: processed_data_v2.csv with 1200 records.
+
+✅ completed
+---RULE---
+# --- Rule 7: Task 2, Subtask 2.1 - COMPLETED ---
+I have executed the main work successfully.
+
+Results saved to output.txt.
+
+✅ completed
+---RULE---
+# --- Rule 8: Task 2, Subtask 2.2 - COMPLETED ---
+I have verified the results successfully.
+
+All checks passed:
+- Data integrity: OK
+- Output format: OK
+- Value ranges: OK
+
+✅ completed
+---RULE---
+# --- Rule 9: Main task 2 evaluation - INVALID JSON ---
+# Tests: AI returns invalid JSON in main_task_evaluation
+# The system should catch AICallError and fall back to:
+#   main_task_completed=False, retry_from=2.1
+Looking at the results, I believe the task is complete.
+
+The main work was done correctly and all verifications passed.
+I would say this is definitely completed with high confidence.
+
+But wait, let me reconsider... actually I'm not sure about the edge cases.
+Let me suggest we retry to be safe.
+
+(Oops, I was supposed to return JSON but I wrote prose instead)
+---RULE---
+# --- Rule 10: Task 2, Subtask 2.1 (retry) - COMPLETED ---
+# After fallback retry from evaluation failure
+I have re-executed the main work with extra validation.
+
+Results saved to output_v2.txt with additional checks.
+
+✅ completed
+---RULE---
+# --- Rule 11: Task 2, Subtask 2.2 (retry) - COMPLETED ---
+I have re-verified all results.
+
+All checks passed:
+- Data integrity: OK
+- Output format: OK
+- Value ranges: OK
+- Edge cases: OK (additional check)
+
+✅ completed
+---RULE---
+# --- Rule 12: Main task 2 evaluation - VALID JSON ---
+# Tests: Second evaluation returns proper JSON
+{
+    "main_task_completed": true,
+    "analysis": "All subtasks completed successfully. Main work executed and verified with additional edge case checks. Results are correct and complete.",
+    "confidence": "high"
+}
