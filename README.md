@@ -138,7 +138,7 @@ python orchestrator.py --status
 |------|------|------|
 | `--config` | `-c` | 任务配置文件路径（默认 `todos.yaml`） |
 | `--task` | `-t` | 只执行指定的任务 ID |
-| `--provider` | `-P` | AI Provider（`codebuddy` / `claude` / `gemini` / `opencode`） |
+| `--provider` | `-P` | AI Provider（`codebuddy` / `claude` / `gemini` / `opencode` / `test`） |
 | `--model` | `-m` | AI 模型名称 |
 | `--workspace` | `-w` | 工作目录（默认当前目录） |
 | `--ideas` | | ideas 文件路径，启用自动拆解 |

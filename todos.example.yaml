@@ -30,14 +30,14 @@ tasks:
       IMPORTANT: Do NOT modify the correctness test (Score calculation).
 
   # ========================================================================
-  # Example 2: Top-level simple task with model: simple
-  # Use model: simple for tasks that only run commands or do trivial edits.
+  # Example 2: Top-level simple task with model: lite
+  # Use model: lite for tasks that only run commands or do trivial edits.
   # ========================================================================
 
   - id: 2
     name: "Run linter and format code"
     type: simple
-    model: simple
+    model: lite
     completion_criteria: |
       1. black src/ --check returns exit code 0 (all files formatted).
       2. ruff check src/ returns exit code 0 (no lint errors).
@@ -250,15 +250,15 @@ tasks:
 # Common fields:  id, name, type, completion_criteria, model (optional),
 #                 system_prompt_prefix (optional)
 # simple:         + initial_hint (optional)
-# nested:         + subtasks, max_attempts (optional, default 20)
-# looping:        + subtasks, repeat_count, max_attempts_per_loop (optional, default 20)
+# nested:         + subtasks, max_attempts (optional, default 5)
+# looping:        + subtasks, repeat_count, max_attempts_per_loop (optional, default 5)
 # long_running:   + command (optional), initial_hint (optional)
 # *_once:         Same fields as their base type
 #
 # Key principles:
 #   - completion_criteria must be specific and measurable (file exists, exit code, output pattern)
 #   - Use simple_once / long_running_once for one-time setup that shouldn't repeat on retry
-#   - Use model: simple for trivial tasks (run a command, simple file edit)
+#   - Use model: lite for trivial tasks (run a command, simple file edit)
 #   - Don't over-decompose: if one step suffices, use a single simple task
 #
 # Per-task AI persona (system_prompt_prefix):

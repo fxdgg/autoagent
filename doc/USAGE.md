@@ -23,7 +23,14 @@
 ### 2. 安装依赖
 
 ```bash
-pip install pyyaml
+pip install -r requirements.txt
+```
+
+或手动安装：
+
+```bash
+pip install pyyaml>=6.0.1
+pip install codebuddy-agent-sdk  # 仅在使用 SDK 模式（非 --use-cli）时需要
 ```
 
 ### 3. 配置 AI Provider
@@ -246,6 +253,8 @@ tasks:
 | `name` | string | 是 | 任务名称 |
 | `type` | string | 是 | 顶层任务类型：`simple`、`nested`、`looping`；子任务类型：`simple`、`long_running`、`simple_once`、`long_running_once` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
+| `model` | string | 否 | 模型选择：`"default"`、`"lite"` 或直接模型名称（默认 `"default"`） |
+| `system_prompt_prefix` | string | 否 | 任务级系统提示词前缀，覆盖 config.yaml 中的全局设置 |
 
 #### 简单任务 (type: simple)
 
@@ -258,6 +267,7 @@ tasks:
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `subtasks` | list | 是 | 子任务列表 |
+| `max_attempts` | int | 否 | 最大重试轮数（默认 5） |
 
 #### 循环任务 (type: looping)
 
@@ -272,6 +282,7 @@ tasks:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
+| `initial_hint` | string | 否 | 初始提示（给 AI 的参考信息，如要运行的命令） |
 | `command` | string | 否 | （已废弃）旧版配置字段，现在 AI 自主决定命令 |
 | `completion_criteria` | string | 是 | 完成标准 |
 
@@ -446,6 +457,8 @@ python orchestrator.py --preset default --model claude-sonnet-4-6
 - `ideas`: ideas.md 文件路径
 - `provider`: AI Provider 名称
 - `model`: AI 模型名称
+- `executable`: 可执行文件路径
+- `workspace`: 工作目录
 - `verbose`: 是否启用详细日志
 - `no_skip`: 是否不跳过已完成任务
 - `no_idle`: 是否禁用 idle 模式
@@ -756,8 +769,8 @@ ls ~/.codebuddy/settings.json
 **检查步骤**：
 
 ```bash
-# 查看任务状态
-cat todos_state.yaml
+# 查看任务状态（状态文件在会话目录下）
+cat .autoagent/*/todos_state.yaml
 
 # 查看长时间任务的信号文件（在会话目录的 lr_tasks/ 下）
 cat .autoagent/*/lr_tasks/lr_*_signal.json
@@ -791,8 +804,8 @@ ps aux | grep train.py
 **解决方案**：
 
 ```bash
-# 删除状态文件，重新开始
-rm todos_state.yaml
+# 删除状态文件，重新开始（状态文件在会话目录下）
+rm .autoagent/*/todos_state.yaml
 ```
 
 ### 问题 5：长时间任务的监控进程异常
@@ -817,8 +830,11 @@ ps aux | grep autoagent_exec
 ### Q: 如何查看当前任务进度？
 
 ```bash
-# 查看状态文件
-cat todos_state.yaml
+# 查看状态文件（在会话目录下）
+cat .autoagent/*/todos_state.yaml
+
+# 或使用内置命令
+python orchestrator.py --status
 ```
 
 ### Q: 如何中断执行？
@@ -894,5 +910,5 @@ orchestrator = TodoOrchestrator(provider=provider)
 - ✅ 常见问题和解决方案
 
 如有其他问题，请参考：
-- [README.md](README.md) - 项目介绍
+- [README.md](../README.md) - 项目介绍
 - [ARCHITECTURE.md](ARCHITECTURE.md) - 架构设计

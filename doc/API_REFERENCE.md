@@ -48,7 +48,7 @@ class TodoOrchestrator:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
-| `provider` | AIProvider | None | AI 提供者实例（支持 CodeBuddy/Claude/Gemini） |
+| `provider` | AIProvider | None | AI 提供者实例（支持 CodeBuddy/Claude/Gemini/OpenCode/Test） |
 | `workspace` | str | "." | 工作目录（项目根目录） |
 | `timeout` | int | 3600 | AI 会话超时时间（秒，总时间硬上限）。来自 `config.yaml` 中的 `session_timeout`，CLI 参数 `--timeout` 可覆盖 |
 | `bash_timeout` | int | 300 | 无新输出超时时间（秒）。如果 AI 在此时间内无新输出，会话将被终止，下次 prompt 会包含长时间任务引导 |
@@ -117,7 +117,7 @@ def get_status(self) -> dict
 def reset(self) -> None
 ```
 
-获取当前执行状态 / 重置所有状态（包括 ideas 处理记录）。
+获取当前执行状态 / 重置所有状态（删除整个会话目录和 `.autoagent_log` 标记文件）。
 
 #### check_and_process_ideas
 
@@ -130,6 +130,14 @@ def check_and_process_ideas(self, human_review: bool = False) -> int
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `human_review` | bool | False | 如果为 True，AI 审查通过后挂起等待人工确认 |
+
+#### validate_config
+
+```python
+def validate_config(self) -> bool
+```
+
+验证已加载的任务配置文件。检查所有任务的字段完整性和类型正确性，返回 True 表示验证通过。对应 CLI 的 `--validate` 参数。
 
 #### run_with_idle
 
@@ -217,7 +225,7 @@ def parse_model_spec(model_str: str) -> dict
 - 多角色：`"plan:X;default:Y;lite:Z"` → `{"plan": "X", "default": "Y", "lite": "Z"}`
 
 **规则**：
-- 只允许 `plan`、`default`、`simple` 三个角色
+- 只允许 `plan`、`default`、`lite` 三个角色
 - 多角色格式必须包含 `default`
 - 缺失的角色用 `default` 值填充
 
@@ -264,10 +272,10 @@ type prompt.txt | claude --verbose --print --output-format stream-json [--resume
 
 **命令模式**：
 ```bash
-type prompt.txt | gemini --output-format stream-json [--resume <session_id>] --model <model> --yolo -p -
+type prompt.txt | gemini --output-format stream-json [--resume <session_id>] --model <model> --yolo [--include-directories <dirs>] -p -
 ```
 
-与 CodeBuddy 的关键差异：使用 `-p` 指定非交互模式，使用 `--resume <session_id>` 恢复会话，使用 `--yolo` 替代 `-y`。
+与 CodeBuddy 的关键差异：使用 `-p` 指定非交互模式，使用 `--resume <session_id>` 恢复会话，使用 `--yolo` 替代 `-y`。当配置了 `include_directories` 时，通过 `--include-directories` 传递额外目录。
 
 #### OpenCodeProvider
 
@@ -471,6 +479,23 @@ def reset_session(self)
 
 重置会话状态（清除 session_id），使下一次调用启动新会话。
 
+#### resume_session
+
+```python
+def resume_session(self, session_id: str)
+```
+
+恢复指定的会话。设置 session_id 后，下一次 `ask()` 调用将通过 `--resume` 参数续接该会话。由 orchestrator 在任务有已保存的 session_id 时调用。
+
+#### session_id（属性）
+
+```python
+@property
+def session_id(self) -> str
+```
+
+返回当前会话 ID（如果没有则返回空字符串）。首次 `ask()` 调用后自动从 stream 事件中捕获。
+
 ### stream-json 解析
 
 AI CLI 工具的 `--output-format stream-json` 模式输出逐行 JSON 对象。AIClient 通过 `_handle_stream_line()` 方法实时解析：
@@ -614,6 +639,19 @@ context = {
 }
 ```
 
+### SubtaskResult
+
+子任务执行结果数据类。
+
+```python
+class SubtaskResult:
+    success: bool          # 是否成功
+    output: str            # 输出摘要
+    logs: str              # 完整日志
+    error_type: str        # 错误类型（失败时）
+    response_text: str     # AI 原始响应文本
+```
+
 ### SubtaskExecutor
 
 执行单个子任务，根据子任务类型分发。
@@ -664,7 +702,7 @@ bash autoagent-exec.sh <command...>
 | `--log-dir` | str | 日志会话目录绝对路径（由 SubtaskExecutor 的 `session_dir` 提供） |
 | `--task-id` | str | 子任务 ID（如 `1.2`） |
 | `--fast-fail-timeout` | int | 快速失败超时时间（秒），由 `config.yaml` 的 `fast_fail_timeout` 配置 |
-| `-- <command>` | str | `--` 之后的所有内容作为要执行的命令 |
+| `--cmd <command>` | str | 要执行的命令（由 wrapper 脚本拼接用户参数后传入）。也支持 legacy 格式 `-- <command>` |
 
 **行为**（以下 `N` 秒由 `--fast-fail-timeout` 控制）：
 
@@ -720,7 +758,7 @@ def log_prompt(
     task_id: str,
     task_name: str,
     prompt: str,
-    attempt: int,
+    attempt: Union[int, str],
     parent_task_id: Optional[str] = None,
     metadata: Optional[dict] = None,
     system_prompt: Optional[str] = None,
@@ -734,7 +772,7 @@ def log_prompt(
 | `task_id` | str | 任务 ID |
 | `task_name` | str | 任务名称 |
 | `prompt` | str | 发送给 AI 的提示词 |
-| `attempt` | int | 尝试次数 |
+| `attempt` | Union[int, str] | 尝试次数 |
 | `parent_task_id` | str | 父任务 ID（子任务时提供） |
 | `metadata` | dict | 额外信息（如 `{"type": "failure_analysis"}`） |
 | `system_prompt` | str | 可选的系统提示词（如果提供，会在 prompt 之前记录） |
@@ -747,7 +785,7 @@ def log_response(
     task_id: str,
     response: str,
     parent_task_id: Optional[str] = None,
-    attempt: Optional[int] = None,
+    attempt: Optional[Union[int, str]] = None,
 )
 ```
 
@@ -758,7 +796,7 @@ def log_response(
 | `task_id` | str | 任务 ID |
 | `response` | str | AI 的响应 |
 | `parent_task_id` | str | 父任务 ID（子任务时提供） |
-| `attempt` | int | 尝试次数（用于定位 round 文件，需与 `log_prompt` 一致） |
+| `attempt` | Union[int, str] | 尝试次数（用于定位 round 文件，需与 `log_prompt` 一致） |
 
 #### log_conversation（便捷包装器）
 
@@ -769,7 +807,7 @@ def log_conversation(
     task_name: str,
     prompt: str,
     response: str,
-    attempt: int,
+    attempt: Union[int, str],
     parent_task_id: Optional[str] = None,
     metadata: Optional[dict] = None,
 )
@@ -783,15 +821,15 @@ def log_conversation(
 | `task_name` | str | 任务名称 |
 | `prompt` | str | 发送给 AI 的提示词 |
 | `response` | str | AI 的响应 |
-| `attempt` | int | 尝试次数 |
+| `attempt` | Union[int, str] | 尝试次数 |
 | `parent_task_id` | str | 父任务 ID（子任务时提供） |
 | `metadata` | dict | 额外信息（如 `{"type": "failure_analysis"}`） |
 
 #### log_nested_prompt / log_nested_response（推荐）
 
 ```python
-def log_nested_prompt(self, task_id: str, task_name: str, call_type: str, prompt: str, round_num: int, failed_subtask_id: Optional[str] = None)
-def log_nested_response(self, task_id: str, task_name: str, response, call_type: Optional[str] = None, round_num: Optional[int] = None, failed_subtask_id: Optional[str] = None)
+def log_nested_prompt(self, task_id: str, task_name: str, call_type: str, prompt: str, round_num: Union[int, str], failed_subtask_id: Optional[str] = None)
+def log_nested_response(self, task_id: str, task_name: str, response, call_type: Optional[str] = None, round_num: Optional[Union[int, str]] = None, failed_subtask_id: Optional[str] = None)
 ```
 
 嵌套任务 AI 决策调用的两步写入方法。每个决策写入独立文件：
@@ -812,8 +850,9 @@ def log_nested_task_ai_call(
     call_type: str,
     prompt: str,
     response: str,
-    round_num: int,
+    round_num: Union[int, str],
     metadata: Optional[dict] = None,
+    failed_subtask_id: Optional[str] = None,
 )
 ```
 
@@ -916,6 +955,14 @@ def log_ideas_revision_response(
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `response` | str | 修订后的 YAML 任务定义 |
+
+#### get_session_dir
+
+```python
+def get_session_dir(self) -> str
+```
+
+返回会话日志目录路径。
 
 #### log_ideas_section_end
 
@@ -1045,6 +1092,14 @@ class StateManager:
 
 ### 方法
 
+#### save_state
+
+```python
+def save_state(self)
+```
+
+将当前状态保存到文件。通过 `threading.Lock` 保证线程安全。其他修改方法（`mark_task_status`、`add_task_history` 等）内部自动调用此方法。
+
 #### get_task_state
 
 ```python
@@ -1148,7 +1203,7 @@ class TaskState(TypedDict, total=False):
     status: str           # "pending" | "in_progress" | "completed" | "failed"
     attempts: int         # 尝试次数
     max_attempts: int     # 最大尝试次数
-    context_id: str       # CodeBuddy context 标识
+    session_id: str       # AI 会话 ID（用于 --resume 续接）
     last_attempt: str     # 最后一次尝试时间
     subtasks: list        # 子任务状态列表（嵌套任务）
     ai_decisions: list    # AI 决策记录
@@ -1237,7 +1292,7 @@ class SessionTimeoutError(AICallError):
 |------|------|--------|------|
 | `--config` | `-c` | `todos.yaml` | 任务配置文件路径 |
 | `--task` | `-t` | None | 只执行指定任务 ID |
-| `--provider` | `-P` | `codebuddy` | AI provider：`codebuddy`、`claude`、`gemini`、`opencode` |
+| `--provider` | `-P` | `codebuddy` | AI provider：`codebuddy`、`claude`、`gemini`、`opencode`、`test` |
 | `--executable` | - | None | 覆盖 provider 默认可执行文件路径 |
 | `--extra-args` | - | None | 传递给 AI 工具的额外 CLI 参数 |
 | `--use-cli` | - | - | 强制使用 CLI 模式（而非 SDK 模式） |
@@ -1250,7 +1305,7 @@ class SessionTimeoutError(AICallError):
 | `--timeout` | - | 3600 | AI 会话超时时间（秒），默认值来自 `config.yaml` 的 `session_timeout`（如果 config.yaml 不存在则为 3600） |
 | `--log-dir` | - | `.autoagent` | 日志根目录（相对于 CWD） |
 | `--ideas` | - | None | ideas.md 文件路径 |
-| `--ideas-only` | - | - | 只处理 ideas.md（带人工审核），不运行 todo list（需搭配 `--ideas`） |
+| `--ideas-only` | - | - | 只处理 ideas.md，不运行 todo list（需搭配 `--ideas`） |
 | `--no-idle` | - | - | 禁用 idle 模式（默认当 `--ideas` 指定时自动开启 idle） |
 | `--idle-interval` | - | 30 | idle 轮询间隔（秒） |
 | `--preset` | - | `default` | Preset 配置名称，从 config.yaml 加载预设参数 |
@@ -1322,8 +1377,8 @@ python orchestrator.py --ideas ideas.md --idle-interval 60
 # 带 Ideas 但禁用 idle（处理完即退出）
 python orchestrator.py --ideas ideas.md --no-idle
 
-# 只处理 ideas（带人工审核）
-python orchestrator.py --ideas ideas.md --ideas-only
+# 只处理 ideas（可搭配 --human-review 进行人工审核）
+python orchestrator.py --ideas ideas.md --ideas-only --human-review
 
 # 查看所有可用 provider
 python orchestrator.py --list-providers

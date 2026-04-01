@@ -52,7 +52,9 @@
                  │
 ┌────────────────▼────────────────────────┐
 │  AI 能力层 (AI Capability Layer)        │
-│  - AIClient 类                           │  ← 统一 AI 客户端（原 CodeBuddyClient）
+│  - AIClient 类                           │  ← 统一 AI 客户端（CLI 子进程模式）
+│  - AIClientSDK 类                        │  ← CodeBuddy Agent SDK 直连模式
+│  - AIClientTest 类                       │  ← 测试模式（读取预定义响应）
 │  - AIProvider 抽象基类                   │  ← 多 Provider 支持
 │  - CodeBuddyProvider / ClaudeCodeProvider│
 │  - GeminiCLIProvider / OpenCodeProvider  │
@@ -231,7 +233,7 @@ system     → 系统/会话初始化消息
 def execute_simple_task_node(task: dict) -> bool:
     """执行简单任务"""
     attempts = 0
-    max_attempts = 20  # 防止无限循环，可在配置中覆盖
+    max_attempts = 5  # 防止无限循环，可在配置中覆盖
 
     while attempts < max_attempts:
         attempts += 1
@@ -279,7 +281,7 @@ def execute_simple_task_node(task: dict) -> bool:
 def execute_nested_task(task: dict):
     """执行嵌套任务"""
     task_id = task['id']
-    max_attempts = 20  # 主任务最大尝试次数
+    max_attempts = 5  # 主任务最大尝试次数
     
     while get_task_attempts(task_id) < max_attempts:
         # 1. 获取待执行的子任务列表
@@ -528,16 +530,20 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
 
 ```yaml
 tasks:
-  - id: 2
+  "2":
     status: "in_progress"
-    context_id: "task_2"  # ← 新增：记录 context_id
-    context_created_at: "2026-03-23 22:00:00"  # ← 新增
-    max_attempts: 20
-    subtasks:
-      - id: 2.1
-        status: "completed"
-        # ...
+    session_id: "abc123"  # AI 会话 ID，用于 --resume 续接
+    max_attempts: 5
+    attempts: 1
+  "2.1":
+    status: "completed"
+    attempts: 1
+  "2.2":
+    status: "in_progress"
+    attempts: 2
 ```
+
+> **注意**：状态文件中的任务和子任务使用扁平结构存储，每个任务/子任务 ID 是顶层 key。
 
 ### CodeBuddy 命令构造
 
@@ -563,20 +569,22 @@ autoagent-exec.bat python train.py --config config.yaml
 codebuddy -m "glm-4.7" -y "分析训练日志并判断是否满足完成条件"
 ```
 
-### 错误处理与 Context 恢复
+### 错误处理与恢复
 
-如果系统在执行过程中崩溃，可以通过 `context_id` 恢复：
+如果系统在执行过程中崩溃，可以通过状态文件中保存的 `session_id` 恢复：
 
 ```python
 # 从状态文件中恢复
 state = load_state("todos_state.yaml")
-for task in state['tasks']:
-    if task['status'] == 'in_progress':
-        # 恢复之前的 context
-        client = CodeBuddyClient(context_id=task['context_id'])
-        
+for task_id, task_state in state['tasks'].items():
+    if task_state['status'] == 'in_progress':
+        # 恢复之前的会话
+        client = AIClient(provider=provider, context_id=f"task_{task_id}")
+        if task_state.get('session_id'):
+            client.resume_session(task_state['session_id'])
+
         # 继续执行
-        resume_task(client, task)
+        resume_task(client, task_state)
 ```
 
 ### 实现要点
@@ -584,7 +592,7 @@ for task in state['tasks']:
 1. **Context ID 生成规则**：
    - 使用任务 ID 作为 context ID：`task_{task_id}`
    - 确保唯一性：不同主任务的 context ID 不会冲突
-   - **注意**：`context_id` 是系统内部标识，用于状态记录和日志追踪。会话续接通过 `session_id` + `--resume` 实现，每个 AIClient 实例独立管理自己的 session_id。
+   - **注意**：`context_id` 主要用于日志追踪。会话续接通过 `session_id` + `--resume` 实现，每个 AIClient 实例独立管理自己的 session_id。
 
 2. **session_id 的自动管理**：
    - 首次调用：不传 session_id，CLI 创建新会话
@@ -761,6 +769,33 @@ for task in state['tasks']:
 - 输出日志（`lr_tasks/lr_<task_id>_output.log`）记录命令完整输出
 - 任务完成后 AutoAgent 重启 AI 会话进行结果分析
 
+### 5. 一次性变体 (simple_once / long_running_once)
+
+**定义**：`simple` 和 `long_running` 的一次性变体。一旦执行成功，即使父任务重试也不会重新执行。
+
+**使用场景**：
+- `simple_once`：一次性数据准备、环境初始化等，重试时不需要重复的工作
+- `long_running_once`：一次性的 Docker 构建、基线性能分析等耗时操作
+
+**配置示例**：
+```yaml
+subtasks:
+  - id: 4.1
+    name: "下载和准备训练数据"
+    type: simple_once       # 即使主任务重试，数据只准备一次
+    completion_criteria: "data/ 目录包含至少 10000 张图片"
+
+  - id: 5.1
+    name: "构建 Docker 镜像"
+    type: long_running_once  # 即使主任务重试，镜像只构建一次
+    completion_criteria: "docker images 显示 myservice:latest"
+```
+
+**与基础类型的区别**：
+- `simple_once` 在重试循环中，已完成的实例会被跳过
+- `long_running_once` 同理，避免重复执行耗时的后台任务
+- 适合放在子任务列表的开头，作为一次性的前置步骤
+
 ## 数据流
 
 ### 简单任务执行流程
@@ -857,14 +892,14 @@ for task in state['tasks']:
 3. **重试机制**：
    - 子任务级别：每次失败后，AI决定从哪里开始重试
    - 主任务级别：每轮尝试后，AI决定是否继续或终止
-   - 最大限制：子任务5次，主任务20次（可配置）
+   - 最大限制：子任务5次，主任务5次（可通过 `max_attempts` 配置）
 
 ## 状态管理
 
 ### 状态文件结构
 
 ```yaml
-# todos_state.yaml
+# todos_state.yaml — 扁平结构，所有任务/子任务都是顶层 key
 tasks:
   "1":
     status: "completed"  # pending | in_progress | completed | failed
@@ -874,32 +909,8 @@ tasks:
   "2":
     status: "in_progress"
     attempts: 3  # 主任务尝试次数
-    max_attempts: 20  # 最大尝试次数
-    context_id: "task_2"
-    subtasks:
-      "2.1":
-        status: "completed"
-        attempts: 2
-        ai_reasoning: "已添加学习率调度器"
-        history:
-          - attempt: 1
-            time: "2026-03-23 22:00:00"
-            result: "修改完成"
-          - attempt: 2
-            time: "2026-03-23 22:30:00"
-            result: "修改完成，满足条件"
-
-      "2.2":
-        status: "failed"
-        attempts: 2
-        error_type: "ai_failed"  # ai_failed | nested_failed | looping_failed | max_attempts_exceeded | validation_failed
-        log_file: "lr_tasks/lr_2.2_output.log"
-        ai_reasoning: "训练过程中GPU内存不足"
-
-      "2.3":
-        status: "pending"
-        attempts: 0
-
+    max_attempts: 5  # 最大尝试次数
+    session_id: "abc123"  # AI 会话 ID
     ai_decisions:
       - attempt: 1
         time: "2026-03-23 22:40:00"
@@ -913,13 +924,35 @@ tasks:
         retry_from: "2.2"
         analysis: "只是超时问题，可以继续"
         suggested_fix: "增加timeout时间"
-
     main_task_evaluations:
       - round: 1
         time: "2026-03-23 22:50:00"
         main_task_completed: false
         analysis: "val_loss为0.52，距离0.5的目标还差0.04"
         next_strategy: "尝试使用学习率衰减策略、增加数据增强"
+
+  "2.1":
+    status: "completed"
+    attempts: 2
+    ai_reasoning: "已添加学习率调度器"
+    history:
+      - attempt: 1
+        time: "2026-03-23 22:00:00"
+        result: "修改完成"
+      - attempt: 2
+        time: "2026-03-23 22:30:00"
+        result: "修改完成，满足条件"
+
+  "2.2":
+    status: "failed"
+    attempts: 2
+    error_type: "ai_failed"  # ai_failed | nested_failed | looping_failed | max_attempts_exceeded | validation_failed
+    log_file: "lr_tasks/lr_2.2_output.log"
+    ai_reasoning: "训练过程中GPU内存不足"
+
+  "2.3":
+    status: "pending"
+    attempts: 0
 ```
 
 ### 状态流转规则
@@ -1035,7 +1068,7 @@ bash autoagent-exec.sh <command...>
 | `--log-dir` | 日志会话目录的绝对路径（由 AutoAgent 传递给 wrapper 脚本） |
 | `--task-id` | 子任务 ID（如 `1.2`） |
 | `--fast-fail-timeout` | 快速失败超时时间（秒），由 `config.yaml` 的 `fast_fail_timeout` 配置 |
-| `-- <command>` | 要执行的命令（`--` 之后的所有内容） |
+| `--cmd <command>` | 要执行的命令（由 wrapper 脚本拼接用户参数后传入）。也支持 legacy 格式 `-- <command>` |
 
 **快速失败检测机制**（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置，默认 10 秒）：
 
@@ -1055,7 +1088,7 @@ bash autoagent-exec.sh <command...>
 │ └─ 仍在运行 → 🚀 转为后台任务                    │
 │     写入 "running" 信号文件                       │
 │     打印 "TASK SUBMITTED" 消息                    │
-│     启动监控线程等待进程结束                       │
+│     启动独立监控进程等待命令结束                     │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -1943,7 +1976,7 @@ python orchestrator.py --log-dir logs
 
 ```python
 class IdeasWatcher:
-    MAX_REVIEW_ROUNDS = 3  # Maximum AI review rounds before accepting
+    max_review_rounds = 3  # 默认值，可通过 config.yaml 的 ideas.max_review_rounds 覆盖
 
     def __init__(self, ideas_file, todos_file, plans_state_file)
     def has_new_ideas(self) -> bool
@@ -1960,7 +1993,7 @@ class IdeasWatcher:
 
 ### Ideas 文件格式
 
-`ideas.md` 中的想法通过 Markdown 标题（`##`、`###`）或水平分隔线（`---`）分隔：
+`ideas.md` 中的想法通过水平分隔线（`---`）分隔：
 
 ```markdown
 ## 添加单元测试
@@ -1989,18 +2022,18 @@ class IdeasWatcher:
 # plans_state.yaml
 ideas:
   a1b2c3d4e5f6g7h8:  # idea 的 SHA256 hash 前 16 位
-    title: "添加单元测试"
+    display_title: "添加单元测试"
     status: completed
-    processed_at: "2026-03-30T10:00:00"
+    updated_at: "2026-03-30T10:00:00"
   b2c3d4e5f6g7h8i9:
-    title: "优化内存访问模式"
+    display_title: "优化内存访问模式"
     status: completed
-    processed_at: "2026-03-30T10:05:00"
+    updated_at: "2026-03-30T10:05:00"
 
 ---
 ```
 
-每次处理一个 idea 后，该 idea 的原文被追加到归档文件，并从 `ideas.md` 中移除。
+每次处理一个 idea 后，该 idea 的状态被记录到 `plans_state.yaml` 中，并从 `ideas.md` 中移除对应条目。
 
 ### Idea → TODO 转换流程
 
@@ -2021,7 +2054,7 @@ ideas:
    │   ├─ 将生成的任务发送给全新上下文的 AI 审查
    │   ├─ 审查通过（✅ completed）→ 跳出循环
    │   └─ 审查拒绝（❌ not completed）→ 反馈给原 AI 修订 → 重新审查
-   │       （最多 MAX_REVIEW_ROUNDS=3 轮）
+   │       （最多 max_review_rounds 轮，默认 3，可通过 config.yaml 配置）
    │
    ├─ 【人工审核循环】（如果 human_review=True）
    │   ├─ 显示生成的任务 YAML，等待人工输入

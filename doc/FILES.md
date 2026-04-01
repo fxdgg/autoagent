@@ -52,8 +52,9 @@ autoagent/
 │   └── mini_compiler/           # 示例项目：迷你编译器
 │
 ├── test/                        # 测试目录
-│   ├── simulation_test/         # 模拟测试（使用 TestProvider）
-│   └── cufftdx_optimization/    # cuFFTDx 优化测试
+│   ├── _reset_test.bat          # 测试重置脚本
+│   ├── _run_test.bat            # 测试运行脚本
+│   └── simulation_test/         # 模拟测试（使用 TestProvider）
 │
 └── <log_dir>/                   # 日志根目录（默认 .autoagent，相对 CWD）
     └── <project>_<random>/      # 项目专属会话目录（由 .autoagent_log 指定）
@@ -129,7 +130,7 @@ autoagent/
   bash_timeout: 300
 
   # Fast-fail timeout for autoagent-exec (in seconds).
-  # Default: 30. Configures how long autoagent-exec waits before
+  # Code fallback: 10. Configures how long autoagent-exec waits before
   # treating a command as long-running.
   fast_fail_timeout: 30
 
@@ -178,9 +179,9 @@ autoagent/
   - `default_model`: 默认 AI 模型，当 CLI `--model` 和 preset 均未指定时使用
   - `session_timeout`: 会话超时配置值（总时间硬上限）
   - `bash_timeout`: 无新输出超时配置值（检测 AI 卡住）
-  - `fast_fail_timeout`: autoagent-exec 快速失败超时时间（默认 10 秒），命令在此时间内退出则立即报告结果，否则转为后台运行
+  - `fast_fail_timeout`: autoagent-exec 快速失败超时时间，命令在此时间内退出则立即报告结果，否则转为后台运行（代码兜底值 10 秒，shipped config.yaml 中设为 30 秒）
   - `backoff_max_wait`: AI CLI 连续失败时的最大退避等待时间（指数退避：5s→10s→20s→...→上限）
-  - `max_review_rounds`: Ideas 拆解时 AI 审查的最大轮数（默认 3）
+  - `max_review_rounds`: Ideas 拆解时 AI 审查的最大轮数（代码兜底值 3，shipped config.yaml 中设为 5）
   - `max_validation_retries`: Ideas 拆解时 schema 校验的最大重试次数（默认 2）
   - `truncation_limits`: 控制各类提示词字段的最大字符数，防止上下文过长
   - `preset`: 定义常用参数预设，通过 `--preset <name>` 快速切换配置
@@ -413,6 +414,7 @@ tasks:
 
 | 额外字段 | 类型 | 必填 | 说明 |
 |---------|------|------|------|
+| `initial_hint` | string | 否 | 初始提示（给 AI 的参考信息，如要运行的命令） |
 | `command` | string | 否 | （已废弃）旧版配置字段。现在 AI 会根据任务描述自主决定要运行的命令，并通过 `autoagent-exec` 启动 |
 
 ## 📊 状态值说明
