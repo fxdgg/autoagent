@@ -65,7 +65,7 @@ The baseline timing has been recorded to baseline_timing.txt:
 # Tests: Long-running task submission via autoagent-exec
 I'll use autoagent-exec to run the ncu profiling command:
 
-autoagent-exec --cmd "python -c \"import time; time.sleep(5)\"" --task-id 1.2
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.2
 
 ⏳ LONG_RUNNING_IN_PROGRESS
 ---RULE---
@@ -87,7 +87,7 @@ I have written my analysis to ncu_analysis.txt.
 # Tests: Re-submission of long-running task after callback failure
 Let me re-run the profiling with more detailed metrics:
 
-autoagent-exec --cmd "python -c \"import time; time.sleep(5)\"" --task-id 1.2
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.2
 
 ⏳ LONG_RUNNING_IN_PROGRESS
 ---RULE---
@@ -170,7 +170,7 @@ Updated baseline_timing.txt with new timing (125.00 ms).
 # Tests: Second round of long-running task
 I'll re-profile the optimized kernel to find remaining bottlenecks:
 
-autoagent-exec --cmd "python -c \"import time; time.sleep(5)\"" --task-id 1.2
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.2
 
 ⏳ LONG_RUNNING_IN_PROGRESS
 ---RULE---

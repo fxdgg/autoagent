@@ -1,0 +1,118 @@
+[
+    {
+        "name": "Basic success path (cufftdx_optimization)",
+        "project_root": "cufftdx_optimization",
+        "test_rules": "test_rules_1.txt",
+        "extra_args": [],
+        "expected_exit_code": 0,
+        "expected_tasks": {
+            "1":   {"status": "completed"},
+            "1.1": {"status": "completed"},
+            "1.2": {"status": "completed"},
+            "1.3": {"status": "completed"},
+            "1.4": {"status": "completed"},
+            "1.5": {"status": "completed"}
+        }
+    },
+    {
+        "name": "Retries + fuzzy matching + long_running",
+        "project_root": "cufftdx_optimization",
+        "test_rules": "test_rules_2.txt",
+        "extra_args": [],
+        "expected_exit_code": 0,
+        "expected_tasks": {
+            "1":   {"status": "completed"},
+            "1.1": {"status": "completed", "has_not_completed": true},
+            "1.2": {"status": "completed"},
+            "1.3": {"status": "completed"},
+            "1.4": {"status": "completed", "has_not_completed": true},
+            "1.5": {"status": "completed"}
+        }
+    },
+    {
+        "name": "Advanced edge cases (fast-fail, failure_analysis)",
+        "project_root": "cufftdx_optimization",
+        "test_rules": "test_rules_3.txt",
+        "extra_args": [],
+        "expected_exit_code": 0,
+        "expected_tasks": {
+            "1":   {"status": "completed"},
+            "1.1": {"status": "completed"},
+            "1.2": {"status": "completed"},
+            "1.3": {"status": "completed", "has_not_completed": true},
+            "1.4": {"status": "completed"},
+            "1.5": {"status": "completed"}
+        }
+    },
+    {
+        "name": "Ideas decomposition + execution",
+        "project_root": "cufftdx_optimization",
+        "test_rules": "test_rules_4.txt",
+        "extra_args": ["--ideas", "cufftdx_optimization/ideas.md", "--no-idle"],
+        "expected_exit_code": 0,
+        "expected_tasks": {
+            "1":   {"status": "completed"},
+            "2":   {"status": "completed"},
+            "3":   {"status": "completed"},
+            "3.1": {"status": "completed"},
+            "3.2": {"status": "completed"}
+        },
+        "cleanup_files": ["ideas.md", "todos.yaml"]
+    },
+    {
+        "name": "once-type subtask behavior",
+        "project_root": "once_task",
+        "test_rules": "test_rules_5.txt",
+        "extra_args": [],
+        "expected_exit_code": 0,
+        "expected_tasks": {
+            "1":   {"status": "completed"},
+            "1.1": {"status": "completed", "max_history_len": 1},
+            "1.2": {"status": "completed"},
+            "1.3": {"status": "completed"},
+            "1.4": {"status": "completed"}
+        }
+    },
+    {
+        "name": "Looping task + invalid JSON fallback",
+        "project_root": "looping_task",
+        "test_rules": "test_rules_6.txt",
+        "extra_args": [],
+        "expected_exit_code": 0,
+        "expected_tasks": {
+            "1":   {"status": "completed"},
+            "1.1": {"status": "completed"},
+            "1.2": {"status": "completed", "has_not_completed": true},
+            "2":   {"status": "completed"},
+            "2.1": {"status": "completed"},
+            "2.2": {"status": "completed"}
+        }
+    },
+    {
+        "name": "Multi-level nested subtasks",
+        "project_root": "nested_subtask",
+        "test_rules": "test_rules_7.txt",
+        "extra_args": [],
+        "expected_exit_code": 0,
+        "expected_tasks": {
+            "1":     {"status": "completed"},
+            "1.1":   {"status": "completed"},
+            "1.2":   {"status": "completed"},
+            "1.2.1": {"status": "completed"},
+            "1.2.2": {"status": "completed", "has_not_completed": true},
+            "1.3":   {"status": "completed"}
+        }
+    },
+    {
+        "name": "max_attempts exhaustion",
+        "project_root": "max_attempts_task",
+        "test_rules": "test_rules_8.txt",
+        "extra_args": [],
+        "expected_exit_code": 1,
+        "expected_tasks": {
+            "1":   {"status": "failed"},
+            "1.1": {"status": "completed"},
+            "2":   {"status": "completed"}
+        }
+    }
+]

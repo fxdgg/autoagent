@@ -14,6 +14,23 @@ import time
 import logging
 from typing import Optional, Union
 
+
+# ---------------------------------------------------------------------------
+# Regex used to strip the <task_design_guide> block from prompts before
+# writing them to log files.  The actual guide content is very long and
+# adds no diagnostic value to the conversation log.
+# ---------------------------------------------------------------------------
+_TASK_DESIGN_GUIDE_RE = re.compile(
+    r"<task_design_guide>\n.*?\n</task_design_guide>",
+    re.DOTALL,
+)
+_TASK_DESIGN_GUIDE_PLACEHOLDER = "<task_design_guide>(omitted from log)</task_design_guide>"
+
+
+def _strip_task_design_guide(prompt: str) -> str:
+    """Remove the ``<task_design_guide>`` block from *prompt* for logging."""
+    return _TASK_DESIGN_GUIDE_RE.sub(_TASK_DESIGN_GUIDE_PLACEHOLDER, prompt)
+
 logger = logging.getLogger(__name__)
 
 
@@ -522,7 +539,7 @@ class ConversationLogger:
 
         content_parts.append(f"## Idea #{idea_index}: {idea_title}\n\n")
         content_parts.append(f"### Prompt\n\n")
-        content_parts.append(f"```\n{prompt}\n```\n\n")
+        content_parts.append(f"```\n{_strip_task_design_guide(prompt)}\n```\n\n")
 
         try:
             with open(filepath, 'a', encoding='utf-8') as f:
@@ -575,7 +592,7 @@ class ConversationLogger:
 
         content_parts = []
         content_parts.append(f"### Review #{review_round} Prompt\n\n")
-        content_parts.append(f"```\n{prompt}\n```\n\n")
+        content_parts.append(f"```\n{_strip_task_design_guide(prompt)}\n```\n\n")
 
         try:
             with open(filepath, 'a', encoding='utf-8') as f:
