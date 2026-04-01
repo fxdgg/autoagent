@@ -576,7 +576,7 @@ def list_providers() -> dict:
 
 
 # Valid model roles for multimodel support
-MODEL_ROLES = ("plan", "default", "simple")
+MODEL_ROLES = ("plan", "default", "lite")
 
 
 def parse_model_spec(model_str: str) -> dict:
@@ -585,22 +585,22 @@ def parse_model_spec(model_str: str) -> dict:
 
     Supports two formats:
     1. Single model: "glm-5" → all three roles use the same model
-    2. Multi-role: "plan:glm-4-flash;default:glm-5;simple:glm-4-flash"
+    2. Multi-role: "plan:glm-4-flash;default:glm-5;lite:glm-4-flash"
        - Separator is ';', key-value separator is ':'
-       - Only 'plan', 'default', 'simple' keys are allowed
+       - Only 'plan', 'default', 'lite' keys are allowed
        - Missing roles are filled with the 'default' value
 
     Args:
         model_str: Model specification string
 
     Returns:
-        dict: {"plan": "...", "default": "...", "simple": "..."}
+        dict: {"plan": "...", "default": "...", "lite": "..."}
 
     Raises:
         ValueError: If the spec contains invalid role names
     """
     if not model_str:
-        return {"plan": "", "default": "", "simple": ""}
+        return {"plan": "", "default": "", "lite": ""}
 
     # Check if it's a multi-role spec (contains both ';' and ':' with a valid role prefix)
     if ';' in model_str or any(model_str.startswith(f"{role}:") for role in MODEL_ROLES):
@@ -640,4 +640,4 @@ def parse_model_spec(model_str: str) -> dict:
         return roles
     else:
         # Single model string — all roles use the same model
-        return {"plan": model_str, "default": model_str, "simple": model_str}
+        return {"plan": model_str, "default": model_str, "lite": model_str}

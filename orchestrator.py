@@ -138,7 +138,7 @@ class TodoOrchestrator:
                      (only valid when provider is codebuddy)
             backoff_max_wait: Max wait time (seconds) for exponential backoff
                      when AI CLI calls fail repeatedly (default: 300)
-            model_roles: Model role dict ({"plan": ..., "default": ..., "simple": ...}),
+            model_roles: Model role dict ({"plan": ..., "default": ..., "lite": ...}),
                      parsed by parse_model_spec(). None uses provider's default model.
             codebuddy_path: (Legacy) Path to CodeBuddy executable
             model: (Legacy) AI model to use
@@ -167,7 +167,7 @@ class TodoOrchestrator:
         self.model_roles = model_roles or {
             "plan": self.provider.model if provider else "",
             "default": self.provider.model if provider else "",
-            "simple": self.provider.model if provider else "",
+            "lite": self.provider.model if provider else "",
         }
         
         # ── Resolve session log directory ──────────────────────────
@@ -329,7 +329,7 @@ class TodoOrchestrator:
         if model is not None and not isinstance(model, str):
             raise ConfigError(
                 f"Task {task['id']} has invalid model: '{model}'. "
-                f"Must be a string: 'default', 'simple', or a direct model name"
+                f"Must be a string: 'default', 'lite', or a direct model name"
             )
 
     def validate_config(self) -> bool:
@@ -446,7 +446,7 @@ class TodoOrchestrator:
         task_id = str(task['id'])
         task_type = task['type']
 
-        # Switch model based on task's model field (default/simple or direct model name)
+        # Switch model based on task's model field (default/lite or direct model name)
         task_model_role = task.get('model', 'default')
         if task_model_role in self.model_roles:
             task_model = self.model_roles[task_model_role]

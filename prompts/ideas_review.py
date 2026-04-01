@@ -79,9 +79,9 @@ Evaluate the generated tasks against these criteria:
 5. **Decomposition granularity**: Does the decomposition fully cover the idea without
    over-decomposing into trivial subtasks or leaving gaps?
 6. **YAML validity**: Is the YAML structure well-formed and parseable?
-7. **Model field**: If present, the model field must be `"default"`, `"simple"`, or a direct
+7. **Model field**: If present, the model field must be `"default"`, `"lite"`, or a direct
    model name string. Tasks requiring complex reasoning should use `"default"`;
-   straightforward tasks can use `"simple"`. The `model` field is valid on ALL task types
+   straightforward tasks can use `"lite"`. The `model` field is valid on ALL task types
    (including `long_running` and `long_running_once`).
 
 ## Instructions

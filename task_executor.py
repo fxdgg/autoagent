@@ -211,8 +211,8 @@ class SimpleTaskExecutor:
             bool: True if task completed successfully
         """
         task_id = str(task['id'])
-        max_attempts = task.get('max_attempts', 20)
-        
+        max_attempts = task.get('max_attempts', 5)
+
         current_state = state_manager.get_task_state(task_id)
         attempts = current_state.get('attempts', 0)
         
@@ -666,7 +666,7 @@ class NestedTaskExecutor:
             bool: True if main task completed
         """
         task_id = str(task['id'])
-        max_attempts = task.get('max_attempts', 20)
+        max_attempts = task.get('max_attempts', 5)
         subtasks = task.get('subtasks', [])
         
         if not subtasks:
@@ -1154,7 +1154,7 @@ class LoopingTaskExecutor:
         """
         task_id = str(task['id'])
         repeat_count = task.get('repeat_count', 1)
-        max_attempts_per_loop = task.get('max_attempts_per_loop', 20)
+        max_attempts_per_loop = task.get('max_attempts_per_loop', 5)
         subtasks = task.get('subtasks', [])
 
         if not subtasks:
@@ -1217,7 +1217,7 @@ class LoopingTaskExecutor:
 
     def _run_iteration(
         self, task, subtasks, client, state_manager,
-        conv_logger=None, loop_idx=1, max_attempts=20,
+        conv_logger=None, loop_idx=1, max_attempts=5,
     ) -> bool:
         """
         Run one iteration of the subtask sequence with retry support.

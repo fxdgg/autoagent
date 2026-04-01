@@ -61,7 +61,7 @@ Below are minimal examples covering the main task types:
 - id: {next_id}
   name: "Refactor logging module"
   type: simple
-  model: simple
+  model: lite
   completion_criteria: |
     1. All log calls use the new structured format.
     2. No references to the old logging helper remain.

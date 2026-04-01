@@ -36,6 +36,23 @@ Key implications for task design:
 - The AI's persona/role can be customized per-task via the
   `system_prompt_prefix` field in `todos.yaml` (see §12 below).
 
+### Top-Level Task Execution Order
+
+Top-level tasks in `todos.yaml` are executed **strictly sequentially in
+ascending ID order** (task 1 → task 2 → task 3 → ...). Each top-level task
+runs in its own independent AI session.
+
+This means:
+- **Later tasks can depend on artifacts produced by earlier tasks** (e.g.,
+  task 2 can read files created by task 1), because they share the same
+  filesystem.
+- **There is no parallel execution** — task N+1 will not start until task N
+  is fully completed (or has exhausted its retries).
+- **A failed top-level task does NOT block subsequent tasks** — AutoAgent
+  will log the failure and proceed to the next top-level task.
+- **Design your task ordering carefully**: place setup and prerequisite
+  tasks before tasks that depend on their outputs.
+
 ---
 
 ## 2. Task Types — Detailed Behavior
@@ -82,7 +99,7 @@ changes, running tests, file analysis, data processing, simple builds, etc.
    passing the `suggested_fix` to the retried subtask's prompt.
 5. This loop repeats up to `max_attempts` times.
 
-**Scope:** Top-level or subtask (nesting is supported — see §8.5).
+**Scope:** Top-level or subtask (nesting is supported — see §8.4).
 
 **When to use:** Multi-step workflows where the overall success depends on
 the combined result of all steps, and the AI should evaluate the final
@@ -108,7 +125,7 @@ outcome holistically.
 5. Within a single iteration, if a subtask fails, the AI analyzes the failure
    and decides retry strategy (same as nested).
 
-**Scope:** Top-level or subtask (nesting is supported — see §8.5).
+**Scope:** Top-level or subtask (nesting is supported — see §8.4).
 
 **When to use:** Iterative optimization cycles where you want to repeat the
 same workflow N times (e.g., profile → optimize → benchmark → commit).
@@ -195,7 +212,7 @@ When a reset or new iteration would normally set a subtask back to "pending",
 | `name`               | string | Yes      | Concise, descriptive task name                 |
 | `type`               | string | Yes      | `simple`, `nested`, `looping`, `long_running`, `simple_once`, or `long_running_once` |
 | `completion_criteria` | string | Yes     | Clear, specific, measurable success criteria   |
-| `model`              | string | No       | `"default"`, `"simple"`, or a direct model name. Default: `"default"` |
+| `model`              | string | No       | `"default"`, `"lite"`, or a direct model name. Default: `"default"` |
 | `system_prompt_prefix` | string | No    | Custom AI persona/instructions for this task (see §12) |
 
 ### 3.2 Type-Specific Fields
@@ -211,7 +228,7 @@ When a reset or new iteration would normally set a subtask back to "pending",
 | Field          | Type   | Required | Description                              |
 |----------------|--------|----------|------------------------------------------|
 | `subtasks`     | list   | Yes      | Ordered list of subtasks (any valid subtask type, including nested/looping) |
-| `max_attempts` | int    | No       | Max retry rounds (default: 20)           |
+| `max_attempts` | int    | No       | Max retry rounds (default: 5)            |
 
 **looping:**
 
@@ -219,7 +236,7 @@ When a reset or new iteration would normally set a subtask back to "pending",
 |-------------------------|------|----------|--------------------------------------|
 | `subtasks`              | list | Yes      | Ordered list of subtasks             |
 | `repeat_count`          | int  | Yes      | Number of loop iterations (≥ 1)      |
-| `max_attempts_per_loop` | int  | No       | Max retries per iteration (default: 20) |
+| `max_attempts_per_loop` | int  | No       | Max retries per iteration (default: 5)   |
 
 **long_running / long_running_once:**
 
@@ -231,18 +248,15 @@ When a reset or new iteration would normally set a subtask back to "pending",
 ### 3.3 Hierarchy Rules
 
 ```
-Top-level tasks:  simple | nested | looping
-                     │        │         │
-                     │    subtasks:   subtasks:
-                     │   simple,     simple,
-                     │  long_running, long_running,
-                     │  simple_once, simple_once,
-                     │  long_running  long_running
-                     │    _once,       _once,
-                     │   nested,     nested,
-                     │   looping     looping
-                     │
-              (no subtasks)
+Top-level tasks:     simple  |  nested            |  looping
+                        │    |     │               |     │
+                   (no subtasks)  subtasks:          subtasks:
+                             |   simple             |   simple
+                             |   simple_once        |   simple_once
+                             |   long_running       |   long_running
+                             |   long_running_once  |   long_running_once
+                             |   nested             |   nested
+                             |   looping            |   looping
 ```
 
 - `nested` and `looping` can be top-level OR subtasks (multi-level nesting
@@ -261,14 +275,19 @@ The `model` field controls which AI model executes the task:
 - `"default"` (or omitted): Uses the default model role, typically a more
   capable model suited for complex reasoning, multi-step code changes, and
   analysis.
-- `"simple"`: Uses the simple model role, a lighter/faster model suitable
-  for straightforward tasks like running a single command, simple file
-  edits, or formatting.
+- `"lite"`: Uses the lite model role, a lighter/faster model suitable for
+  straightforward tasks like running a single command, simple file edits,
+  or formatting.
 - **Direct model name** (e.g., `"claude-sonnet-4-20250514"`): Uses the
   specified model directly, bypassing the role mapping.
 
+> **⚠️ Note:** `model: "lite"` selects a lighter AI model. It is completely
+> independent of `type: simple` (which defines the task execution behavior).
+> A task can be `type: simple` with `model: "default"`, or `type: nested`
+> with `model: "lite"` on its subtasks — the two fields are orthogonal.
+
 **Guidelines:**
-- Use `"simple"` for tasks like: "Run `make test`", "Format code with black",
+- Use `"lite"` for tasks like: "Run `make test`", "Format code with black",
   "Copy file X to Y", "Run benchmark and save output".
 - Use `"default"` for tasks like: "Analyze profiling results and optimize
   kernel code", "Debug failing test and fix root cause", "Refactor module
@@ -476,35 +495,6 @@ Use nested when:
 - The overall success depends on the combined result.
 - You want the AI to evaluate the final outcome and potentially retry.
 
-Example: "Optimize database query performance"
-```yaml
-- id: 1
-  name: "Optimize database query performance"
-  type: nested
-  completion_criteria: |
-    Average query response time < 100ms (measured by benchmark).
-    All existing tests still pass.
-  subtasks:
-    - id: 1.1
-      name: "Profile slow queries"
-      type: simple
-      completion_criteria: |
-        Identified top 3 slowest queries.
-        Analysis saved to query_analysis.txt.
-    - id: 1.2
-      name: "Add database indexes"
-      type: simple
-      completion_criteria: |
-        Appropriate indexes created.
-        Migration file generated.
-    - id: 1.3
-      name: "Run benchmark"
-      type: simple
-      completion_criteria: |
-        Benchmark completed.
-        Results show average response time < 100ms.
-```
-
 ### 8.3 When to Use `looping`
 
 Use looping when:
@@ -512,101 +502,11 @@ Use looping when:
 - Each iteration should follow the same steps.
 - You want a fixed number of iterations (no early termination).
 
-Example: "Iteratively optimize CUDA kernel performance"
-```yaml
-- id: 1
-  name: "Iterative kernel optimization"
-  type: looping
-  repeat_count: 5
-  completion_criteria: |
-    5 rounds of profile-optimize-benchmark completed.
-  subtasks:
-    - id: 1.1
-      name: "Profile with ncu"
-      type: long_running
-      completion_criteria: "ncu profiling completed, output saved."
-    - id: 1.2
-      name: "Optimize based on profile"
-      type: simple
-      completion_criteria: "Code changes applied, compiles without errors."
-    - id: 1.3
-      name: "Benchmark and commit/rollback"
-      type: simple
-      completion_criteria: "Benchmark run. If improved, committed. If not, rolled back."
-```
-
 ### 8.4 When to Use Nested Subtasks
 
 Use `nested` or `looping` as a subtask type when a step within a larger
 workflow is itself a multi-step process with its own completion criteria
 and retry logic.
-
-Example: "Build and deploy a microservice" where the build step itself
-involves multiple sub-steps:
-```yaml
-- id: 1
-  name: "Build and deploy microservice"
-  type: nested
-  max_attempts: 5
-  completion_criteria: |
-    Service is deployed and health check returns 200 OK.
-  subtasks:
-    - id: 1.1
-      name: "Build and test"
-      type: nested
-      max_attempts: 3
-      completion_criteria: |
-        All unit tests pass and Docker image is built.
-      subtasks:
-        - id: 1.1.1
-          name: "Fix lint errors"
-          type: simple
-          completion_criteria: "No lint errors (pylint returns 0)."
-        - id: 1.1.2
-          name: "Run unit tests"
-          type: simple
-          completion_criteria: "All tests pass (pytest returns 0)."
-        - id: 1.1.3
-          name: "Build Docker image"
-          type: simple
-          completion_criteria: "Docker image built successfully."
-    - id: 1.2
-      name: "Deploy to staging"
-      type: simple
-      completion_criteria: "Deployed to staging, health check returns 200."
-```
-
-Example: A subtask that repeats an optimization cycle:
-```yaml
-- id: 2
-  name: "Optimize and validate"
-  type: nested
-  completion_criteria: |
-    Performance improved by at least 20% over baseline.
-  subtasks:
-    - id: 2.1
-      name: "Establish baseline"
-      type: simple_once
-      completion_criteria: "Baseline timing saved to baseline.txt."
-    - id: 2.2
-      name: "Iterative optimization"
-      type: looping
-      repeat_count: 3
-      completion_criteria: "3 optimization rounds completed."
-      subtasks:
-        - id: 2.2.1
-          name: "Profile"
-          type: long_running
-          completion_criteria: "Profiling output saved."
-        - id: 2.2.2
-          name: "Optimize and benchmark"
-          type: simple
-          completion_criteria: "Optimization applied, benchmark run."
-    - id: 2.3
-      name: "Final validation"
-      type: simple
-      completion_criteria: "Final benchmark shows >= 20% improvement."
-```
 
 **Design tips for nested subtasks:**
 - Use nested subtasks when a step has its own independent retry logic
@@ -617,7 +517,187 @@ Example: A subtask that repeats an optimization cycle:
 - When a nested/looping subtask is reset by the parent's retry logic,
   all of its inner subtasks are also recursively reset.
 
-### 8.5 Decomposition Anti-Patterns
+### 8.5 Comprehensive YAML Example
+
+The following example demonstrates all task types (`simple`, `nested`,
+`looping`, `long_running`, `simple_once`, `long_running_once`) and nested
+subtask structures in a single `todos.yaml` file:
+
+```yaml
+# ============================================================
+# Task 1: A standalone simple task (top-level)
+# ============================================================
+- id: 1
+  name: "Fix API input validation"
+  type: simple
+  model: "default"
+  completion_criteria: |
+    1. All API endpoints validate input parameters (type, range, required).
+    2. Invalid requests return 400 with descriptive error messages.
+    3. All existing tests pass (pytest returns exit code 0).
+  initial_hint: |
+    Key files:
+      - src/api/routes.py: All endpoint definitions
+      - src/api/validators.py: Validation utilities (create if needed)
+    IMPORTANT: Do NOT change the response format of successful requests.
+
+# ============================================================
+# Task 2: A nested task with mixed subtask types
+# ============================================================
+- id: 2
+  name: "Optimize database query performance"
+  type: nested
+  max_attempts: 5
+  completion_criteria: |
+    1. Average query response time < 100ms (measured by benchmark).
+    2. All existing tests pass with 0 failures.
+    3. Benchmark results saved to benchmark_results.txt.
+  subtasks:
+    # simple_once: one-time setup, never re-executed on retry
+    - id: 2.1
+      name: "Install profiling tools and establish baseline"
+      type: simple_once
+      model: "lite"
+      completion_criteria: |
+        1. pg_stat_statements extension is enabled.
+        2. Baseline benchmark completed, results saved to baseline.txt.
+
+    # simple: profile and analyze (re-runs on retry)
+    - id: 2.2
+      name: "Profile slow queries and design optimizations"
+      type: simple
+      completion_criteria: |
+        1. Top 5 slowest queries identified with execution plans.
+        2. Analysis and optimization plan saved to query_analysis.txt.
+      initial_hint: |
+        Use EXPLAIN ANALYZE on the slow queries.
+        Check for missing indexes, N+1 queries, and full table scans.
+
+    # simple: apply optimizations
+    - id: 2.3
+      name: "Apply database optimizations"
+      type: simple
+      completion_criteria: |
+        1. Indexes created via migration file (migrations/add_indexes.sql).
+        2. Query rewrites applied where needed.
+        3. Application compiles and starts without errors.
+
+    # simple: final benchmark
+    - id: 2.4
+      name: "Run benchmark and validate"
+      type: simple
+      model: "lite"
+      completion_criteria: |
+        1. Benchmark completed, results saved to benchmark_results.txt.
+        2. Average response time < 100ms.
+        3. All tests pass (pytest returns exit code 0).
+
+# ============================================================
+# Task 3: A looping task for iterative optimization
+# ============================================================
+- id: 3
+  name: "Iterative CUDA kernel optimization"
+  type: looping
+  repeat_count: 3
+  max_attempts_per_loop: 5
+  completion_criteria: |
+    3 rounds of profile-optimize-benchmark completed.
+  subtasks:
+    # long_running: GPU profiling takes a long time
+    - id: 3.1
+      name: "Profile kernel with Nsight Compute"
+      type: long_running
+      system_prompt_prefix: |
+        You are a GPU performance engineer. Focus on memory throughput,
+        occupancy, and warp efficiency metrics.
+      completion_criteria: |
+        ncu profiling completed with exit code 0.
+        Output log contains "PROF" section with kernel metrics.
+
+    # simple: analyze profile and optimize code
+    - id: 3.2
+      name: "Optimize kernel based on profile results"
+      type: simple
+      system_prompt_prefix: |
+        You are a senior C++/CUDA engineer. Prefer modern C++17 features.
+        Always check CUDA error codes with a macro.
+      completion_criteria: |
+        1. Code changes applied based on profiling bottlenecks.
+        2. Project builds: cmake --build build --config Release succeeds.
+        3. Correctness test passes: output contains "Score: 100/100".
+
+    # simple: benchmark and decide commit/rollback
+    - id: 3.3
+      name: "Benchmark and commit or rollback"
+      type: simple
+      model: "lite"
+      completion_criteria: |
+        1. Benchmark run (100 iterations), timing saved to timing.txt.
+        2. If faster than previous best → changes committed with git.
+        3. If slower or equal → changes rolled back with git checkout.
+
+# ============================================================
+# Task 4: Deeply nested structure (nested containing looping)
+# ============================================================
+- id: 4
+  name: "Build, optimize, and deploy service"
+  type: nested
+  max_attempts: 3
+  completion_criteria: |
+    Service deployed to staging, health check returns HTTP 200.
+    Response time p99 < 200ms (measured by load test).
+  subtasks:
+    # nested subtask: build pipeline with its own retry logic
+    - id: 4.1
+      name: "Build and test"
+      type: nested
+      max_attempts: 3
+      completion_criteria: |
+        All tests pass and Docker image is built successfully.
+      subtasks:
+        - id: 4.1.1
+          name: "Fix lint and type errors"
+          type: simple
+          completion_criteria: "pylint and mypy return exit code 0."
+        - id: 4.1.2
+          name: "Run test suite"
+          type: simple
+          completion_criteria: "pytest returns exit code 0, coverage >= 80%."
+        - id: 4.1.3
+          name: "Build Docker image"
+          type: simple
+          model: "lite"
+          completion_criteria: "Docker image built: docker build -t myservice:latest ."
+
+    # looping subtask: optimize response time iteratively
+    - id: 4.2
+      name: "Optimize response time"
+      type: looping
+      repeat_count: 2
+      completion_criteria: "2 optimization rounds completed."
+      subtasks:
+        - id: 4.2.1
+          name: "Profile with load test"
+          type: long_running
+          command: "k6 run loadtest.js --out json=profile.json"
+          completion_criteria: "Load test completed, profile.json generated."
+        - id: 4.2.2
+          name: "Apply optimization"
+          type: simple
+          completion_criteria: |
+            Optimization applied based on profile. Builds without errors.
+
+    # simple: final deploy
+    - id: 4.3
+      name: "Deploy to staging"
+      type: simple
+      completion_criteria: |
+        1. Deployed to staging environment.
+        2. Health check endpoint returns HTTP 200.
+        3. Smoke test passes (curl returns expected response).
+```
+
+### 8.6 Decomposition Anti-Patterns
 
 ❌ **Over-decomposition:** Breaking a simple task into 5 trivial subtasks.
 ```yaml
@@ -714,7 +794,7 @@ Before finalizing your task decomposition, verify:
 - [ ] All `completion_criteria` are specific, measurable, and verifiable
 - [ ] Task IDs are unique and follow the correct notation
 - [ ] The decomposition matches the complexity of the idea (not over/under-decomposed)
-- [ ] `model` field is appropriate (`simple` for easy tasks, `default` for complex, or direct model name)
+- [ ] `model` field is appropriate (`"lite"` for easy tasks, `"default"` for complex, or direct model name)
 - [ ] `initial_hint` provides useful context without duplicating criteria
 - [ ] `system_prompt_prefix` is set on tasks that need a specific AI persona or constraints
 

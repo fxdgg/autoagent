@@ -418,7 +418,7 @@ class IdeasWatcher:
         if model is not None and not isinstance(model, str):
             errors.append(
                 f"Task {task_id} has invalid model: '{model}'. "
-                f"Must be a string: 'default', 'simple', or a direct model name"
+                f"Must be a string: 'default', 'lite', or a direct model name"
             )
 
         return errors
