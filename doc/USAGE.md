@@ -53,8 +53,8 @@ opencode --version
 session_timeout: 3600  # Hard cap on total AI session time (seconds)
 bash_timeout: 300      # No-new-output timeout (seconds)
 
-# Fast-fail timeout for autoagent-exec (in seconds, default: 30)
-fast_fail_timeout: 30
+# Fast-fail timeout for autoagent-exec (in seconds, default: 10)
+fast_fail_timeout: 10
 
 # Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
 # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
@@ -469,7 +469,7 @@ python orchestrator.py --preset default --model claude-sonnet-4-6
 python orchestrator.py
 ```
 
-### 2. 选择 AI Provider
+### 3. 选择 AI Provider
 
 支持多种 AI CLI 工具：
 
@@ -500,13 +500,13 @@ python orchestrator.py --extra-args "--max-turns 1000"
 python orchestrator.py --list-providers
 ```
 
-### 3. 后台执行
+### 4. 后台执行
 
 ```bash
 nohup python orchestrator.py > orchestrator.log 2>&1 &
 ```
 
-### 4. 断点续传
+### 5. 断点续传
 
 如果执行中断，可以从断点继续：
 
@@ -517,14 +517,14 @@ python orchestrator.py
 
 状态保存在 `todos_state.yaml` 中，程序会自动读取并继续执行。
 
-### 5. 查看状态
+### 6. 查看状态
 
 ```bash
 # 查看任务状态
 python orchestrator.py --status
 ```
 
-### 6. 其他常用命令
+### 7. 其他常用命令
 
 ```bash
 # 验证配置文件是否合法
@@ -647,11 +647,17 @@ completion_criteria: |
 ### 5. 日志管理
 
 ```bash
-# 查看长时间任务的日志
-tail -f logs/2.2.log
+# 查看长时间任务的输出日志（在会话目录的 lr_tasks/ 下）
+tail -f .autoagent/*/lr_tasks/lr_*_output.log
 
-# 查看监控进程的日志
-tail -f monitors/2.2.log
+# 查看长时间任务的信号文件（状态：running/finished/error）
+cat .autoagent/*/lr_tasks/lr_*_signal.json
+
+# 查看 orchestrator 运行日志
+tail -f .autoagent/*/orchestrator.log
+
+# 查看 AI 对话日志
+ls .autoagent/*/conversations/
 ```
 
 ### 6. AI决策的最佳实践
@@ -756,13 +762,13 @@ ls ~/.codebuddy/settings.json
 # 查看任务状态
 cat todos_state.yaml
 
-# 查看日志文件
-tail -f logs/2.2.log
+# 查看长时间任务的信号文件（在会话目录的 lr_tasks/ 下）
+cat .autoagent/*/lr_tasks/lr_*_signal.json
 
-# 查看监控进程
-ps aux | grep monitor
+# 查看长时间任务的输出日志
+tail -f .autoagent/*/lr_tasks/lr_*_output.log
 
-# 查看训练进程
+# 查看后台运行的进程
 ps aux | grep train.py
 ```
 
@@ -792,19 +798,21 @@ ps aux | grep train.py
 rm todos_state.yaml
 ```
 
-### 问题 5：监控进程无法启动
+### 问题 5：长时间任务的监控进程异常
+
+**说明**：`autoagent-exec` 在将命令转入后台运行时，会启动一个独立的监控进程来跟踪命令的完成状态并更新信号文件。
 
 **检查步骤**：
 
 ```bash
-# 检查 monitors 目录权限
-ls -la monitors/
+# 检查信号文件是否存在且状态正确
+cat .autoagent/*/lr_tasks/lr_*_signal.json
 
-# 检查监控脚本内容
-cat monitors/2.2.sh
+# 检查监控进程是否在运行（监控进程也是 autoagent_exec.py）
+ps aux | grep autoagent_exec
 
-# 手动执行监控脚本测试
-bash monitors/2.2.sh
+# 如果信号文件卡在 "running" 状态但命令已结束，
+# 可以手动更新信号文件的 status 为 "finished"
 ```
 
 ## 常见问题

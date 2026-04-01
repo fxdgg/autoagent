@@ -368,7 +368,7 @@ class AIClient:
 | `codebuddy_path` | str | None | （Legacy）CodeBuddy 可执行文件路径 |
 | `model` | str | None | （Legacy）AI 模型名 |
 
-> 如果不提供 `provider`，会根据 legacy 参数或默认值创建 `CodeBuddyProvider(model="deepseek-v3.2")`。
+> 如果不提供 `provider`，会根据 legacy 参数或默认值创建 `CodeBuddyProvider(model=None)`，此时使用 `config.yaml` 中的 `default_model` 作为默认模型。
 
 ### 属性
 
@@ -594,9 +594,7 @@ context = {
 {
     "analysis": "失败原因描述",
     "retry_from": "task_2.1",
-    "reasoning": "推理过程",
-    "suggested_fix": "修复建议",
-    "confidence": "high"
+    "suggested_fix": "修复建议"
 }
 ```
 
@@ -607,9 +605,7 @@ context = {
     "main_task_completed": false,
     "analysis": "结果分析",
     "retry_from": "task_2.1",
-    "next_strategy": "优化方向",
-    "suggested_improvements": ["建议1", "建议2"],
-    "confidence": "medium"
+    "next_strategy": "优化方向"
 }
 ```
 
@@ -620,7 +616,7 @@ context = {
 ```python
 class SubtaskExecutor:
     def __init__(self, session_dir: str = None, model_roles: dict = None)
-    def execute(self, subtask: dict, client: CodeBuddyClient) -> SubtaskResult
+    def execute(self, subtask: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None) -> SubtaskResult
 ```
 
 **构造函数参数**：
@@ -1152,14 +1148,13 @@ class TaskState(TypedDict, total=False):
 class SubtaskState(TypedDict, total=False):
     status: str           # "pending" | "in_progress" | "completed" | "failed"
     attempts: int
-    error_type: str       # "timeout" | "oom" | "crash" | "validation_failed"
+    error_type: str       # "ai_failed" | "nested_failed" | "looping_failed" | "max_attempts_exceeded" | "validation_failed"
     log_file: str         # 日志文件路径（long_running 类型）
-    pid_file: str         # PID 文件路径（long_running 类型）
     ai_reasoning: str     # AI 的推理记录
     history: list         # 执行历史
 ```
 
-> **注意**：`in_progress` 状态同时覆盖"正在执行命令"和"长时间任务正在后台运行"两种场景。可通过 `log_file` 和 `pid_file` 字段区分是否为长时间任务。
+> **注意**：`in_progress` 状态同时覆盖"正在执行命令"和"长时间任务正在后台运行"两种场景。可通过 `log_file` 字段和信号文件（`lr_<task_id>_signal.json`）区分是否为长时间任务。
 
 ---
 
@@ -1186,7 +1181,7 @@ class TaskConfig(TypedDict, total=False):
 class SubtaskConfig(TypedDict, total=False):
     id: Union[int, str]                                # 必填
     name: str                                          # 必填
-    type: Literal["simple", "long_running", "simple_once", "long_running_once"]  # 必填
+    type: Literal["simple", "long_running", "simple_once", "long_running_once", "nested", "looping"]  # 必填
     completion_criteria: str                            # 必填
     initial_hint: str                                  # simple 可选
     max_attempts: int                                  # 可选，默认 5
@@ -1354,6 +1349,21 @@ limits.reload()                                    # 重新从 config.yaml 加�
 
 ---
 
+## Ideas 处理配置（config.yaml）
+
+控制 Ideas 拆解过程中的 AI 审查和校验行为。通过 `ideas_watcher.py` 的 `_load_ideas_config()` 加载。
+
+### 配置字段
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `max_review_rounds` | 3 | AI 审查最大轮数。每轮将生成的任务发送给独立的审查 AI 检查质量，如果审查持续拒绝，达到此轮数后强制接受 |
+| `max_validation_retries` | 2 | Schema 校验最大重试次数。如果生成的任务未通过 schema 校验，将错误反馈给 AI 修正，达到此次数后按原样接受 |
+
+所有字段都有内置默认值，`config.yaml` 中只需配置想调整的项。
+
+---
+
 ## setup_logging()
 
 模块级日志配置函数，配置 logging 输出。
@@ -1431,7 +1441,7 @@ orchestrator.run_with_idle()  # 不会退出，直到 Ctrl+C
 | **AIProvider** | AI CLI 工具抽象基类、命令构造 |
 | **CodeBuddyProvider / ClaudeCodeProvider / GeminiCLIProvider / OpenCodeProvider** | 具体 AI 工具的命令构造 |
 | **AIClient** (别名 CodeBuddyClient) | AI 调用、Context 管理、stream-json 解析 |
-| **SimpleTaskExecutor** | 简单任务执行（三层完成检测） |
+| **SimpleTaskExecutor** | 简单任务执行（自循环完成检测） |
 | **NestedTaskExecutor** | 嵌套任务执行、AI 决策调度 |
 | **LoopingTaskExecutor** | 循环任务执行（固定 N 次迭代） |
 | **SubtaskExecutor** | 子任务分发执行（接收 session_dir） |

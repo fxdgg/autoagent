@@ -150,12 +150,7 @@ class TodoOrchestrator:
         self.idle_interval = idle_interval
         self.use_cli = use_cli
         self.backoff_max_wait = backoff_max_wait
-        self.model_roles = model_roles or {
-            "plan": self.provider.model if provider else "",
-            "default": self.provider.model if provider else "",
-            "simple": self.provider.model if provider else "",
-        }
-        
+
         # Store provider (or create from legacy params)
         if provider is not None:
             self.provider = provider
@@ -168,6 +163,12 @@ class TodoOrchestrator:
         else:
             from ai_providers import CodeBuddyProvider
             self.provider = CodeBuddyProvider()
+
+        self.model_roles = model_roles or {
+            "plan": self.provider.model if provider else "",
+            "default": self.provider.model if provider else "",
+            "simple": self.provider.model if provider else "",
+        }
         
         # ── Resolve session log directory ──────────────────────────
         # log_dir defaults to ".autoagent" relative to CWD.
@@ -1082,7 +1083,7 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
     parser.add_argument(
         '--provider', '-P',
         default='codebuddy',
-        help='AI provider to use: codebuddy (default), claude, gemini. '
+        help='AI provider to use: codebuddy (default), claude, gemini, opencode, test. '
              'Use --list-providers to see all available options.',
     )
     parser.add_argument(

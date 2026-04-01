@@ -74,7 +74,7 @@
 │  基础设施层 (Infrastructure Layer)      │
 │  - 文件系统                             │
 │  - 子进程执行                           │
-│  - Nohup 监控                           │
+│  - 信号文件 + 监控进程                   │
 │  - Git 操作（可选）                     │
 └─────────────────────────────────────────┘
 ```
@@ -232,33 +232,33 @@ def execute_simple_task_node(task: dict) -> bool:
     """执行简单任务"""
     attempts = 0
     max_attempts = 20  # 防止无限循环，可在配置中覆盖
-    
+
     while attempts < max_attempts:
         attempts += 1
-        
+
         # 1. 调用 AI 尝试完成任务
         result = call_codebuddy(f"""
         任务：{task['description']}
-        
+
         完成条件：{task['completion_criteria']}
-        
+
         初始提示：{task.get('initial_hint', '无')}
-        
+
         请尝试完成这个任务。
-        
+
         完成后，请回复以下格式：
-        - ✅ 完成：如果满足完成条件
-        - ❌ 未完成：如果不满足，并说明你打算如何改进
+        - ✅ completed：如果满足完成条件
+        - ❌ not completed: <原因>：如果不满足，并说明原因
         """)
-        
-        # 2. AI 自己判断是否达标
-        if "✅ 完成" in result:
+
+        # 2. AI 自己判断是否达标（使用英文状态标记）
+        if "✅ completed" in result:
             mark_task_completed(task.id)
             return True
-        
+
         # 3. AI 决定如何改进，然后继续循环
         # （AI 自己决定改什么、怎么改）
-    
+
     return False
 ```
 
@@ -380,9 +380,7 @@ related_files:
 {
   "analysis": "任务失败原因是模型太大（10层）导致GPU内存不足。task_2.1的网络层增加是直接原因。",
   "retry_from": "task_2.1",
-  "reasoning": "需要重新调整模型结构，减少网络层数",
-  "suggested_fix": "将网络层数从10层减少到6层",
-  "confidence": "high"
+  "suggested_fix": "将网络层数从10层减少到6层"
 }
 ```
 
@@ -421,14 +419,8 @@ execution_results:
 {
   "main_task_completed": false,
   "analysis": "val_loss为0.52，距离0.5的目标还差0.04；accuracy为0.88，距离0.9的目标还差0.02。两个指标都接近但未达标。",
-  "next_strategy": "继续优化",
   "retry_from": "task_2.1",
-  "suggested_improvements": [
-    "尝试使用学习率衰减策略",
-    "增加数据增强",
-    "调整dropout比例"
-  ],
-  "confidence": "medium"
+  "next_strategy": "尝试使用学习率衰减策略、增加数据增强、调整dropout比例"
 }
 ```
 
@@ -599,10 +591,10 @@ for task in state['tasks']:
    - 后续调用：自动使用从 stream 事件中捕获的 session_id
    - 跨系统重启后：从 `todos_state.yaml` 恢复 session_id，通过 `resume_session()` 设置
 
-3. **Context 清理策略**：
-   - 主任务成功：保留 context 24小时（用于审计和分析）
-   - 主任务失败：立即清理（避免资源浪费）
-   - 超过最大尝试次数：清理 context 并记录日志
+3. **Context 生命周期**：
+   - AutoAgent 不主动管理 session/context 的清理
+   - Session 的生命周期由各 AI CLI 工具自身管理（如 CodeBuddy、Claude Code 等）
+   - AutoAgent 仅通过 `session_id` 和 `--resume` 实现会话续接
 
 4. **并发控制**：
    - 每个主任务使用独立的 AIClient 实例，理论上可以并发执行
@@ -730,7 +722,7 @@ for task in state['tasks']:
 
 ### 4. 长时间任务 (long_running)
 
-**定义**：通过 `autoagent-exec` 启动的长时间后台任务，使用 10 秒快速失败检测机制
+**定义**：通过 `autoagent-exec` 启动的长时间后台任务，使用快速失败检测机制（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置，默认 10 秒）
 
 **配置示例**：
 ```yaml
@@ -764,7 +756,7 @@ for task in state['tasks']:
 
 **技术实现**：
 - 使用 `autoagent_exec.py` 脚本作为 long_running 任务启动器
-- 10 秒快速失败检测，避免 AI 反复启动会话
+- 快速失败检测（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置），避免 AI 反复启动会话
 - 信号文件（`lr_tasks/lr_<task_id>_signal.json`）用于进程间通信
 - 输出日志（`lr_tasks/lr_<task_id>_output.log`）记录命令完整输出
 - 任务完成后 AutoAgent 重启 AI 会话进行结果分析
@@ -874,66 +866,60 @@ for task in state['tasks']:
 ```yaml
 # todos_state.yaml
 tasks:
-  - id: 1
+  "1":
     status: "completed"  # pending | in_progress | completed | failed
     attempts: 3
     last_attempt: "2026-03-23 22:30:00"
-    
-  - id: 2
+
+  "2":
     status: "in_progress"
     attempts: 3  # 主任务尝试次数
-    current_round: 2  # 当前轮次
     max_attempts: 20  # 最大尝试次数
+    context_id: "task_2"
     subtasks:
-      - id: 2.1
+      "2.1":
         status: "completed"
         attempts: 2
-        last_success_time: "2026-03-23 22:30:00"
         ai_reasoning: "已添加学习率调度器"
         history:
           - attempt: 1
             time: "2026-03-23 22:00:00"
-            action: "修改学习率为 0.001"
             result: "修改完成"
           - attempt: 2
             time: "2026-03-23 22:30:00"
-            action: "优化网络结构"
             result: "修改完成，满足条件"
-            
-      - id: 2.2
+
+      "2.2":
         status: "failed"
         attempts: 2
-        last_failure_time: "2026-03-23 22:48:00"
-        error_type: "timeout"  # timeout | oom | crash | validation_failed
-        log_file: "logs/task_2_2_attempt_2.log"
+        error_type: "ai_failed"  # ai_failed | nested_failed | looping_failed | max_attempts_exceeded | validation_failed
+        log_file: "lr_tasks/lr_2.2_output.log"
         ai_reasoning: "训练过程中GPU内存不足"
-        ai_decisions:
-          - attempt: 1
-            time: "2026-03-23 22:40:00"
-            failed_at: "task_2.2"
-            retry_from: "task_2.1"
-            reasoning: "需要重新调整模型结构"
-            suggested_fix: "减少网络层数"
-          - attempt: 2
-            time: "2026-03-23 22:48:00"
-            failed_at: "task_2.2"
-            retry_from: "task_2.2"
-            reasoning: "只是超时问题，可以继续"
-            suggested_fix: "增加timeout时间"
-            
-      - id: 2.3
+
+      "2.3":
         status: "pending"
         attempts: 0
-        
+
+    ai_decisions:
+      - attempt: 1
+        time: "2026-03-23 22:40:00"
+        failed_at: "2.2"
+        retry_from: "2.1"
+        analysis: "需要重新调整模型结构"
+        suggested_fix: "减少网络层数"
+      - attempt: 2
+        time: "2026-03-23 22:48:00"
+        failed_at: "2.2"
+        retry_from: "2.2"
+        analysis: "只是超时问题，可以继续"
+        suggested_fix: "增加timeout时间"
+
     main_task_evaluations:
       - round: 1
         time: "2026-03-23 22:50:00"
-        completed: false
+        main_task_completed: false
         analysis: "val_loss为0.52，距离0.5的目标还差0.04"
-        next_strategy: "继续优化"
-        suggested_improvements:
-          - "尝试使用学习率衰减策略"
-          - "增加数据增强"
+        next_strategy: "尝试使用学习率衰减策略、增加数据增强"
 ```
 
 ### 状态流转规则
@@ -968,9 +954,8 @@ pending → in_progress → completed/failed
 - 决策时间
 - 失败位置（failed_at）
 - 重试起点（retry_from）
-- AI的推理过程（reasoning）
+- AI的分析（analysis）
 - 建议的修复方案（suggested_fix）
-- 置信度（confidence）
 
 ### 状态持久化
 
@@ -1017,7 +1002,7 @@ CodeBuddy 有超时限制（通常 1 小时），但某些任务（如模型训�
 
 ### 解决方案
 
-**使用 autoagent-exec 启动器 + 10 秒快速失败检测 + 信号文件轮询：**
+**使用 autoagent-exec 启动器 + 快速失败检测（超时由 `config.yaml` 的 `fast_fail_timeout` 配置，默认 10 秒） + 信号文件轮询：**
 
 整个 long_running 任务流程涉及三方协作：
 
@@ -1052,7 +1037,7 @@ bash autoagent-exec.sh <command...>
 | `--fast-fail-timeout` | 快速失败超时时间（秒），由 `config.yaml` 的 `fast_fail_timeout` 配置 |
 | `-- <command>` | 要执行的命令（`--` 之后的所有内容） |
 
-**快速失败检测机制**（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置，默认 30 秒）：
+**快速失败检测机制**（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置，默认 10 秒）：
 
 ```
 启动命令
@@ -1179,7 +1164,7 @@ def _ai_analyze_long_running_result(self, subtask, client, status, output_log):
 autoagent/
 ├── orchestrator.py           # 主程序、CLI 入口
 ├── ai_providers.py           # AI Provider 抽象层（多 CLI 工具支持）
-├── task_executor.py          # 任务执行器 (Simple/Nested/SubtaskExecutor)
+├── task_executor.py          # 任务执行器 (Simple/Nested/Looping/SubtaskExecutor)
 ├── autoagent_exec.py         # long_running 任务启动器（AI 通过 wrapper 脚本调用）
 ├── codebuddy_client.py       # AIClient（统一 AI 客户端）
 ├── state_manager.py          # 状态持久化管理
@@ -1293,9 +1278,7 @@ AI返回决策：
   {
     "analysis": "...",          // 失败原因分析
     "retry_from": "task_2.1",   // 从哪个子任务重试
-    "reasoning": "...",         // 推理过程
-    "suggested_fix": "...",     // 修复建议
-    "confidence": "high"        // 置信度
+    "suggested_fix": "..."      // 修复建议
   }
     ↓
 系统解析AI决策
@@ -1330,9 +1313,8 @@ AI返回评估：
   {
     "main_task_completed": false,
     "analysis": "...",                    // 结果分析
-    "next_strategy": "继续优化",         // 下一轮策略
-    "suggested_improvements": [...],     // 改进建议
-    "confidence": "medium"
+    "retry_from": "task_2.1",            // 重试起点
+    "next_strategy": "继续优化"          // 下一轮策略
   }
     ↓
 系统解析AI评估
@@ -1650,8 +1632,7 @@ prompts/  task_executor.py  ideas_watcher.py
 2. **重试决策**（决策点1）：
    - 决定从哪个子任务开始重试（`retry_from`字段）
    - 提出具体的修复方案（`suggested_fix`字段）
-   - 给出推理过程（`reasoning`字段）
-   - 提供置信度评估（`confidence`字段）
+   - 给出分析（`analysis`字段）
 
 3. **完成判断**（决策点2）：
    - 判断主任务是否完成（`main_task_completed`字段）
@@ -1660,7 +1641,6 @@ prompts/  task_executor.py  ideas_watcher.py
 
 4. **策略建议**（决策点2）：
    - 提出下一轮的优化方向（`next_strategy`字段）
-   - 建议具体的改进措施（`suggested_improvements`字段）
    - 可以主动终止任务（如果认为无法达成）
 
 ### 通信协议
@@ -1704,9 +1684,7 @@ context:
 {
   "analysis": "任务失败原因是模型太大（10层）导致GPU内存不足。task_2.1的网络层增加是直接原因。",
   "retry_from": "task_2.1",
-  "reasoning": "需要重新调整模型结构，减少网络层数",
-  "suggested_fix": "将网络层数从10层减少到6层",
-  "confidence": "high"
+  "suggested_fix": "将网络层数从10层减少到6层"
 }
 ```
 
@@ -2206,7 +2184,7 @@ python orchestrator.py --ideas ideas.md --log-dir logs
 - ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI / OpenCode / Test）
 - ✅ AI完全自主判断完成条件（三层检测策略）
 - ✅ 支持嵌套任务
-- ✅ 支持长时间任务处理（autoagent-exec 10 秒快速失败 + 信号文件轮询）
+- ✅ 支持长时间任务处理（autoagent-exec 快速失败检测 + 信号文件轮询）
 - ✅ AI完全掌控重试策略
 - ✅ 清晰的分层结构
 - ✅ 完善的状态管理（独立 StateManager 模块）

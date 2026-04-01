@@ -48,7 +48,8 @@ autoagent/
 │   ├── reset.bat                # 重置脚本
 │   ├── ideas.md                 # 示例 ideas 文件
 │   ├── todos.yaml               # 示例任务配置
-│   └── cufftdx_optimization/    # 示例项目：cuFFTDx 优化
+│   ├── cufftdx_optimization/    # 示例项目：cuFFTDx 优化
+│   └── mini_compiler/           # 示例项目：迷你编译器
 │
 ├── test/                        # 测试目录
 │   ├── simulation_test/         # 模拟测试（使用 TestProvider）
@@ -123,13 +124,19 @@ autoagent/
   bash_timeout: 300
 
   # Fast-fail timeout for autoagent-exec (in seconds).
-  # Default: 30. Configures how long autoagent-exec waits before
+  # Default: 10. Configures how long autoagent-exec waits before
   # treating a command as long-running.
-  fast_fail_timeout: 30
+  fast_fail_timeout: 10
 
   # Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
   # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
   backoff_max_wait: 300
+
+  # Maximum number of AI review rounds when processing ideas into TODO tasks.
+  max_review_rounds: 5
+
+  # Maximum number of schema-validation retries when processing ideas.
+  max_validation_retries: 2
 
   # Truncation limits for auto-built prompts (in characters)
   # Only 3 keys are used:
@@ -166,8 +173,10 @@ autoagent/
   - `default_model`: 默认 AI 模型，当 CLI `--model` 和 preset 均未指定时使用
   - `session_timeout`: 会话超时配置值（总时间硬上限）
   - `bash_timeout`: 无新输出超时配置值（检测 AI 卡住）
-  - `fast_fail_timeout`: autoagent-exec 快速失败超时时间（默认 30 秒），命令在此时间内退出则立即报告结果，否则转为后台运行
+  - `fast_fail_timeout`: autoagent-exec 快速失败超时时间（默认 10 秒），命令在此时间内退出则立即报告结果，否则转为后台运行
   - `backoff_max_wait`: AI CLI 连续失败时的最大退避等待时间（指数退避：5s→10s→20s→...→上限）
+  - `max_review_rounds`: Ideas 拆解时 AI 审查的最大轮数（默认 3）
+  - `max_validation_retries`: Ideas 拆解时 schema 校验的最大重试次数（默认 2）
   - `truncation_limits`: 控制各类提示词字段的最大字符数，防止上下文过长
   - `preset`: 定义常用参数预设，通过 `--preset <name>` 快速切换配置
 - **变量替换**：Preset 中支持 `${workspace}` 变量，会被替换为当前工作目录
@@ -399,7 +408,7 @@ tasks:
 
 | 额外字段 | 类型 | 必填 | 说明 |
 |---------|------|------|------|
-| `command` | string | 否 | 要执行的命令（可选，AI 可自行决定） |
+| `command` | string | 否 | （已废弃）旧版配置字段。现在 AI 会根据任务描述自主决定要运行的命令，并通过 `autoagent-exec` 启动 |
 
 ## 📊 状态值说明
 
