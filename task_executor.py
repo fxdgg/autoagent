@@ -252,28 +252,33 @@ class SimpleTaskExecutor:
                 )
                 # Always prepend system_prompt_prefix to user prompt
                 effective_prompt = prepend_system_prompt_prefix(prompt, task)
+                # Determine round label for log file naming:
+                # - Subtasks: use parent's round_label (internal retries → same file)
+                # - Top-level: each attempt → own file
+                _log_round = (parent_context or {}).get('round_label') or str(attempts)
                 if conv_logger:
                     conv_logger.log_prompt(
                         task_id=task_id,
                         task_name=task['name'],
                         prompt=effective_prompt,
-                        attempt=attempts,
+                        attempt=_log_round,
                         parent_task_id=parent_task_id,
                         system_prompt=system_prompt,
                     )
-                
+
                 result = client.ask(
                     effective_prompt,
                     system_prompt=system_prompt,
                 )
                 self.last_response_text = result
-                
+
                 # Append response to log AFTER AI returns
                 if conv_logger:
                     conv_logger.log_response(
                         task_id=task_id,
                         response=client.last_full_log or result,
                         parent_task_id=parent_task_id,
+                        attempt=_log_round,
                     )
                 
                 # Check if AI reports LONG_RUNNING_IN_PROGRESS
@@ -281,6 +286,7 @@ class SimpleTaskExecutor:
                 if self._handle_long_running_in_simple_task(
                     result, task, task_id, attempts, client, state_manager,
                     conv_logger=conv_logger, parent_task_id=parent_task_id,
+                    log_round=_log_round,
                 ):
                     # Successfully handled as long-running — treat as completed
                     return True
@@ -346,6 +352,7 @@ class SimpleTaskExecutor:
                         task_id=task_id,
                         response=f"AI Call Error: {e}",
                         parent_task_id=parent_task_id,
+                        attempt=_log_round,
                     )
                 state_manager.add_task_history(task_id, {
                     "attempt": attempts,
@@ -521,6 +528,7 @@ class SimpleTaskExecutor:
     def _handle_long_running_in_simple_task(
         self, response: str, task: dict, task_id: str, attempt: int,
         client, state_manager, conv_logger=None, parent_task_id: str = None,
+        log_round: str = None,
     ) -> bool:
         """
         Handle LONG_RUNNING_IN_PROGRESS in a simple task.
@@ -601,6 +609,7 @@ class SimpleTaskExecutor:
             conv_logger=conv_logger, parent_task_id=parent_task_id,
             signal_file=signal_file,
             exec_script_path=exec_script_path,
+            log_round=log_round or str(attempt),
         )
         
         if analyze_result.success:
@@ -672,7 +681,12 @@ class NestedTaskExecutor:
         
         current_state = state_manager.get_task_state(task_id)
         attempts = current_state.get('attempts', 0)
-        
+
+        # Round labelling: X.Y where X = main evaluation round, Y = failure sub-round
+        # X increments after each main_task_evaluation; Y increments after each failure_analysis
+        _main_round = len(current_state.get('main_task_evaluations', [])) + 1
+        _failure_sub_round = 1
+
         while attempts < max_attempts:
             attempts += 1
             state_manager.mark_task_status(
@@ -706,12 +720,13 @@ class NestedTaskExecutor:
             # Cap composite fix context to avoid oversized prompts
             if latest_fix and len(latest_fix) > limits.get('max'):
                 latest_fix = "(truncated)\n..." + latest_fix[-limits.get('max'):]
-            
+
             parent_context = {
                 'subtasks': subtasks,
                 'suggested_fix': latest_fix,
                 'ai_decisions': ai_decisions,
                 'main_task_criteria': task.get('completion_criteria', ''),
+                'round_label': f"{_main_round}.{_failure_sub_round}",
             }
 
             context_isolation = task.get('context_isolation', True)
@@ -747,15 +762,17 @@ class NestedTaskExecutor:
                     print(f"\n   ❌ Subtask {subtask_id} failed!")
                     
                     # AI Decision Point 1: Analyze failure
+                    round_label = f"{_main_round}.{_failure_sub_round}"
                     ai_decision = self._ai_analyze_failure(
                         client, task, subtask, subtasks, result, state_manager,
                         conv_logger=conv_logger, round_num=attempts,
+                        round_label=round_label,
                     )
-                    
+
                     # Reset subtasks based on AI decision
                     retry_from = ai_decision.get('retry_from', subtask_id)
                     self._reset_subtasks_from(retry_from, subtasks, state_manager)
-                    
+
                     # Record AI decision
                     state_manager.add_ai_decision(task_id, {
                         "attempt": attempts,
@@ -764,7 +781,10 @@ class NestedTaskExecutor:
                         "retry_from": retry_from,
                         "suggested_fix": ai_decision.get('suggested_fix', ''),
                     })
-                    
+
+                    # Increment failure sub-round for next retry cycle
+                    _failure_sub_round += 1
+
                     break  # Break subtask loop, start new round
                 else:
                     # Capture response for next subtask's context
@@ -778,7 +798,7 @@ class NestedTaskExecutor:
             print(f"\n   📊 All subtasks completed, evaluating main task...")
             ai_evaluation = self._ai_evaluate_main_task(
                 client, task, subtasks, state_manager,
-                conv_logger=conv_logger, round_num=attempts,
+                conv_logger=conv_logger, round_num=_main_round,
             )
             
             if ai_evaluation.get('main_task_completed', False):
@@ -815,6 +835,10 @@ class NestedTaskExecutor:
                     "next_strategy": ai_evaluation.get('next_strategy', ''),
                     "retry_from": retry_from,
                 })
+
+                # Advance to next main round
+                _main_round += 1
+                _failure_sub_round = 1
         
         # Max attempts reached
         print(f"\n   ❌ Nested task {task_id} failed after {max_attempts} rounds")
@@ -827,7 +851,7 @@ class NestedTaskExecutor:
 
     def _ai_analyze_failure(
         self, client, task, failed_subtask, all_subtasks, result, state_manager,
-        conv_logger=None, round_num=1,
+        conv_logger=None, round_num=1, round_label=None,
     ) -> dict:
         """
         AI Decision Point 1: Analyze subtask failure.
@@ -885,15 +909,17 @@ class NestedTaskExecutor:
 
         try:
             # Write prompt to log BEFORE calling AI (crash safety)
+            _rl = round_label or str(round_num)
             if conv_logger:
                 conv_logger.log_nested_prompt(
                     task_id=str(task['id']),
                     task_name=task['name'],
                     call_type="failure_analysis",
                     prompt=effective_prompt,
-                    round_num=round_num,
+                    round_num=_rl,
+                    failed_subtask_id=failed_id,
                 )
-            
+
             decision = client.ask(effective_prompt, expect_json=True)
             print(f"      AI Analysis: {decision.get('analysis', 'N/A')[:200]}")
             print(f"      AI Decision: retry_from = {decision.get('retry_from', failed_id)}")
@@ -905,6 +931,9 @@ class NestedTaskExecutor:
                     task_id=str(task['id']),
                     task_name=task['name'],
                     response=response_for_log,
+                    call_type="failure_analysis",
+                    round_num=_rl,
+                    failed_subtask_id=failed_id,
                 )
             return decision
         except AICallError as e:
@@ -978,7 +1007,7 @@ class NestedTaskExecutor:
                     prompt=prompt,
                     round_num=round_num,
                 )
-            
+
             evaluation = client.ask(prompt, expect_json=True)
             completed = evaluation.get('main_task_completed', False)
             print(f"      AI Evaluation: {'✅ COMPLETED' if completed else '❌ NOT COMPLETED'}")
@@ -991,6 +1020,8 @@ class NestedTaskExecutor:
                     task_id=str(task['id']),
                     task_name=task['name'],
                     response=response_for_log,
+                    call_type="main_task_evaluation",
+                    round_num=round_num,
                 )
             return evaluation
         except AICallError as e:
@@ -1200,6 +1231,7 @@ class LoopingTaskExecutor:
         """
         task_id = str(task['id'])
         attempts = 0
+        _failure_sub_round = 1
 
         while attempts < max_attempts:
             attempts += 1
@@ -1208,7 +1240,7 @@ class LoopingTaskExecutor:
                 print(f"\n   📋 Retry attempt #{attempts} within loop {loop_idx}")
 
             all_completed = True
-            
+
             # Build parent context for subtask prompt enrichment
             parent_state = state_manager.get_task_state(task_id)
             ai_decisions = parent_state.get('ai_decisions', [])
@@ -1222,6 +1254,7 @@ class LoopingTaskExecutor:
                 'suggested_fix': latest_fix,
                 'ai_decisions': ai_decisions,
                 'main_task_criteria': task.get('completion_criteria', ''),
+                'round_label': f"{loop_idx}.{_failure_sub_round}",
             }
 
             context_isolation = task.get('context_isolation', True)
@@ -1257,9 +1290,11 @@ class LoopingTaskExecutor:
                     print(f"\n   ❌ Subtask {subtask_id} failed!")
 
                     # AI analyzes failure and decides retry_from
+                    round_label = f"{loop_idx}.{_failure_sub_round}"
                     ai_decision = self._ai_analyze_failure(
                         client, task, subtask, subtasks, result, state_manager,
                         conv_logger=conv_logger, loop_idx=loop_idx,
+                        round_label=round_label,
                     )
 
                     retry_from = ai_decision.get('retry_from', subtask_id)
@@ -1274,6 +1309,8 @@ class LoopingTaskExecutor:
                         "suggested_fix": ai_decision.get('suggested_fix', ''),
                     })
 
+                    _failure_sub_round += 1
+
                     break  # Break subtask loop, retry
                 else:
                     # Capture response for next subtask's context
@@ -1286,7 +1323,7 @@ class LoopingTaskExecutor:
 
     def _ai_analyze_failure(
         self, client, task, failed_subtask, all_subtasks, result, state_manager,
-        conv_logger=None, loop_idx=1,
+        conv_logger=None, loop_idx=1, round_label=None,
     ) -> dict:
         """
         AI analyzes subtask failure and decides retry strategy.
@@ -1355,13 +1392,15 @@ class LoopingTaskExecutor:
         effective_prompt = prompt
 
         try:
+            _rl = round_label or str(loop_idx)
             if conv_logger:
                 conv_logger.log_nested_prompt(
                     task_id=task_id,
                     task_name=task['name'],
                     call_type="looping_failure_analysis",
                     prompt=effective_prompt,
-                    round_num=loop_idx,
+                    round_num=_rl,
+                    failed_subtask_id=failed_id,
                 )
 
             decision = client.ask(effective_prompt, expect_json=True)
@@ -1375,6 +1414,9 @@ class LoopingTaskExecutor:
                     task_id=task_id,
                     task_name=task['name'],
                     response=response_for_log,
+                    call_type="looping_failure_analysis",
+                    round_num=_rl,
+                    failed_subtask_id=failed_id,
                 )
             return decision
         except AICallError as e:
@@ -1626,27 +1668,29 @@ class SubtaskExecutor:
                 )
                 # Always prepend system_prompt_prefix to user prompt
                 effective_prompt = prepend_system_prompt_prefix(prompt, subtask)
+                _log_round = (parent_context or {}).get('round_label') or str(attempt)
                 if conv_logger:
                     conv_logger.log_prompt(
                         task_id=subtask_id,
                         task_name=subtask['name'],
                         prompt=effective_prompt,
-                        attempt=attempt,
+                        attempt=_log_round,
                         parent_task_id=parent_task_id,
                         system_prompt=system_prompt,
                     )
-                
+
                 result = client.ask(
                     effective_prompt,
                     system_prompt=system_prompt,
                 )
-                
+
                 # Append response to log AFTER AI returns
                 if conv_logger:
                     conv_logger.log_response(
                         task_id=subtask_id,
                         response=client.last_full_log or result,
                         parent_task_id=parent_task_id,
+                        attempt=_log_round,
                     )
                 
                 # Check if AI reported LONG_RUNNING_IN_PROGRESS
@@ -1684,6 +1728,7 @@ class SubtaskExecutor:
                         conv_logger=conv_logger, parent_task_id=parent_task_id,
                         parent_context=parent_context, signal_file=signal_file,
                         exec_script_path=exec_script_path,
+                        log_round=_log_round,
                     )
                     
                     if analyze_result.success:
@@ -1951,6 +1996,7 @@ class SubtaskExecutor:
         conv_logger=None, parent_task_id: str = None,
         parent_context: dict = None, signal_file: str = None,
         exec_script_path: str = "",
+        log_round: str = None,
     ) -> SubtaskResult:
         """
         Ask AI to analyze the result of a long-running task.
@@ -1990,24 +2036,26 @@ class SubtaskExecutor:
         try:
             # No system_prompt or system_prompt_prefix needed here —
             # this is a follow-up message in the same conversation context.
+            _log_round = log_round or (parent_context or {}).get('round_label') or '1'
             if conv_logger:
                 conv_logger.log_prompt(
                     task_id=subtask_id,
                     task_name=subtask['name'],
                     prompt=prompt,
-                    attempt=1,
+                    attempt=_log_round,
                     parent_task_id=parent_task_id,
                     metadata={"type": "long_running_analysis"},
                 )
-            
+
             result = client.ask(prompt)
-            
+
             # Append response to log AFTER AI returns
             if conv_logger:
                 conv_logger.log_response(
                     task_id=subtask_id,
                     response=client.last_full_log or result,
                     parent_task_id=parent_task_id,
+                    attempt=_log_round,
                 )
             
             # Reuse the same robust check logic from SimpleTaskExecutor

@@ -1185,12 +1185,14 @@ autoagent/
 │       │   └── lr_<task_id>_output.log    # long_running 命令输出日志（自动生成）
 │       └── conversations/             # 对话日志目录
 │           ├── ideas.md               # Ideas 拆解日志（prompt + response）
-│           ├── task_1.md              # 简单任务的对话日志
+│           ├── task_1_round_1.md      # 简单任务第 1 轮对话
+│           ├── task_1_round_2.md      # 简单任务第 2 轮对话
 │           ├── task_2.md              # 嵌套任务的索引文件
 │           └── subtask_2/             # 嵌套任务的子任务目录
-│               ├── task_2.1.md
-│               ├── task_2.2.md
-│               └── _decisions.md      # AI 决策日志
+│               ├── task_2.1_round_1.1.md
+│               ├── task_2.1_round_1.2.md
+│               ├── failure_analysis_2.2_round_1.1.md
+│               └── main_task_evaluation_round_1.md
 └── README.md
 ```
 
@@ -1766,39 +1768,47 @@ class ConversationLogger:
     ├── plans_state.yaml               # Ideas 状态跟踪
     └── conversations/                 # 对话日志（固定目录名）
         ├── ideas.md                    # Ideas 拆解日志（prompt + AI 返回的 YAML）
-        ├── task_1.md                   # 简单任务：完整对话记录
-        ├── task_2.md                   # 嵌套任务：索引文件（含子任务链接）
+        ├── task_1_round_1.md           # 简单任务：第 1 轮对话
+        ├── task_1_round_2.md           # 简单任务：第 2 轮对话
+        ├── task_2.md                   # 嵌套任务：索引文件（含子任务和决策链接）
         └── subtask_2/                  # 嵌套任务的子任务目录
-            ├── task_2.1.md             # 子任务 2.1 的对话记录
-            ├── task_2.2.md             # 子任务 2.2 的对话记录
-            └── _decisions.md           # AI 决策日志（失败分析、主任务评估）
+            ├── task_2.1_round_1.1.md     # 子任务 2.1，主轮1 子轮1
+            ├── task_2.1_round_1.2.md     # 子任务 2.1，主轮1 子轮2（failure后重试）
+            ├── task_2.2_round_1.1.md     # 子任务 2.2，主轮1 子轮1
+            ├── failure_analysis_2.2_round_1.1.md          # 子任务 2.2 失败分析
+            ├── main_task_evaluation_round_1.md    # 主任务评估第 1 轮
+            └── main_task_evaluation_round_2.md    # 主任务评估第 2 轮
 ```
 
 ### 日志内容格式
 
-每个日志文件使用 Markdown 格式，包含：
+每轮对话写入独立的 Markdown 文件（`task_{id}_round_{N}.md`）：
 
 ```markdown
-# Task 1: 下载数据集
+# Task 1: 下载数据集 — Round 1
 
-## Attempt #1
+## System Prompt
 
-### Prompt
+```
+系统提示词...
+```
+
+## Prompt
 
 ```
 完整的 prompt 内容...
 ```
 
-### Response
+## Response
 
 AI 的完整响应内容...
-
----
-
-## Attempt #2 (failure_analysis)
-
-...
 ```
+
+嵌套任务的 AI 决策也按类型+轮次拆分为独立文件：
+
+- `failure_analysis_{subtask_id}_round_{N}.md` — 子任务失败分析
+- `main_task_evaluation_round_{N}.md` — 主任务完成评估
+- `looping_failure_analysis_{subtask_id}_round_{N}.md` — 循环任务失败分析
 
 Ideas 拆解日志（`ideas.md`）格式：
 

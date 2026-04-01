@@ -742,16 +742,18 @@ def log_response(
     task_id: str,
     response: str,
     parent_task_id: Optional[str] = None,
+    attempt: Optional[int] = None,
 )
 ```
 
-在 AI 返回**之后**将 response 追加到日志文件。必须在 `log_prompt()` 之后调用。
+在 AI 返回**之后**将 response 写入对应的 per-round 日志文件。必须在 `log_prompt()` 之后调用，`attempt` 参数需与 `log_prompt()` 传入的值一致。
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `task_id` | str | 任务 ID |
 | `response` | str | AI 的响应 |
 | `parent_task_id` | str | 父任务 ID（子任务时提供） |
+| `attempt` | int | 尝试次数（用于定位 round 文件，需与 `log_prompt` 一致） |
 
 #### log_conversation（便捷包装器）
 
@@ -783,11 +785,17 @@ def log_conversation(
 #### log_nested_prompt / log_nested_response（推荐）
 
 ```python
-def log_nested_prompt(self, task_id: str, task_name: str, call_type: str, prompt: str, round_num: int)
-def log_nested_response(self, task_id: str, task_name: str, response)
+def log_nested_prompt(self, task_id: str, task_name: str, call_type: str, prompt: str, round_num: int, failed_subtask_id: Optional[str] = None)
+def log_nested_response(self, task_id: str, task_name: str, response, call_type: Optional[str] = None, round_num: Optional[int] = None, failed_subtask_id: Optional[str] = None)
 ```
 
-嵌套任务 AI 决策调用的两步写入方法。`log_nested_prompt` 在 AI 调用前写入 prompt，`log_nested_response` 在 AI 返回后追加 response，均写入 `subtask_<id>/_decisions.md`。
+嵌套任务 AI 决策调用的两步写入方法。每个决策写入独立文件：
+
+- `failure_analysis_{subtask_id}_round_{N}.md` — 子任务失败分析
+- `looping_failure_analysis_{subtask_id}_round_{N}.md` — 循环任务失败分析
+- `main_task_evaluation_round_{N}.md` — 主任务完成评估
+
+`failed_subtask_id` 参数在 failure_analysis 类型时提供，用于在文件名中标识失败的子任务。
 
 #### log_nested_task_ai_call（便捷包装器）
 

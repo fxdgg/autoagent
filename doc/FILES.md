@@ -65,10 +65,15 @@ autoagent/
         │   └── lr_<task_id>_output.log  # long_running 命令输出日志
         └── conversations/               # 对话日志目录
             ├── ideas.md                 # Ideas 拆解日志
-            ├── task_1.md                # 简单任务的对话日志
+            ├── task_1_round_1.md        # 简单任务第 1 轮对话
+            ├── task_1_round_2.md        # 简单任务第 2 轮对话
             └── subtask_2/               # 嵌套/循环任务的子任务目录
-                ├── task_2.1.md
-                └── _decisions.md        # AI 决策日志
+                ├── task_2.1_round_1.1.md                      # 子任务，主轮1 子轮1
+                ├── task_2.1_round_1.2.md                      # failure 后重试，主轮1 子轮2
+                ├── task_2.2_round_1.1.md
+                ├── failure_analysis_2.2_round_1.1.md          # 子任务 2.2 失败分析
+                ├── main_task_evaluation_round_1.md            # 主任务评估第 1 轮
+                └── main_task_evaluation_round_2.md
 ```
 
 ## 📄 文件说明
