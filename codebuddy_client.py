@@ -33,6 +33,23 @@ class AICallError(Exception):
     pass
 
 
+class BashTimeoutError(AICallError):
+    """Raised when the AI produces no new output for bash_timeout seconds.
+
+    This usually means a long-running command is blocking the session.
+    The caller should inject long-running-command guidance in the next prompt.
+    """
+    pass
+
+
+class SessionTimeoutError(AICallError):
+    """Raised when the total session time exceeds session_timeout.
+
+    The caller should tell the AI it was interrupted by the user (Ctrl+C).
+    """
+    pass
+
+
 class AIClient:
     """
     AI CLI client with context management.
@@ -44,7 +61,8 @@ class AIClient:
     - OpenCode (opencode)
     
     Each main task should create its own AIClient instance.
-    Subtasks within the same main task share context via session_id (--resume).
+    Sessions are reset between subtasks to prevent unbounded context growth.
+    Retries within the same subtask share the session via session_id (--resume).
     """
 
     def __init__(
@@ -52,6 +70,7 @@ class AIClient:
         provider: AIProvider = None,
         workspace: str = ".",
         timeout: int = 3600,
+        bash_timeout: int = 300,
         context_id: str = None,
         # Legacy parameters for backward compatibility
         codebuddy_path: str = None,
@@ -63,7 +82,10 @@ class AIClient:
         Args:
             provider: AI provider instance (takes precedence over legacy params)
             workspace: Working directory
-            timeout: Default timeout in seconds
+            timeout: Session timeout in seconds (hard cap on total session time)
+            bash_timeout: No-new-output timeout in seconds.  If the AI
+                produces no new output for this many seconds, the session
+                is killed.
             context_id: Context identifier for logging/tracking
             codebuddy_path: (Legacy) Path to CodeBuddy executable
             model: (Legacy) AI model to use
@@ -80,6 +102,7 @@ class AIClient:
         
         self.workspace = workspace
         self.timeout = timeout
+        self.bash_timeout = bash_timeout
         self.context_id = context_id
         self._session_id = None  # Session ID for conversation continuity
         # Full conversation log including tool calls (set after each ask() call)
@@ -218,14 +241,26 @@ class AIClient:
             stdout_chunks = []
             assistant_text_parts = []
             full_log_parts = []  # Collect full log including tool calls
-            deadline = time.monotonic() + effective_timeout
+            session_deadline = time.monotonic() + effective_timeout
+            bash_timeout = self.bash_timeout
+            last_output_time = time.monotonic()
+            _timeout_type = None  # "session" or "bash"
             try:
                 for line in process.stdout:
-                    if time.monotonic() > deadline:
+                    now = time.monotonic()
+                    if now > session_deadline:
+                        _timeout_type = "session"
                         process.kill()
                         raise subprocess.TimeoutExpired(
                             full_cmd, effective_timeout
                         )
+                    if bash_timeout and (now - last_output_time) > bash_timeout:
+                        _timeout_type = "bash"
+                        process.kill()
+                        raise subprocess.TimeoutExpired(
+                            full_cmd, bash_timeout
+                        )
+                    last_output_time = now
                     stdout_chunks.append(line)
                     # Parse stream-json lines for real-time display
                     self._handle_stream_line(
@@ -233,7 +268,14 @@ class AIClient:
                     )
             except subprocess.TimeoutExpired:
                 process.kill()
-                raise
+                if _timeout_type == "bash":
+                    raise BashTimeoutError(
+                        f"{self.provider.name} bash timed out — no new output for {bash_timeout}s"
+                    )
+                else:
+                    raise SessionTimeoutError(
+                        f"{self.provider.name} session timed out after {effective_timeout}s"
+                    )
 
             try:
                 process.wait(timeout=30)
@@ -284,10 +326,14 @@ class AIClient:
                 return self._parse_json_response(response)
             return response
 
-        except subprocess.TimeoutExpired:
+        except (BashTimeoutError, SessionTimeoutError):
             self._consecutive_failures += 1
-            raise AICallError(
-                f"{self.provider.name} timed out after {effective_timeout}s"
+            raise
+        except subprocess.TimeoutExpired:
+            # Safety net for process.wait() timeout after stdout closed
+            self._consecutive_failures += 1
+            raise SessionTimeoutError(
+                f"{self.provider.name} session timed out after {effective_timeout}s"
             )
         except AICallError:
             self._consecutive_failures += 1
@@ -371,8 +417,26 @@ class AIClient:
         # DEBUG: Log the stream json (disabled currently)
         # logger.debug(f"[{self.context_id}] Event content: {json.dumps(event, ensure_ascii=False)[:500]}")
         
-        if event_type == "assistant":
+        # Capture session_id as early as possible from any event that
+        # carries it (system/init, assistant, result, step_start).
+        # This is critical for Ctrl+C recovery: if the user interrupts
+        # before the final "result" event, we still have the session_id.
+        early_sid = event.get("session_id", "")
+        if early_sid and early_sid != self._session_id:
+            self._session_id = early_sid
+            if self._on_session_id_changed:
+                self._on_session_id_changed(early_sid)
+
+        if event_type == "system":
+            # CodeBuddy CLI: system/init event — session_id already
+            # captured above via the generic early-capture block.
+            pass
+
+        elif event_type == "assistant":
             # CodeBuddy/Claude format: AI message with content[] array
+            # Ensure newline between separate assistant messages
+            if assistant_text_parts and not assistant_text_parts[-1].endswith("\n"):
+                assistant_text_parts.append("\n")
             message = event.get("message", {})
             content_blocks = message.get("content", [])
             for block in content_blocks:
@@ -395,6 +459,9 @@ class AIClient:
             # Gemini format: "message" event with "role" field
             role = event.get("role", "")
             if role == "assistant":
+                # Ensure newline between separate assistant messages
+                if assistant_text_parts and not assistant_text_parts[-1].endswith("\n"):
+                    assistant_text_parts.append("\n")
                 content = event.get("content", "")
                 if isinstance(content, str) and content:
                     assistant_text_parts.append(content)
@@ -473,7 +540,9 @@ class AIClient:
         elif event_type == "result":
             # Final result — supports both CodeBuddy/Claude and Gemini formats
             result_text = event.get("result", "")
-            if result_text:
+            # Only use result_text as fallback when no text was collected
+            # from streaming assistant events, to avoid duplicating content.
+            if result_text and not assistant_text_parts:
                 assistant_text_parts.append(result_text)
 
             # Extract session_id from result event (Claude Code / CodeBuddy)
@@ -694,22 +763,25 @@ class AIClientSDK:
         provider: AIProvider = None,
         workspace: str = ".",
         timeout: int = 3600,
+        bash_timeout: int = 300,
         context_id: str = None,
         # Legacy parameters for backward compatibility
         codebuddy_path: str = None,
         model: str = None,
     ):
         """
-        Initialize AIClientSDK.
+        Initialize AIClient.
         
         Args:
-            provider: AI provider instance (must be CodeBuddyProvider or None)
+            provider: AI provider instance (takes precedence over legacy params)
             workspace: Working directory
-            timeout: Default timeout in seconds
+            timeout: Session timeout in seconds (hard cap on total session time)
+            bash_timeout: No-new-output timeout in seconds.  If the AI
+                produces no new output for this many seconds, the session
+                is killed.
             context_id: Context identifier for logging/tracking
             codebuddy_path: (Legacy) Path to CodeBuddy executable
-            model: (Legacy) AI model to use
-        """
+            model: (Legacy) AI model to use        """
         # Support both new provider-based and legacy initialization
         if provider is not None:
             self.provider = provider
@@ -721,6 +793,7 @@ class AIClientSDK:
 
         self.workspace = workspace
         self.timeout = timeout
+        self.bash_timeout = bash_timeout
         self.context_id = context_id
         self._session_id = None  # SDK session ID for conversation continuity
         self.last_full_log = ""
@@ -852,6 +925,7 @@ class AIClientSDK:
                 query as sdk_query,
                 AssistantMessage,
                 ResultMessage,
+                SystemMessage,
                 CodeBuddyAgentOptions,
             )
             from codebuddy_agent_sdk.types import (
@@ -871,7 +945,16 @@ class AIClientSDK:
         assistant_text_parts = []
         full_log_parts = []
 
-        async def _do_query():
+        # Run the async query with a timeout
+        # We use session timeout (hard cap) for asyncio.wait_for,
+        # and track last_output_time inside _do_query for bash timeout.
+        _bash_timeout_triggered = False
+        _last_output_time = time.monotonic()
+        _bash_timeout_val = self.bash_timeout
+
+        # Wrap _do_query to add bash_timeout checking
+        async def _do_query_with_bash_timeout():
+            nonlocal _bash_timeout_triggered, _last_output_time
             # Build options
             options = CodeBuddyAgentOptions(
                 model=self.provider.model,
@@ -891,8 +974,6 @@ class AIClientSDK:
 
             # Extra args from provider
             if self.provider.extra_args:
-                # Parse space-separated extra args into dict
-                # e.g. "--debug --verbose" -> {"debug": None, "verbose": None}
                 parts = self.provider.extra_args.split()
                 i = 0
                 while i < len(parts):
@@ -911,82 +992,65 @@ class AIClientSDK:
             )
 
             async for message in sdk_query(prompt=prompt, options=options):
+                # Check bash timeout (no new output for N seconds)
+                now = time.monotonic()
+                if _bash_timeout_val and (now - _last_output_time) > _bash_timeout_val:
+                    _bash_timeout_triggered = True
+                    raise asyncio.CancelledError("bash timeout")
+                _last_output_time = now
+
+                if isinstance(message, SystemMessage):
+                    if hasattr(message, 'data') and isinstance(message.data, dict):
+                        sid = message.data.get('session_id', '')
+                        if sid and sid != self._session_id:
+                            self._session_id = sid
+                            if self._on_session_id_changed:
+                                self._on_session_id_changed(sid)
+                    continue
+
                 if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, ThinkingBlock):
-                            thinking_text = block.thinking
-                            if thinking_text:
-                                # Display thinking in a visually distinct way
-                                sys.stdout.write("\n💭 [Thinking]\n")
-                                for line in thinking_text.splitlines():
-                                    sys.stdout.write(f"  │ {line}\n")
-                                sys.stdout.write("  └─\n")
-                                sys.stdout.flush()
-                                # Include thinking in full log
-                                full_log_parts.append(
-                                    f"\n<details><summary>💭 Thinking</summary>\n\n{thinking_text}\n\n</details>\n"
-                                )
-                        elif isinstance(block, TextBlock):
-                            text = block.text
+                    # Ensure newline between separate assistant messages
+                    if assistant_text_parts and not assistant_text_parts[-1].endswith("\n"):
+                        assistant_text_parts.append("\n")
+                    for block in (message.content or []):
+                        if isinstance(block, TextBlock):
+                            text = block.text or ""
                             if text:
-                                assistant_text_parts.append(text)
-                                full_log_parts.append(text)
                                 sys.stdout.write(text)
                                 sys.stdout.flush()
+                                assistant_text_parts.append(text)
+                                full_log_parts.append(text)
+                        elif isinstance(block, ThinkingBlock):
+                            pass
                         elif isinstance(block, ToolUseBlock):
-                            self._display_tool_use(block.name, block.input)
-                            tool_log = self._format_tool_use_for_log(
-                                block.name, block.input
+                            tool_name = block.name or "unknown"
+                            tool_input = block.input or {}
+                            self._display_tool_use(tool_name, tool_input)
+                            full_log_parts.append(
+                                f"\n🔧 [Tool: {tool_name}] Input: "
+                                f"{json.dumps(tool_input, ensure_ascii=False)[:500]}\n"
                             )
-                            full_log_parts.append(tool_log)
                         elif isinstance(block, ToolResultBlock):
                             content = block.content or ""
-                            is_error = block.is_error or False
-                            if isinstance(content, str) and content:
-                                preview = content[:500]
-                                if len(content) > 500:
-                                    preview += f"... ({len(content)} chars total)"
-                                sys.stdout.write(f"   ↳ {preview}\n")
-                                sys.stdout.flush()
-                                error_marker = " ❌" if is_error else ""
-                                log_content = content[:2000]
-                                if len(content) > 2000:
-                                    log_content += f"\n... ({len(content)} chars total)"
-                                full_log_parts.append(
-                                    f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
+                            if isinstance(content, list):
+                                content = " ".join(
+                                    str(c.get("text", "")) if isinstance(c, dict) else str(c)
+                                    for c in content
                                 )
-
-                elif isinstance(message, UserMessage):
-                    # User messages may contain tool results
-                    if hasattr(message, 'content') and isinstance(message.content, list):
-                        for block in message.content:
-                            if isinstance(block, ToolResultBlock):
-                                content = block.content or ""
-                                is_error = block.is_error or False
-                                if isinstance(content, str) and content:
-                                    preview = content[:500]
-                                    if len(content) > 500:
-                                        preview += f"... ({len(content)} chars total)"
-                                    sys.stdout.write(f"   ↳ {preview}\n")
-                                    sys.stdout.flush()
-                                    error_marker = " ❌" if is_error else ""
-                                    log_content = content[:2000]
-                                    if len(content) > 2000:
-                                        log_content += f"\n... ({len(content)} chars total)"
-                                    full_log_parts.append(
-                                        f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
-                                    )
+                            preview = str(content)[:500]
+                            full_log_parts.append(f"   Result: {preview}\n")
 
                 elif isinstance(message, ResultMessage):
-                    # Capture session_id for future resumption
                     if message.session_id:
                         self._session_id = message.session_id
-                        # Notify external listener for state persistence
                         if self._on_session_id_changed:
                             self._on_session_id_changed(message.session_id)
 
                     result_text = message.result or ""
-                    if result_text:
+                    # Only use result_text as fallback when no text was
+                    # collected from streaming AssistantMessage events,
+                    # to avoid duplicating content.
+                    if result_text and not assistant_text_parts:
                         assistant_text_parts.append(result_text)
 
                     is_error = message.is_error
@@ -1006,24 +1070,28 @@ class AIClientSDK:
                             )
 
                 elif isinstance(message, StreamEvent):
-                    # StreamEvent contains partial updates during streaming;
-                    # we can optionally log them but they're already reflected
-                    # in AssistantMessage blocks above.
                     pass
 
-        # Run the async query with a timeout
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
                 loop.run_until_complete(
-                    asyncio.wait_for(_do_query(), timeout=timeout)
+                    asyncio.wait_for(_do_query_with_bash_timeout(), timeout=timeout)
                 )
             finally:
                 loop.close()
+        except asyncio.CancelledError:
+            if _bash_timeout_triggered:
+                raise BashTimeoutError(
+                    f"CodeBuddy SDK bash timed out — no new output for {_bash_timeout_val}s"
+                )
+            raise SessionTimeoutError(
+                f"CodeBuddy SDK session timed out after {timeout}s"
+            )
         except asyncio.TimeoutError:
-            raise AICallError(
-                f"CodeBuddy SDK timed out after {timeout}s"
+            raise SessionTimeoutError(
+                f"CodeBuddy SDK session timed out after {timeout}s"
             )
 
         response = "".join(assistant_text_parts).strip()
@@ -1165,6 +1233,7 @@ class AIClientTest:
         provider: AIProvider = None,
         workspace: str = ".",
         timeout: int = 3600,
+        bash_timeout: int = 300,
         context_id: str = None,
         # Legacy parameters (ignored for test client)
         codebuddy_path: str = None,
@@ -1318,6 +1387,7 @@ class AIClientTest:
         # We read the script to extract the embedded exec_path and log_dir.
         exec_path = None
         log_dir = None
+        fast_fail_timeout = 10  # default; may be overridden from script content
 
         script_match = re.search(
             r'["\'](.+?/scripts/autoagent-exec\.(?:bat|sh))["\']',
@@ -1336,6 +1406,12 @@ class AIClientTest:
                 if inner_match:
                     exec_path = inner_match.group(1)
                     log_dir = inner_match.group(2)
+                # Also extract --fast-fail-timeout if present
+                fft_match = re.search(
+                    r'--fast-fail-timeout\s+(\d+)',
+                    script_content,
+                )
+                fast_fail_timeout = int(fft_match.group(1)) if fft_match else 10
             except OSError as e:
                 logger.warning(
                     f"[{self.context_id}] Failed to read autoagent-exec script "
@@ -1374,27 +1450,16 @@ class AIClientTest:
         print(f"   task_id:   {task_id}")
         print(f"   command:   {cmd}")
 
-        # Build the real autoagent_exec.py command as a list to avoid
-        # shell quoting issues (especially on Linux where /bin/sh handles
-        # quotes differently from cmd.exe).
-        # We use shlex.split to properly tokenize the cmd string (which
-        # may contain quoted arguments like: python -c "import time; ...")
-        import shlex
-        if os.name == 'nt':
-            # On Windows, shlex.split doesn't handle Windows paths well;
-            # use a simple split but preserve quoted strings
-            cmd_parts = shlex.split(cmd, posix=False)
-            # Remove surrounding quotes that shlex.split(posix=False) preserves
-            cmd_parts = [p.strip('"').strip("'") for p in cmd_parts]
-        else:
-            cmd_parts = shlex.split(cmd)
-
+        # Build the real autoagent_exec.py command.
+        # Use --cmd to pass the entire command as a single shell string,
+        # preserving shell operators (&&, |, ;, etc.) correctly.
         full_cmd = [
             sys.executable, exec_path,
             '--log-dir', log_dir,
             '--task-id', task_id,
-            '--',
-        ] + cmd_parts
+            '--fast-fail-timeout', str(fast_fail_timeout),
+            '--cmd', cmd,
+        ]
 
         try:
             result = subprocess.run(
@@ -1404,7 +1469,7 @@ class AIClientTest:
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                timeout=30,  # autoagent-exec itself should return within ~10s
+                timeout=fast_fail_timeout + 20,  # autoagent-exec itself should return within fast_fail_timeout
                 cwd=self.workspace,
             )
             exec_output = result.stdout.strip()

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CodeBuddy Todo Orchestrator - Main entry point.
+AutoAgent - Main entry point.
 
 An intelligent task orchestration system that uses CodeBuddy AI to
 automatically execute, evaluate, and iterate on tasks defined in YAML.
@@ -103,7 +103,8 @@ class TodoOrchestrator:
         state_file: str = None,
         provider: AIProvider = None,
         workspace: str = ".",
-        timeout: int = 300,
+        timeout: int = 3600,
+        bash_timeout: int = 300,
         log_dir: str = None,
         ideas_file: str = None,
         idle_interval: int = 30,
@@ -123,7 +124,11 @@ class TodoOrchestrator:
                         from log_dir automatically.
             provider: AI provider instance (takes precedence over legacy params)
             workspace: Working directory for AI tool
-            timeout: Default timeout for AI calls
+            timeout: Default session timeout for AI calls (hard cap on
+                total session time).
+            bash_timeout: No-new-output timeout for AI calls.  If the AI
+                produces no new output for this many seconds, the session
+                is killed and the next prompt includes long-running guidance.
             log_dir: Root directory for all output files (conversation logs,
                      state files, orchestrator.log).  Defaults to ".autoagent"
                      relative to the current working directory.
@@ -131,21 +136,21 @@ class TodoOrchestrator:
             idle_interval: Seconds between idle checks for new ideas (default: 30)
             use_cli: If True, use CLI subprocess instead of CodeBuddy Agent SDK
                      (only valid when provider is codebuddy)
+            backoff_max_wait: Max wait time (seconds) for exponential backoff
+                     when AI CLI calls fail repeatedly (default: 300)
+            model_roles: Model role dict ({"plan": ..., "default": ..., "lite": ...}),
+                     parsed by parse_model_spec(). None uses provider's default model.
             codebuddy_path: (Legacy) Path to CodeBuddy executable
             model: (Legacy) AI model to use
         """
         self.todos_file = todos_file
         self.workspace = os.path.abspath(workspace)
         self.timeout = timeout
+        self.bash_timeout = bash_timeout
         self.idle_interval = idle_interval
         self.use_cli = use_cli
         self.backoff_max_wait = backoff_max_wait
-        self.model_roles = model_roles or {
-            "plan": self.provider.model if provider else "",
-            "default": self.provider.model if provider else "",
-            "simple": self.provider.model if provider else "",
-        }
-        
+
         # Store provider (or create from legacy params)
         if provider is not None:
             self.provider = provider
@@ -158,6 +163,12 @@ class TodoOrchestrator:
         else:
             from ai_providers import CodeBuddyProvider
             self.provider = CodeBuddyProvider()
+
+        self.model_roles = model_roles or {
+            "plan": self.provider.model if provider else "",
+            "default": self.provider.model if provider else "",
+            "lite": self.provider.model if provider else "",
+        }
         
         # ── Resolve session log directory ──────────────────────────
         # log_dir defaults to ".autoagent" relative to CWD.
@@ -171,7 +182,7 @@ class TodoOrchestrator:
 
         # Derived paths inside the session directory
         resolved_state_file = os.path.join(self.session_dir, "todos_state.yaml")
-        resolved_ideas_processed = os.path.join(self.session_dir, ".ideas_processed.md")
+        resolved_plans_state = os.path.join(self.session_dir, "plans_state.yaml")
 
         self.state_manager = StateManager(resolved_state_file)
         self.conv_logger = ConversationLogger(self.session_dir)
@@ -184,7 +195,7 @@ class TodoOrchestrator:
             self.ideas_watcher = IdeasWatcher(
                 ideas_file=ideas_file,
                 todos_file=todos_file,
-                processed_state_file=resolved_ideas_processed,
+                plans_state_file=resolved_plans_state,
             )
         else:
             self.ideas_watcher = None
@@ -269,7 +280,8 @@ class TodoOrchestrator:
         
         # Validate task type
         if is_subtask:
-            valid_types = ['simple', 'long_running', 'simple_once', 'long_running_once']
+            valid_types = ['simple', 'long_running', 'simple_once', 'long_running_once',
+                           'nested', 'looping']
         else:
             valid_types = ['simple', 'nested', 'looping']
         
@@ -314,10 +326,10 @@ class TodoOrchestrator:
 
         # Validate optional model field
         model = task.get('model')
-        if model is not None and model not in ('default', 'simple'):
+        if model is not None and not isinstance(model, str):
             raise ConfigError(
                 f"Task {task['id']} has invalid model: '{model}'. "
-                f"Allowed values: 'default', 'simple'"
+                f"Must be a string: 'default', 'lite', or a direct model name"
             )
 
     def validate_config(self) -> bool:
@@ -363,7 +375,7 @@ class TodoOrchestrator:
             tasks_to_run = self.todos
         
         print(f"{'=' * 60}")
-        print(f"  CodeBuddy Todo Orchestrator")
+        print(f"  AutoAgent")
         print(f"  Tasks to execute: {len(tasks_to_run)}")
         print(f"  Config: {self.todos_file}")
         print(f"  Provider: {self.provider.name}")
@@ -434,9 +446,13 @@ class TodoOrchestrator:
         task_id = str(task['id'])
         task_type = task['type']
 
-        # Switch model based on task's model field (default/simple)
+        # Switch model based on task's model field (default/lite or direct model name)
         task_model_role = task.get('model', 'default')
-        task_model = self.model_roles.get(task_model_role, self.model_roles.get('default', self.provider.model))
+        if task_model_role in self.model_roles:
+            task_model = self.model_roles[task_model_role]
+        else:
+            # Treat as a direct model name
+            task_model = task_model_role
         self.provider.set_model(task_model)
         
         # Create a new CodeBuddyClient for this main task (context isolation)
@@ -451,6 +467,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id=context_id,
             )
             # Set fallback paths so TestClient can execute autoagent-exec
@@ -465,6 +482,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id=context_id,
             )
             client._backoff_max = self.backoff_max_wait
@@ -473,6 +491,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id=context_id,
             )
             client._backoff_max = self.backoff_max_wait
@@ -514,6 +533,16 @@ class TodoOrchestrator:
             else:
                 raise ConfigError(f"Unknown task type: {task_type}")
                 
+        except KeyboardInterrupt:
+            # Save session_id so the task can be resumed after restart
+            if client.session_id:
+                self.state_manager.update_task_field(
+                    task_id, "session_id", client.session_id
+                )
+                logger.info(
+                    f"Saved session_id {client.session_id} for interrupted task {task_id}"
+                )
+            raise
         except ConfigError as e:
             print(f"   ❌ Configuration error: {e}")
             self.state_manager.mark_task_status(task_id, "failed", error=str(e))
@@ -550,21 +579,30 @@ class TodoOrchestrator:
             
             # Add subtask info for nested/looping tasks
             if task['type'] in ('nested', 'looping') and 'subtasks' in task:
-                task_status["subtasks"] = []
-                for st in task['subtasks']:
-                    st_id = str(st['id'])
-                    st_state = self.state_manager.get_task_state(st_id)
-                    task_status["subtasks"].append({
-                        "id": st_id,
-                        "name": st['name'],
-                        "type": st['type'],
-                        "status": st_state.get('status', 'pending'),
-                        "attempts": st_state.get('attempts', 0),
-                    })
+                task_status["subtasks"] = self._collect_subtask_status(task['subtasks'])
             
             status["tasks"].append(task_status)
         
         return status
+
+    def _collect_subtask_status(self, subtasks: list) -> list:
+        """Recursively collect status for subtasks (supports nested subtasks)."""
+        result = []
+        for st in subtasks:
+            st_id = str(st['id'])
+            st_state = self.state_manager.get_task_state(st_id)
+            entry = {
+                "id": st_id,
+                "name": st['name'],
+                "type": st['type'],
+                "status": st_state.get('status', 'pending'),
+                "attempts": st_state.get('attempts', 0),
+            }
+            # Recurse into nested/looping subtasks
+            if st['type'] in ('nested', 'looping') and 'subtasks' in st:
+                entry["subtasks"] = self._collect_subtask_status(st['subtasks'])
+            result.append(entry)
+        return result
 
     def reset(self):
         """Reset all task states by removing the entire session directory."""
@@ -621,6 +659,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id="ideas_processor",
             )
             # Review client uses the same TestProvider (shared rule sequence)
@@ -628,6 +667,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id="ideas_reviewer",
             )
         elif self.use_cli:
@@ -635,6 +675,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id="ideas_processor",
             )
             client._backoff_max = self.backoff_max_wait
@@ -642,6 +683,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id="ideas_reviewer",
             )
             review_client._backoff_max = self.backoff_max_wait
@@ -650,6 +692,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id="ideas_processor",
             )
             client._backoff_max = self.backoff_max_wait
@@ -657,6 +700,7 @@ class TodoOrchestrator:
                 provider=self.provider,
                 workspace=self.workspace,
                 timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
                 context_id="ideas_reviewer",
             )
             review_client._backoff_max = self.backoff_max_wait
@@ -697,7 +741,7 @@ class TodoOrchestrator:
             skip_completed: Whether to skip already completed tasks
         """
         print(f"{'=' * 60}")
-        print(f"  CodeBuddy Todo Orchestrator (Idle Mode)")
+        print(f"  AutoAgent (Idle Mode)")
         print(f"  Config: {self.todos_file}")
         print(f"  Ideas: {self.ideas_watcher.ideas_file if self.ideas_watcher else 'disabled'}")
         print(f"  Provider: {self.provider.name}")
@@ -807,6 +851,23 @@ def print_status(orchestrator: TodoOrchestrator):
     print(f"  Task Status")
     print(f"{'=' * 60}")
     
+    def _print_subtasks(subtasks, indent=1):
+        """Recursively print subtask status."""
+        prefix = "   " * indent
+        for st in subtasks:
+            st_icon = {
+                'pending': '⏳',
+                'in_progress': '🔄',
+                'completed': '✅',
+                'failed': '❌',
+            }.get(st['status'], '❓')
+            
+            print(f"{prefix}{st_icon} Subtask {st['id']}: {st['name']}")
+            print(f"{prefix}   Type: {st['type']} | Status: {st['status']} | Attempts: {st['attempts']}")
+            
+            if 'subtasks' in st:
+                _print_subtasks(st['subtasks'], indent + 1)
+    
     for task in status['tasks']:
         status_icon = {
             'pending': '⏳',
@@ -819,16 +880,7 @@ def print_status(orchestrator: TodoOrchestrator):
         print(f"   Type: {task['type']} | Status: {task['status']} | Attempts: {task['attempts']}")
         
         if 'subtasks' in task:
-            for st in task['subtasks']:
-                st_icon = {
-                    'pending': '  ⏳',
-                    'in_progress': '  🔄',
-                    'completed': '  ✅',
-                    'failed': '  ❌',
-                }.get(st['status'], '  ❓')
-                
-                print(f"   {st_icon} Subtask {st['id']}: {st['name']}")
-                print(f"      Type: {st['type']} | Status: {st['status']} | Attempts: {st['attempts']}")
+            _print_subtasks(task['subtasks'])
     
     print(f"\n{'=' * 60}")
 
@@ -981,7 +1033,20 @@ def main():
 
     # Load config.yaml defaults
     config = _load_config()
-    default_timeout = config.get('bash_timeout', 300)
+    # session_timeout: hard cap on total AI session time (default 3600)
+    # For backward compatibility, also check the old 'bash_timeout' key
+    default_session_timeout = config.get('session_timeout',
+                                         config.get('bash_timeout', 3600))
+    # bash_timeout: no-new-output timeout (default 300)
+    default_bash_timeout = config.get('bash_timeout', 300)
+    # If config has the new session_timeout key, bash_timeout is independent;
+    # if only the old bash_timeout key exists, use it as session_timeout
+    # and fall back to 300 for the new bash_timeout.
+    if 'session_timeout' in config:
+        default_bash_timeout = config.get('bash_timeout', 300)
+    else:
+        # Old config: bash_timeout was actually session_timeout
+        default_bash_timeout = 300
 
     parser = argparse.ArgumentParser(
         description="AI-driven task execution system (supports CodeBuddy, Claude Code, Gemini CLI)",
@@ -1018,7 +1083,7 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
     parser.add_argument(
         '--provider', '-P',
         default='codebuddy',
-        help='AI provider to use: codebuddy (default), claude, gemini. '
+        help='AI provider to use: codebuddy (default), claude, gemini, opencode, test. '
              'Use --list-providers to see all available options.',
     )
     parser.add_argument(
@@ -1045,9 +1110,9 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         '--model', '-m',
         default=None,
         help='AI model to use. Supports single model (e.g. "glm-5") or '
-             'multi-role format: "plan:model1;default:model2;simple:model3". '
+             'multi-role format: "plan:model1;default:model2;lite:model3". '
              'Roles: plan (idea decomposition), default (task execution), '
-             'simple (lightweight tasks). Missing roles inherit from default.',
+             'lite (lightweight tasks). Missing roles inherit from default.',
     )
     parser.add_argument(
         '--workspace', '-w',
@@ -1058,7 +1123,7 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         '--timeout',
         type=int,
         default=None,
-        help=f'Timeout for AI calls in seconds (default: {default_timeout}, from config.yaml)',
+        help=f'Session timeout for AI calls in seconds (default: {default_session_timeout}, from config.yaml session_timeout)',
     )
     parser.add_argument(
         '--status',
@@ -1292,15 +1357,17 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         logger.info(f"Using AI provider: {provider}")
         
         # Create orchestrator
-        # Resolve timeout: CLI arg > config.yaml > fallback 300
-        effective_timeout = args.timeout if args.timeout is not None else default_timeout
+        # Resolve timeout: CLI arg > config.yaml > fallback
+        effective_session_timeout = args.timeout if args.timeout is not None else default_session_timeout
+        effective_bash_timeout = default_bash_timeout
         backoff_max = config.get('backoff_max_wait', 300)
 
         orchestrator = TodoOrchestrator(
             todos_file=args.config,
             provider=provider,
             workspace=args.workspace,
-            timeout=effective_timeout,
+            timeout=effective_session_timeout,
+            bash_timeout=effective_bash_timeout,
             log_dir=_log_dir_raw,
             ideas_file=args.ideas,
             idle_interval=args.idle_interval,

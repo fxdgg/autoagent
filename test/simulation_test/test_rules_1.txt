@@ -31,7 +31,7 @@ The baseline timing has been recorded to baseline_timing.txt:
 
 I'll use autoagent-exec to run the ncu profiling command:
 
-autoagent-exec --cmd "python -c \"import time; time.sleep(5)\"" --task-id 1.2
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.2
 
 ⏳ LONG_RUNNING_IN_PROGRESS
 ---RULE---

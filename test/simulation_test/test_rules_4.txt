@@ -49,12 +49,9 @@
   name: "Replace cosf/sinf with __sincosf intrinsic"
   type: simple
   completion_criteria: |
-    Replace all separate cosf() and sinf() calls in cufftdx_dct3d.cuh
-    with the __sincosf() intrinsic. Verify the code compiles and produces
-    correct results (Score: 100/100).
+    Replace all separate cosf() and sinf() calls in cufftdx_dct3d.cuh with the __sincosf() intrinsic.
   initial_hint: |
-    Look at the PostProcess functions in both DCT and IDCT kernels
-    in cufftdx_dct3d.cuh.
+    Look at the PostProcess functions in both DCT and IDCT kernels in cufftdx_dct3d.cuh.
 ---RULE---
 # --- Rule 2: Idea 1 review - APPROVED ---
 # Tests: Reviewer AI approves the task decomposition for idea 1
@@ -74,20 +71,17 @@ The task decomposition looks good:
   max_attempts: 10
   completion_criteria: |
     Implement shared memory transpose buffer for AXIS=1 and AXIS=2 operations.
-    Verify correctness (Score: 100/100) and measure performance improvement.
   subtasks:
     - id: 3.1
       name: "Implement shared memory transpose buffer"
       type: simple
       completion_criteria: |
         Add shared memory transpose logic for Y and Z axis passes.
-        Code must compile without errors.
     - id: 3.2
       name: "Benchmark and verify correctness"
       type: long_running
       completion_criteria: |
         Run the full benchmark suite. Score must be 100/100.
-        Record performance numbers.
 ---RULE---
 # --- Rule 4: Idea 2 review #1 - REJECTED ---
 # Tests: Reviewer AI rejects the first version and provides feedback
@@ -106,23 +100,19 @@ Please add initial_hint to the main task and be more specific in subtask 3.2's c
   max_attempts: 10
   completion_criteria: |
     Implement shared memory transpose buffer for AXIS=1 and AXIS=2 operations.
-    Verify correctness (Score: 100/100) and measure performance improvement.
   initial_hint: |
-    Focus on cufftdx_dct3d.cuh. For AXIS=1 and AXIS=2, global memory access
-    is strided. Use shared memory as a transpose buffer to improve coalescing.
+    Focus on cufftdx_dct3d.cuh. For AXIS=1 and AXIS=2, global memory access is strided. Use shared memory as a transpose buffer to improve coalescing.
   subtasks:
     - id: 3.1
       name: "Implement shared memory transpose buffer"
       type: simple
       completion_criteria: |
         Add shared memory transpose logic for Y and Z axis passes.
-        Code must compile without errors.
     - id: 3.2
       name: "Benchmark and verify correctness"
       type: long_running
       completion_criteria: |
         Run the full benchmark suite using the project's benchmark script.
-        Score must be 100/100. Record performance numbers for Y and Z axes.
 ---RULE---
 # --- Rule 6: Idea 2 review #2 - APPROVED ---
 # Tests: Reviewer AI approves the revised task decomposition
@@ -148,7 +138,7 @@ The baseline timing has been recorded to baseline_timing.txt:
 # --- Rule 8: Subtask 1.2 attempt #1 - LONG_RUNNING submission ---
 I'll use autoagent-exec to run the ncu profiling command:
 
-autoagent-exec --cmd "python -c \"import time; time.sleep(5)\"" --task-id 1.2
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.2
 
 ⏳ LONG_RUNNING_IN_PROGRESS
 ---RULE---
@@ -226,7 +216,7 @@ I have implemented the shared memory transpose buffer:
 # Tests: Long-running subtask in a dynamically added nested task
 I'll run the full benchmark suite using autoagent-exec:
 
-autoagent-exec --cmd "python -c \"import time; time.sleep(5)\"" --task-id 3.2
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 3.2
 
 ⏳ LONG_RUNNING_IN_PROGRESS
 ---RULE---

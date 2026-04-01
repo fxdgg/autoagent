@@ -2,26 +2,16 @@
 
 Usage:
     from truncation_limits import limits
-    limits.get('suggested_fix')  # returns configured value or default
+    limits.get('max')  # returns configured value or default
 """
 
 import os
 import yaml
 
 _DEFAULTS = {
-    'suggested_fix': 1500,
-    'history_summary': 300,
-    'nested_latest_fix': 2000,
-    'looping_latest_fix': 1500,
-    'log_section': 6000,
-    'execution_results': 4000,
-    'idea_content': 8000,
-    'tasks_yaml': 10000,
-    'review_feedback': 3000,
-    'human_feedback': 3000,
-    'error_text': 2000,
-    'log_file': 2000,
     'previous_subtask_summary': 4000,
+    'history_summary': 300,
+    'max': 50000,
 }
 
 

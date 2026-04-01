@@ -1,6 +1,6 @@
 # API 参考文档
 
-本文档提供 CodeBuddy Todo Orchestrator 的完整 API 参考。
+本文档提供 AutoAgent 的完整 API 参考。
 
 ## 目录
 
@@ -29,13 +29,17 @@ class TodoOrchestrator:
         state_file: str = None,
         provider: AIProvider = None,
         workspace: str = ".",
-        timeout: int = 300,
+        timeout: int = 3600,
+        bash_timeout: int = 300,
         log_dir: str = None,
         ideas_file: str = None,
         idle_interval: int = 30,
         use_cli: bool = False,
         backoff_max_wait: int = 300,
         model_roles: dict = None,
+        # Legacy parameters for backward compatibility
+        codebuddy_path: str = None,
+        model: str = None,
     )
 ```
 
@@ -44,17 +48,18 @@ class TodoOrchestrator:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
-| `provider` | AIProvider | None | AI 提供者实例（支持 CodeBuddy/Claude/Gemini） |
+| `provider` | AIProvider | None | AI 提供者实例（支持 CodeBuddy/Claude/Gemini/OpenCode/Test） |
 | `workspace` | str | "." | 工作目录（项目根目录） |
-| `timeout` | int | 300 | AI 调用超时时间（秒）。CLI 模式下，默认值来自 `config.yaml` 中的 `bash_timeout`（默认 3600），CLI 参数 `--timeout` 可覆盖 |
+| `timeout` | int | 3600 | AI 会话超时时间（秒，总时间硬上限）。来自 `config.yaml` 中的 `session_timeout`，CLI 参数 `--timeout` 可覆盖 |
+| `bash_timeout` | int | 300 | 无新输出超时时间（秒）。如果 AI 在此时间内无新输出，会话将被终止，下次 prompt 会包含长时间任务引导 |
 | `log_dir` | str | None | 日志根目录（相对于 CWD，默认 `.autoagent`）|
 | `ideas_file` | str | None | ideas.md 文件路径（None 则禁用 ideas 监控） |
 | `idle_interval` | int | 30 | idle 模式检查间隔（秒） |
 | `use_cli` | bool | False | 强制使用 CLI 子进程模式（而非 CodeBuddy Agent SDK）。非 codebuddy provider 自动启用 |
 | `backoff_max_wait` | int | 300 | AI CLI 连续失败时的最大退避等待时间（秒），来自 `config.yaml` 的 `backoff_max_wait` |
-| `model_roles` | dict | None | 模型角色字典（`{"plan": ..., "default": ..., "simple": ...}`），由 `parse_model_spec()` 解析生成 |
+| `model_roles` | dict | None | 模型角色字典（`{"plan": ..., "default": ..., "lite": ...}`），由 `parse_model_spec()` 解析生成 |
 
-> **注意**：`state_file` 参数已废弃。`todos_state.yaml`、`orchestrator.log`、`.ideas_processed.md` 等运行时文件
+> **注意**：`state_file` 参数已废弃。`todos_state.yaml`、`orchestrator.log`、`plans_state.yaml` 等运行时文件
 > 现在统一放置在由 `log_dir` + `.autoagent_log` 推导出的会话目录下，不再出现在项目目录中。
 
 ### 方法
@@ -67,15 +72,6 @@ def reload_todos(self) -> None
 ```
 
 加载任务配置。`_load_todos` 从 YAML 文件加载并验证；`reload_todos` 在新任务追加后重新加载。`allow_empty=True` 时允许空配置（用于 idle 模式）。
-
-#### load_state / save_state
-
-```python
-def load_state(self) -> dict
-def save_state(self) -> None
-```
-
-加载/保存任务状态文件，支持断点续传。
 
 #### run
 
@@ -121,7 +117,7 @@ def get_status(self) -> dict
 def reset(self) -> None
 ```
 
-获取当前执行状态 / 重置所有状态（包括 ideas 处理记录）。
+获取当前执行状态 / 重置所有状态（删除整个会话目录和 `.autoagent_log` 标记文件）。
 
 #### check_and_process_ideas
 
@@ -134,6 +130,14 @@ def check_and_process_ideas(self, human_review: bool = False) -> int
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `human_review` | bool | False | 如果为 True，AI 审查通过后挂起等待人工确认 |
+
+#### validate_config
+
+```python
+def validate_config(self) -> bool
+```
+
+验证已加载的任务配置文件。检查所有任务的字段完整性和类型正确性，返回 True 表示验证通过。对应 CLI 的 `--validate` 参数。
 
 #### run_with_idle
 
@@ -217,11 +221,11 @@ def parse_model_spec(model_str: str) -> dict
 解析模型规格字符串为角色→模型字典。
 
 **输入格式**：
-- 单模型：`"glm-5"` → `{"plan": "glm-5", "default": "glm-5", "simple": "glm-5"}`
-- 多角色：`"plan:X;default:Y;simple:Z"` → `{"plan": "X", "default": "Y", "simple": "Z"}`
+- 单模型：`"glm-5"` → `{"plan": "glm-5", "default": "glm-5", "lite": "glm-5"}`
+- 多角色：`"plan:X;default:Y;lite:Z"` → `{"plan": "X", "default": "Y", "lite": "Z"}`
 
 **规则**：
-- 只允许 `plan`、`default`、`simple` 三个角色
+- 只允许 `plan`、`default`、`lite` 三个角色
 - 多角色格式必须包含 `default`
 - 缺失的角色用 `default` 值填充
 
@@ -268,10 +272,10 @@ type prompt.txt | claude --verbose --print --output-format stream-json [--resume
 
 **命令模式**：
 ```bash
-type prompt.txt | gemini --output-format stream-json [--resume <session_id>] --model <model> --yolo -p -
+type prompt.txt | gemini --output-format stream-json [--resume <session_id>] --model <model> --yolo [--include-directories <dirs>] -p -
 ```
 
-与 CodeBuddy 的关键差异：使用 `-p` 指定非交互模式，使用 `--resume <session_id>` 恢复会话，使用 `--yolo` 替代 `-y`。
+与 CodeBuddy 的关键差异：使用 `-p` 指定非交互模式，使用 `--resume <session_id>` 恢复会话，使用 `--yolo` 替代 `-y`。当配置了 `include_directories` 时，通过 `--include-directories` 传递额外目录。
 
 #### OpenCodeProvider
 
@@ -317,6 +321,8 @@ def get_provider(
     executable: str = None,
     model: str = None,
     extra_args: str = None,
+    test_rules_file: str = None,
+    include_directories: List[str] = None,
 ) -> AIProvider
 ```
 
@@ -355,6 +361,7 @@ class AIClient:
         provider: AIProvider = None,
         workspace: str = ".",
         timeout: int = 3600,
+        bash_timeout: int = 300,
         context_id: str = None,
         # Legacy parameters
         codebuddy_path: str = None,
@@ -369,11 +376,12 @@ class AIClient:
 | `provider` | AIProvider | None | AI provider 实例（优先于 legacy 参数） |
 | `workspace` | str | "." | 工作目录 |
 | `timeout` | int | 3600 | 超时时间（秒）。实际使用中由 TodoOrchestrator 传入（来自 config.yaml 或 CLI `--timeout`） |
+| `bash_timeout` | int | 300 | 无新输出超时时间（秒）。如果 AI 在此时间内无新输出，会话将被终止 |
 | `context_id` | str | None | Context 标识符，用于状态记录和日志追踪 |
 | `codebuddy_path` | str | None | （Legacy）CodeBuddy 可执行文件路径 |
 | `model` | str | None | （Legacy）AI 模型名 |
 
-> 如果不提供 `provider`，会根据 legacy 参数或默认值创建 `CodeBuddyProvider(model="deepseek-v3.2")`。
+> 如果不提供 `provider`，会根据 legacy 参数或默认值创建 `CodeBuddyProvider(model=None)`，此时使用 `config.yaml` 中的 `default_model` 作为默认模型。
 
 ### 属性
 
@@ -390,7 +398,8 @@ class AIClient:
 | 层级 | 策略 | 说明 |
 |------|------|------|
 | 主任务 | 独立 context | 每个主任务创建独立的 AIClient，互不干扰 |
-| 子任务 | 共享 context | 同一主任务内的子任务通过 session_id 自动共享上下文 |
+| 子任务 | 独立 session | 每个子任务重置 session，通过 previous_subtask_summary 传递上下文 |
+| 重试 | 共享 session | 同一子任务的重试共享 session，保持对话历史 |
 
 ```python
 from ai_providers import get_provider
@@ -421,6 +430,7 @@ def ask(
     expect_json: bool = False,
     timeout: int = None,
     system_prompt: str = None,
+    **kwargs,
 ) -> Union[str, dict]
 ```
 
@@ -469,6 +479,23 @@ def reset_session(self)
 
 重置会话状态（清除 session_id），使下一次调用启动新会话。
 
+#### resume_session
+
+```python
+def resume_session(self, session_id: str)
+```
+
+恢复指定的会话。设置 session_id 后，下一次 `ask()` 调用将通过 `--resume` 参数续接该会话。由 orchestrator 在任务有已保存的 session_id 时调用。
+
+#### session_id（属性）
+
+```python
+@property
+def session_id(self) -> str
+```
+
+返回当前会话 ID（如果没有则返回空字符串）。首次 `ask()` 调用后自动从 stream 事件中捕获。
+
 ### stream-json 解析
 
 AI CLI 工具的 `--output-format stream-json` 模式输出逐行 JSON 对象。AIClient 通过 `_handle_stream_line()` 方法实时解析：
@@ -501,14 +528,14 @@ AI CLI 工具的 `--output-format stream-json` 模式输出逐行 JSON 对象。
 ```python
 class SimpleTaskExecutor:
     def __init__(self, session_dir: str = None)
-    def execute(self, task: dict, client: CodeBuddyClient, ...) -> bool
+    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, **kwargs) -> bool
 ```
 
 **执行逻辑**：
 
 ```python
 attempts = 0
-max_attempts = task.get('max_attempts', 20)
+max_attempts = task.get('max_attempts', 5)
 
 while attempts < max_attempts:
     result = client.ask(prompt)
@@ -526,7 +553,7 @@ return False
 ```python
 class LoopingTaskExecutor:
     def __init__(self, session_dir: str = None, model_roles: dict = None)
-    def execute(self, task: dict, client: CodeBuddyClient) -> bool
+    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None) -> bool
 ```
 
 **构造函数参数**：
@@ -565,7 +592,7 @@ for loop in range(task['repeat_count']):
 ```python
 class NestedTaskExecutor:
     def __init__(self, session_dir: str = None, model_roles: dict = None)
-    def execute(self, task: dict, client: CodeBuddyClient) -> bool
+    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None) -> bool
 ```
 
 **构造函数参数**：
@@ -597,9 +624,7 @@ context = {
 {
     "analysis": "失败原因描述",
     "retry_from": "task_2.1",
-    "reasoning": "推理过程",
-    "suggested_fix": "修复建议",
-    "confidence": "high"
+    "suggested_fix": "修复建议"
 }
 ```
 
@@ -610,10 +635,21 @@ context = {
     "main_task_completed": false,
     "analysis": "结果分析",
     "retry_from": "task_2.1",
-    "next_strategy": "优化方向",
-    "suggested_improvements": ["建议1", "建议2"],
-    "confidence": "medium"
+    "next_strategy": "优化方向"
 }
+```
+
+### SubtaskResult
+
+子任务执行结果数据类。
+
+```python
+class SubtaskResult:
+    success: bool          # 是否成功
+    output: str            # 输出摘要
+    logs: str              # 完整日志
+    error_type: str        # 错误类型（失败时）
+    response_text: str     # AI 原始响应文本
 ```
 
 ### SubtaskExecutor
@@ -623,14 +659,14 @@ context = {
 ```python
 class SubtaskExecutor:
     def __init__(self, session_dir: str = None, model_roles: dict = None)
-    def execute(self, subtask: dict, client: CodeBuddyClient) -> SubtaskResult
+    def execute(self, subtask: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None) -> SubtaskResult
 ```
 
 **构造函数参数**：
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `session_dir` | str | None | 日志会话目录（long_running 任务必须提供，用于构造 AI prompt 中的 `--log-dir` 参数） |
+| `session_dir` | str | None | 日志会话目录（long_running 任务必须提供，用于构造 wrapper 脚本中的 `--log-dir` 参数） |
 | `model_roles` | dict | None | 模型角色字典，根据子任务的 `model` 字段切换 provider 模型 |
 
 支持的子任务类型：
@@ -638,39 +674,51 @@ class SubtaskExecutor:
 | 类型 | 说明 | 执行方式 |
 |------|------|----------|
 | `simple` | AI 自主完成（含代码修改、命令执行等） | 调用 `client.ask()` |
-| `long_running` | 长时间任务 | AI 通过 Bash 调用 `autoagent-exec` 启动，AutoAgent 轮询信号文件 + AI 分析结果 |
+| `long_running` | 长时间任务 | AI 通过 wrapper 脚本调用 `autoagent-exec` 启动，AutoAgent 轮询信号文件 + AI 分析结果 |
 
 **long_running 子任务执行流程**：
 
-1. 构造 prompt，告知 AI 使用 `autoagent-exec` 启动命令（`--log-dir` 使用 `self.session_dir`）
-2. AI 通过 Bash 调用 `autoagent-exec`
+1. 构造 prompt，告知 AI 使用 `autoagent-exec` wrapper 脚本启动命令（内部参数由 wrapper 预填）
+2. AI 通过 wrapper 脚本调用 `autoagent-exec`
 3. 如果 AI 报告 `LONG_RUNNING_IN_PROGRESS`，轮询信号文件等待完成
 4. 完成后重启 AI 会话，让 AI 读取输出日志并评估结果
 
 ### autoagent_exec.py
 
-long_running 任务启动器，AI 通过 Bash 调用的独立脚本。
+long_running 任务启动器，AI 通过 wrapper 脚本（`autoagent-exec.bat` / `autoagent-exec.sh`）调用的独立脚本。
 
-**调用方式**：
+**调用方式**（AI 通过 wrapper 脚本调用，内部参数由 wrapper 预填）：
 ```bash
-python autoagent_exec.py --log-dir <log_session_dir> --task-id <id> -- <command...>
+# Windows
+autoagent-exec.bat <command...>
+# Linux/macOS
+bash autoagent-exec.sh <command...>
 ```
 
-**参数**：
+**内部参数**（由 wrapper 脚本预填，AI 不需要手动指定，`--help` 中已隐藏）：
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `--log-dir` | str | 日志会话目录绝对路径（由 SubtaskExecutor 的 `session_dir` 提供） |
 | `--task-id` | str | 子任务 ID（如 `1.2`） |
-| `-- <command>` | str | `--` 之后的所有内容作为要执行的命令 |
+| `--fast-fail-timeout` | int | 快速失败超时时间（秒），由 `config.yaml` 的 `fast_fail_timeout` 配置 |
+| `--cmd <command>` | str | 要执行的命令（由 wrapper 脚本拼接用户参数后传入）。也支持 legacy 格式 `-- <command>` |
 
-**行为**：
+**行为**（以下 `N` 秒由 `--fast-fail-timeout` 控制）：
 
 | 场景 | 行为 |
 |------|------|
-| 命令在 10s 内失败（退出码≠ 0） | 打印错误输出，不写信号文件，返回非零退出码 |
-| 命令在 10s 内成功（退出码 = 0） | 写入 `finished` 信号文件，返回 0 |
-| 命令 10s 后仍在运行 | 写入 `running` 信号文件，打印 `TASK SUBMITTED`，启动监控线程 |
+| 命令在 N 秒内失败（退出码≠ 0） | 智能输出（短输出内联打印，长输出只给路径），不写信号文件，返回非零退出码 |
+| 命令在 N 秒内成功（退出码 = 0） | 智能输出（短输出内联打印，长输出只给路径），写入 `finished` 信号文件，返回 0 |
+| 命令 N 秒后仍在运行 | 写入 `running` 信号文件，打印 `TASK SUBMITTED`，启动监控线程 |
+
+**智能输出策略**（命令在 N 秒内退出时，无论成功或失败）：
+
+| 输出长度 | 行为 |
+|----------|------|
+| 无输出 | 打印 `(no output captured)` |
+| ≤ 3000 字符 | 直接内联打印完整内容，标注 `(complete, not truncated)` 避免 AI 再去读文件 |
+| > 3000 字符 | 只打印 output log 文件路径，AI 可自行读取 |
 
 **生成的文件**：
 
@@ -710,7 +758,7 @@ def log_prompt(
     task_id: str,
     task_name: str,
     prompt: str,
-    attempt: int,
+    attempt: Union[int, str],
     parent_task_id: Optional[str] = None,
     metadata: Optional[dict] = None,
     system_prompt: Optional[str] = None,
@@ -724,7 +772,7 @@ def log_prompt(
 | `task_id` | str | 任务 ID |
 | `task_name` | str | 任务名称 |
 | `prompt` | str | 发送给 AI 的提示词 |
-| `attempt` | int | 尝试次数 |
+| `attempt` | Union[int, str] | 尝试次数 |
 | `parent_task_id` | str | 父任务 ID（子任务时提供） |
 | `metadata` | dict | 额外信息（如 `{"type": "failure_analysis"}`） |
 | `system_prompt` | str | 可选的系统提示词（如果提供，会在 prompt 之前记录） |
@@ -737,16 +785,18 @@ def log_response(
     task_id: str,
     response: str,
     parent_task_id: Optional[str] = None,
+    attempt: Optional[Union[int, str]] = None,
 )
 ```
 
-在 AI 返回**之后**将 response 追加到日志文件。必须在 `log_prompt()` 之后调用。
+在 AI 返回**之后**将 response 写入对应的 per-round 日志文件。必须在 `log_prompt()` 之后调用，`attempt` 参数需与 `log_prompt()` 传入的值一致。
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `task_id` | str | 任务 ID |
 | `response` | str | AI 的响应 |
 | `parent_task_id` | str | 父任务 ID（子任务时提供） |
+| `attempt` | Union[int, str] | 尝试次数（用于定位 round 文件，需与 `log_prompt` 一致） |
 
 #### log_conversation（便捷包装器）
 
@@ -757,7 +807,7 @@ def log_conversation(
     task_name: str,
     prompt: str,
     response: str,
-    attempt: int,
+    attempt: Union[int, str],
     parent_task_id: Optional[str] = None,
     metadata: Optional[dict] = None,
 )
@@ -771,18 +821,24 @@ def log_conversation(
 | `task_name` | str | 任务名称 |
 | `prompt` | str | 发送给 AI 的提示词 |
 | `response` | str | AI 的响应 |
-| `attempt` | int | 尝试次数 |
+| `attempt` | Union[int, str] | 尝试次数 |
 | `parent_task_id` | str | 父任务 ID（子任务时提供） |
 | `metadata` | dict | 额外信息（如 `{"type": "failure_analysis"}`） |
 
 #### log_nested_prompt / log_nested_response（推荐）
 
 ```python
-def log_nested_prompt(self, task_id: str, task_name: str, call_type: str, prompt: str, round_num: int)
-def log_nested_response(self, task_id: str, task_name: str, response)
+def log_nested_prompt(self, task_id: str, task_name: str, call_type: str, prompt: str, round_num: Union[int, str], failed_subtask_id: Optional[str] = None)
+def log_nested_response(self, task_id: str, task_name: str, response, call_type: Optional[str] = None, round_num: Optional[Union[int, str]] = None, failed_subtask_id: Optional[str] = None)
 ```
 
-嵌套任务 AI 决策调用的两步写入方法。`log_nested_prompt` 在 AI 调用前写入 prompt，`log_nested_response` 在 AI 返回后追加 response，均写入 `subtask_<id>/_decisions.md`。
+嵌套任务 AI 决策调用的两步写入方法。每个决策写入独立文件：
+
+- `failure_analysis_{subtask_id}_round_{N}.md` — 子任务失败分析
+- `looping_failure_analysis_{subtask_id}_round_{N}.md` — 循环任务失败分析
+- `main_task_evaluation_round_{N}.md` — 主任务完成评估
+
+`failed_subtask_id` 参数在 failure_analysis 类型时提供，用于在文件名中标识失败的子任务。
 
 #### log_nested_task_ai_call（便捷包装器）
 
@@ -794,8 +850,9 @@ def log_nested_task_ai_call(
     call_type: str,
     prompt: str,
     response: str,
-    round_num: int,
+    round_num: Union[int, str],
     metadata: Optional[dict] = None,
+    failed_subtask_id: Optional[str] = None,
 )
 ```
 
@@ -899,6 +956,14 @@ def log_ideas_revision_response(
 |------|------|------|
 | `response` | str | 修订后的 YAML 任务定义 |
 
+#### get_session_dir
+
+```python
+def get_session_dir(self) -> str
+```
+
+返回会话日志目录路径。
+
 #### log_ideas_section_end
 
 ```python
@@ -938,7 +1003,7 @@ class IdeasWatcher:
         self,
         ideas_file: str = "ideas.md",
         todos_file: str = "todos.yaml",
-        processed_state_file: str = None,
+        plans_state_file: str = None,
     )
 ```
 
@@ -948,7 +1013,7 @@ class IdeasWatcher:
 |------|------|--------|------|
 | `ideas_file` | str | "ideas.md" | Ideas 文件路径 |
 | `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
-| `processed_state_file` | str | ".ideas_processed.md" | 已处理 ideas 归档文件（位于会话目录下） |
+| `plans_state_file` | str | None | 已处理 ideas 状态文件路径（默认为会话目录下的 `plans_state.yaml`） |
 
 ### 方法
 
@@ -970,9 +1035,8 @@ def parse_ideas(self) -> List[dict]
 
 ```python
 {
-    'title': str,     # 标题（来自 heading 或首行）
+    'title': str,     # 标题（从内容首行派生的短显示字符串）
     'content': str,   # 原始内容
-    'body': str,      # 正文（不含标题）
     'hash': str,      # SHA256 hash（前 16 位，用于去重）
 }
 ```
@@ -1028,6 +1092,14 @@ class StateManager:
 
 ### 方法
 
+#### save_state
+
+```python
+def save_state(self)
+```
+
+将当前状态保存到文件。通过 `threading.Lock` 保证线程安全。其他修改方法（`mark_task_status`、`add_task_history` 等）内部自动调用此方法。
+
 #### get_task_state
 
 ```python
@@ -1043,6 +1115,14 @@ def mark_task_status(self, task_id: str, status: str, **kwargs)
 ```
 
 更新任务状态和额外字段。自动触发 `save_state()`。
+
+#### update_task_field
+
+```python
+def update_task_field(self, task_id: str, field: str, value)
+```
+
+更新任务状态中的单个字段。自动触发 `save_state()`。
 
 #### add_task_history
 
@@ -1094,6 +1174,22 @@ def get_summary(self) -> dict
 }
 ```
 
+#### get_in_progress_tasks
+
+```python
+def get_in_progress_tasks(self) -> list
+```
+
+获取当前状态为 `in_progress` 的所有任务 ID 列表。
+
+#### record_interrupt
+
+```python
+def record_interrupt(self, task_id: str, attempt: int = 0)
+```
+
+记录一次中断事件（如 Ctrl+C）到任务的执行历史中。自动触发 `save_state()`。
+
 ---
 
 ## 状态类型
@@ -1107,7 +1203,7 @@ class TaskState(TypedDict, total=False):
     status: str           # "pending" | "in_progress" | "completed" | "failed"
     attempts: int         # 尝试次数
     max_attempts: int     # 最大尝试次数
-    context_id: str       # CodeBuddy context 标识
+    session_id: str       # AI 会话 ID（用于 --resume 续接）
     last_attempt: str     # 最后一次尝试时间
     subtasks: list        # 子任务状态列表（嵌套任务）
     ai_decisions: list    # AI 决策记录
@@ -1120,14 +1216,13 @@ class TaskState(TypedDict, total=False):
 class SubtaskState(TypedDict, total=False):
     status: str           # "pending" | "in_progress" | "completed" | "failed"
     attempts: int
-    error_type: str       # "timeout" | "oom" | "crash" | "validation_failed"
+    error_type: str       # "ai_failed" | "nested_failed" | "looping_failed" | "max_attempts_exceeded" | "validation_failed"
     log_file: str         # 日志文件路径（long_running 类型）
-    pid_file: str         # PID 文件路径（long_running 类型）
     ai_reasoning: str     # AI 的推理记录
     history: list         # 执行历史
 ```
 
-> **注意**：`in_progress` 状态同时覆盖"正在执行命令"和"长时间任务正在后台运行"两种场景。可通过 `log_file` 和 `pid_file` 字段区分是否为长时间任务。
+> **注意**：`in_progress` 状态同时覆盖"正在执行命令"和"长时间任务正在后台运行"两种场景。可通过 `log_file` 字段和信号文件（`lr_<task_id>_signal.json`）区分是否为长时间任务。
 
 ---
 
@@ -1142,10 +1237,10 @@ class TaskConfig(TypedDict, total=False):
     type: Literal["simple", "nested", "looping"]  # 必填，任务类型（顶层）
     completion_criteria: str                            # 必填，完成标准
     initial_hint: str                                  # simple 可选
-    max_attempts: int                                  # 可选，默认 20
+    max_attempts: int                                  # 可选，默认 5
     subtasks: List['SubtaskConfig']                    # nested/looping 必填
     repeat_count: int                                  # looping 必填，循环次数
-    max_attempts_per_loop: int                         # looping 可选，每轮最大重试次数（默认 20）
+    max_attempts_per_loop: int                         # looping 可选，每轮最大重试次数（默认 5）
 ```
 
 ### SubtaskConfig
@@ -1154,7 +1249,7 @@ class TaskConfig(TypedDict, total=False):
 class SubtaskConfig(TypedDict, total=False):
     id: Union[int, str]                                # 必填
     name: str                                          # 必填
-    type: Literal["simple", "long_running", "simple_once", "long_running_once"]  # 必填
+    type: Literal["simple", "long_running", "simple_once", "long_running_once", "nested", "looping"]  # 必填
     completion_criteria: str                            # 必填
     initial_hint: str                                  # simple 可选
     max_attempts: int                                  # 可选，默认 5
@@ -1167,14 +1262,24 @@ class SubtaskConfig(TypedDict, total=False):
 ## 异常类
 
 ```python
+# task_executor.py 中定义
 class ConfigError(Exception):
     """配置文件错误（YAML 语法、缺少字段等）"""
 
 class ExecutionError(Exception):
     """任务执行错误（命令失败、超时等）"""
 
+# codebuddy_client.py 中定义
 class AICallError(Exception):
     """AI 调用错误（认证失败、响应解析失败等）"""
+
+class BashTimeoutError(AICallError):
+    """无新输出超时（AI 在 bash_timeout 秒内无新输出）。
+    通常意味着长时间命令阻塞了会话，下次 prompt 应包含 autoagent-exec 引导。"""
+
+class SessionTimeoutError(AICallError):
+    """会话总时间超时（超过 session_timeout 秒）。
+    调用方应告知 AI 它被用户中断（Ctrl+C）。"""
 ```
 
 ---
@@ -1187,7 +1292,7 @@ class AICallError(Exception):
 |------|------|--------|------|
 | `--config` | `-c` | `todos.yaml` | 任务配置文件路径 |
 | `--task` | `-t` | None | 只执行指定任务 ID |
-| `--provider` | `-P` | `codebuddy` | AI provider：`codebuddy`、`claude`、`gemini`、`opencode` |
+| `--provider` | `-P` | `codebuddy` | AI provider：`codebuddy`、`claude`、`gemini`、`opencode`、`test` |
 | `--executable` | - | None | 覆盖 provider 默认可执行文件路径 |
 | `--extra-args` | - | None | 传递给 AI 工具的额外 CLI 参数 |
 | `--use-cli` | - | - | 强制使用 CLI 模式（而非 SDK 模式） |
@@ -1195,12 +1300,12 @@ class AICallError(Exception):
 | `--include-directories` | - | None | 逗号分隔的额外目录列表，允许 AI 工具访问工作区外的目录（仅 Gemini） |
 | `--list-providers` | - | - | 列出所有可用 AI provider 并退出 |
 | `--codebuddy-path` | - | None | （Legacy）CodeBuddy 可执行文件路径，建议用 `--provider` + `--executable` |
-| `--model` | `-m` | 取决于 provider | AI 模型。支持单模型（如 `glm-5`）和多角色格式（如 `"plan:X;default:Y;simple:Z"`）。codebuddy 默认从 config.yaml 的 `default_model` 加载 |
+| `--model` | `-m` | 取决于 provider | AI 模型。支持单模型（如 `glm-5`）和多角色格式（如 `"plan:X;default:Y;lite:Z"`）。codebuddy 默认从 config.yaml 的 `default_model` 加载 |
 | `--workspace` | `-w` | `.` | 工作目录 |
-| `--timeout` | - | 3600 | AI 调用超时时间（秒），默认值来自 `config.yaml` 的 `bash_timeout`（如果 config.yaml 不存在则为 300） |
+| `--timeout` | - | 3600 | AI 会话超时时间（秒），默认值来自 `config.yaml` 的 `session_timeout`（如果 config.yaml 不存在则为 3600） |
 | `--log-dir` | - | `.autoagent` | 日志根目录（相对于 CWD） |
 | `--ideas` | - | None | ideas.md 文件路径 |
-| `--ideas-only` | - | - | 只处理 ideas.md（带人工审核），不运行 todo list（需搭配 `--ideas`） |
+| `--ideas-only` | - | - | 只处理 ideas.md，不运行 todo list（需搭配 `--ideas`） |
 | `--no-idle` | - | - | 禁用 idle 模式（默认当 `--ideas` 指定时自动开启 idle） |
 | `--idle-interval` | - | 30 | idle 轮询间隔（秒） |
 | `--preset` | - | `default` | Preset 配置名称，从 config.yaml 加载预设参数 |
@@ -1241,8 +1346,8 @@ class AICallError(Exception):
 # 使用 default preset
 python orchestrator.py
 
-# 使用 claude preset
-python orchestrator.py --preset claude
+# 使用指定 preset
+python orchestrator.py --preset test
 
 # 使用 preset 但覆盖特定参数
 python orchestrator.py --preset default --model claude-sonnet-4-6
@@ -1272,8 +1377,8 @@ python orchestrator.py --ideas ideas.md --idle-interval 60
 # 带 Ideas 但禁用 idle（处理完即退出）
 python orchestrator.py --ideas ideas.md --no-idle
 
-# 只处理 ideas（带人工审核）
-python orchestrator.py --ideas ideas.md --ideas-only
+# 只处理 ideas（可搭配 --human-review 进行人工审核）
+python orchestrator.py --ideas ideas.md --ideas-only --human-review
 
 # 查看所有可用 provider
 python orchestrator.py --list-providers
@@ -1295,27 +1400,33 @@ python orchestrator.py --no-skip
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `suggested_fix` | 1500 | AI 失败分析建议（保留尾部） |
-| `history_summary` | 300 | 历史尝试摘要 |
-| `nested_latest_fix` | 2000 | 嵌套任务的修复上下文（含 evaluation 建议） |
-| `looping_latest_fix` | 1500 | 循环任务的修复上下文 |
-| `log_section` | 6000 | 长时间任务日志汇总（保留头尾） |
-| `execution_results` | 4000 | 子任务执行结果汇总（保留头尾） |
-| `idea_content` | 8000 | Ideas 原文（保留头部） |
-| `tasks_yaml` | 10000 | 生成的任务 YAML（保留头部） |
-| `review_feedback` | 3000 | AI 审查反馈（保留头部） |
-| `human_feedback` | 3000 | 人工审核反馈（保留头部） |
-| `error_text` | 2000 | 错误信息 |
-| `log_file` | 2000 | 单个日志文件内容（保留尾部） |
+| `previous_subtask_summary` | 4000 | 子任务摘要、错误文本、日志文件的截断限制 |
+| `history_summary` | 300 | 历史尝试摘要、AI 推理记录的截断限制 |
+| `max` | 50000 | 防御性上限，用于不应被截断的字段 |
 
 ### 使用方式
 
 ```python
 from truncation_limits import limits
 
-max_len = limits.get('suggested_fix')  # 返回配置值或默认值
-limits.reload()                        # 重新从 config.yaml 加载
+max_len = limits.get('previous_subtask_summary')  # 返回配置值或默认值
+limits.reload()                                    # 重新从 config.yaml 加载
 ```
+
+所有字段都有内置默认值，`config.yaml` 中只需配置想调整的项。
+
+---
+
+## Ideas 处理配置（config.yaml）
+
+控制 Ideas 拆解过程中的 AI 审查和校验行为。通过 `ideas_watcher.py` 的 `_load_ideas_config()` 加载。
+
+### 配置字段
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `max_review_rounds` | 3 | AI 审查最大轮数。每轮将生成的任务发送给独立的审查 AI 检查质量，如果审查持续拒绝，达到此轮数后强制接受 |
+| `max_validation_retries` | 2 | Schema 校验最大重试次数。如果生成的任务未通过 schema 校验，将错误反馈给 AI 修正，达到此次数后按原样接受 |
 
 所有字段都有内置默认值，`config.yaml` 中只需配置想调整的项。
 
@@ -1398,11 +1509,11 @@ orchestrator.run_with_idle()  # 不会退出，直到 Ctrl+C
 | **AIProvider** | AI CLI 工具抽象基类、命令构造 |
 | **CodeBuddyProvider / ClaudeCodeProvider / GeminiCLIProvider / OpenCodeProvider** | 具体 AI 工具的命令构造 |
 | **AIClient** (别名 CodeBuddyClient) | AI 调用、Context 管理、stream-json 解析 |
-| **SimpleTaskExecutor** | 简单任务执行（三层完成检测） |
+| **SimpleTaskExecutor** | 简单任务执行（自循环完成检测） |
 | **NestedTaskExecutor** | 嵌套任务执行、AI 决策调度 |
 | **LoopingTaskExecutor** | 循环任务执行（固定 N 次迭代） |
 | **SubtaskExecutor** | 子任务分发执行（接收 session_dir） |
-| **autoagent_exec.py** | long_running 任务启动器（10s 快速失败 + 信号文件） |
+| **autoagent_exec.py** | long_running 任务启动器（快速失败检测 + 信号文件，超时可通过 `config.yaml` 的 `fast_fail_timeout` 配置） |
 | **StateManager** | 任务状态持久化（todos_state.yaml） |
 | **ConversationLogger** | 对话日志记录、索引生成、Ideas 拆解/审查/修订日志 |
 | **IdeasWatcher** | ideas.md 监控、AI 分解、AI 审查、人工审核、任务追加（支持日志记录） |

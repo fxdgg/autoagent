@@ -1,6 +1,6 @@
 # 使用指南
 
-本文档提供 CodeBuddy Todo Orchestrator 的详细使用说明。
+本文档提供 AutoAgent 的详细使用说明。
 
 ## 目录
 
@@ -23,7 +23,14 @@
 ### 2. 安装依赖
 
 ```bash
-pip install pyyaml
+pip install -r requirements.txt
+```
+
+或手动安装：
+
+```bash
+pip install pyyaml>=6.0.1
+pip install codebuddy-agent-sdk  # 仅在使用 SDK 模式（非 --use-cli）时需要
 ```
 
 ### 3. 配置 AI Provider
@@ -50,7 +57,11 @@ opencode --version
 
 ```yaml
 # config.yaml
-bash_timeout: 3600
+session_timeout: 3600  # Hard cap on total AI session time (seconds)
+bash_timeout: 300      # No-new-output timeout (seconds)
+
+# Fast-fail timeout for autoagent-exec (in seconds, default: 30)
+fast_fail_timeout: 30
 
 # Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
 # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
@@ -68,16 +79,16 @@ preset:
     config: ${workspace}/todos.yaml
     provider: codebuddy
     use_cli: false
-    model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:claude-haiku-4.5"
+    model: "plan:claude-opus-4.6;default:claude-opus-4.6;lite:glm-5.0-ioa"
     human_review: true
     verbose: true
-  
+
   - name: test
     ideas: ${workspace}/../ideas.md
     config: ${workspace}/../todos.yaml
     provider: codebuddy
     use_cli: false
-    model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;simple:deepseek-v3-2-volc-ioa"
+    model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;lite:deepseek-v3-2-volc-ioa"
     human_review: true
     verbose: true
 ```
@@ -88,11 +99,11 @@ preset:
 # 使用 default 预设
 python orchestrator.py
 
-# 使用 claude 预设
-python orchestrator.py --preset claude
+# 使用指定预设
+python orchestrator.py --preset test
 
-# 使用 debug 预设（覆盖 verbose 为 true）
-python orchestrator.py --preset debug --verbose
+# 使用预设并覆盖参数
+python orchestrator.py --preset default --verbose
 ```
 
 ### 5. 配置截断限制（可选）
@@ -101,19 +112,14 @@ python orchestrator.py --preset debug --verbose
 
 ```yaml
 # config.yaml
+# Only 3 keys are used:
+#   previous_subtask_summary: for subtask summaries, error text, log files
+#   history_summary: for history attempt summaries, ai_reasoning
+#   max: defensive upper bound for fields that should not normally be truncated
 truncation_limits:
-  suggested_fix: 1500        # AI 失败分析建议
-  history_summary: 300       # 历史尝试摘要
-  nested_latest_fix: 2000    # 嵌套任务的修复上下文
-  looping_latest_fix: 1500   # 循环任务的修复上下文
-  log_section: 6000          # 长时间任务日志汇总
-  execution_results: 4000    # 子任务执行结果汇总
-  idea_content: 8000         # Ideas 原文
-  tasks_yaml: 10000          # 生成的任务 YAML
-  review_feedback: 3000      # AI 审查反馈
-  human_feedback: 3000       # 人工审核反馈
-  error_text: 2000           # 错误信息
-  log_file: 2000             # 单个日志文件内容
+  previous_subtask_summary: 4000  # 子任务摘要、错误文本、日志文件
+  history_summary: 300            # 历史尝试摘要、AI 推理记录
+  max: 50000                      # 防御性上限
 ```
 
 所有字段都有内置默认值，只需配置你想调整的项。
@@ -247,6 +253,8 @@ tasks:
 | `name` | string | 是 | 任务名称 |
 | `type` | string | 是 | 顶层任务类型：`simple`、`nested`、`looping`；子任务类型：`simple`、`long_running`、`simple_once`、`long_running_once` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
+| `model` | string | 否 | 模型选择：`"default"`、`"lite"` 或直接模型名称（默认 `"default"`） |
+| `system_prompt_prefix` | string | 否 | 任务级系统提示词前缀，覆盖 config.yaml 中的全局设置 |
 
 #### 简单任务 (type: simple)
 
@@ -259,6 +267,7 @@ tasks:
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `subtasks` | list | 是 | 子任务列表 |
+| `max_attempts` | int | 否 | 最大重试轮数（默认 5） |
 
 #### 循环任务 (type: looping)
 
@@ -266,13 +275,14 @@ tasks:
 |------|------|------|------|
 | `subtasks` | list | 是 | 子任务列表 |
 | `repeat_count` | int | 是 | 循环次数（正整数） |
-| `max_attempts_per_loop` | int | 否 | 每轮循环内最大重试次数（默认 20） |
+| `max_attempts_per_loop` | int | 否 | 每轮循环内最大重试次数（默认 5） |
 | `completion_criteria` | string | 是 | 完成标准 |
 
 #### 长时间任务 (type: long_running)
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
+| `initial_hint` | string | 否 | 初始提示（给 AI 的参考信息，如要运行的命令） |
 | `command` | string | 否 | （已废弃）旧版配置字段，现在 AI 自主决定命令 |
 | `completion_criteria` | string | 是 | 完成标准 |
 
@@ -408,17 +418,17 @@ tasks:
 > **注意**：`long_running` 类型不需要在 YAML 中指定 `command` 字段。AI 会根据任务描述和上下文自主决定要运行的命令，并通过 `autoagent-exec` 启动。
 
 **执行流程**：
-1. AutoAgent 构造 prompt，告知 AI 使用 `autoagent-exec` 启动长时间命令
-2. AI 通过 Bash 调用 `autoagent-exec --log-dir <session_dir> --task-id <id> -- <command>`
-3. `autoagent-exec` 启动命令并监视 10 秒：
-   - 10 秒内失败：立即报告错误，AI 可修复并重试（避免重启会话）
-   - 10 秒内成功：直接完成
-   - 10 秒后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
+1. AutoAgent 构造 prompt，告知 AI 使用 `autoagent-exec` wrapper 脚本启动长时间命令
+2. AI 通过 wrapper 脚本调用 `autoagent-exec.bat <command>`（内部参数由 wrapper 预填）
+3. `autoagent-exec` 启动命令并监视（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置）：
+   - 超时内失败：智能输出（短输出内联打印，长输出只给路径），AI 可修复并重试
+   - 超时内成功：智能输出（短输出内联打印并标注 not truncated，长输出只给路径）
+   - 超时后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
 4. AutoAgent 检测到 `LONG_RUNNING_IN_PROGRESS`，开始轮询信号文件
 5. 任务完成后，重新启动 AI 分析输出日志并判断完成条件
 
 **技术细节**：
-- 使用 `autoagent_exec.py` 作为启动器，支持 10 秒快速失败检测
+- 使用 `autoagent_exec.py` 作为启动器（通过 wrapper 脚本调用），支持快速失败检测（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置）
 - 信号文件（`lr_tasks/lr_<task_id>_signal.json`）用于进程间通信
 - 输出日志（`lr_tasks/lr_<task_id>_output.log`）记录命令完整输出
 - 信号文件和输出日志均位于 `session_dir/lr_tasks/`（由 orchestrator 的 `--log-dir` 参数决定）
@@ -433,11 +443,8 @@ tasks:
 # 使用 default 预设
 python orchestrator.py
 
-# 使用 codebuddy 预设
-python orchestrator.py --preset codebuddy
-
-# 使用 claude 预设
-python orchestrator.py --preset claude
+# 使用指定预设
+python orchestrator.py --preset test
 
 # 使用预设但覆盖特定参数
 python orchestrator.py --preset default --model claude-sonnet-4-6
@@ -450,6 +457,8 @@ python orchestrator.py --preset default --model claude-sonnet-4-6
 - `ideas`: ideas.md 文件路径
 - `provider`: AI Provider 名称
 - `model`: AI 模型名称
+- `executable`: 可执行文件路径
+- `workspace`: 工作目录
 - `verbose`: 是否启用详细日志
 - `no_skip`: 是否不跳过已完成任务
 - `no_idle`: 是否禁用 idle 模式
@@ -470,7 +479,7 @@ python orchestrator.py --preset default --model claude-sonnet-4-6
 python orchestrator.py
 ```
 
-### 2. 选择 AI Provider
+### 3. 选择 AI Provider
 
 支持多种 AI CLI 工具：
 
@@ -501,13 +510,13 @@ python orchestrator.py --extra-args "--max-turns 1000"
 python orchestrator.py --list-providers
 ```
 
-### 3. 后台执行
+### 4. 后台执行
 
 ```bash
 nohup python orchestrator.py > orchestrator.log 2>&1 &
 ```
 
-### 4. 断点续传
+### 5. 断点续传
 
 如果执行中断，可以从断点继续：
 
@@ -518,14 +527,14 @@ python orchestrator.py
 
 状态保存在 `todos_state.yaml` 中，程序会自动读取并继续执行。
 
-### 5. 查看状态
+### 6. 查看状态
 
 ```bash
 # 查看任务状态
 python orchestrator.py --status
 ```
 
-### 6. 其他常用命令
+### 7. 其他常用命令
 
 ```bash
 # 验证配置文件是否合法
@@ -541,7 +550,7 @@ python orchestrator.py --reset
 python orchestrator.py --verbose
 
 # 使用预设配置
-python orchestrator.py --preset claude
+python orchestrator.py --preset test
 
 # 列出所有可用 provider
 python orchestrator.py --list-providers
@@ -648,11 +657,17 @@ completion_criteria: |
 ### 5. 日志管理
 
 ```bash
-# 查看长时间任务的日志
-tail -f logs/2.2.log
+# 查看长时间任务的输出日志（在会话目录的 lr_tasks/ 下）
+tail -f .autoagent/*/lr_tasks/lr_*_output.log
 
-# 查看监控进程的日志
-tail -f monitors/2.2.log
+# 查看长时间任务的信号文件（状态：running/finished/error）
+cat .autoagent/*/lr_tasks/lr_*_signal.json
+
+# 查看 orchestrator 运行日志
+tail -f .autoagent/*/orchestrator.log
+
+# 查看 AI 对话日志
+ls .autoagent/*/conversations/
 ```
 
 ### 6. AI决策的最佳实践
@@ -754,16 +769,16 @@ ls ~/.codebuddy/settings.json
 **检查步骤**：
 
 ```bash
-# 查看任务状态
-cat todos_state.yaml
+# 查看任务状态（状态文件在会话目录下）
+cat .autoagent/*/todos_state.yaml
 
-# 查看日志文件
-tail -f logs/2.2.log
+# 查看长时间任务的信号文件（在会话目录的 lr_tasks/ 下）
+cat .autoagent/*/lr_tasks/lr_*_signal.json
 
-# 查看监控进程
-ps aux | grep monitor
+# 查看长时间任务的输出日志
+tail -f .autoagent/*/lr_tasks/lr_*_output.log
 
-# 查看训练进程
+# 查看后台运行的进程
 ps aux | grep train.py
 ```
 
@@ -789,23 +804,25 @@ ps aux | grep train.py
 **解决方案**：
 
 ```bash
-# 删除状态文件，重新开始
-rm todos_state.yaml
+# 删除状态文件，重新开始（状态文件在会话目录下）
+rm .autoagent/*/todos_state.yaml
 ```
 
-### 问题 5：监控进程无法启动
+### 问题 5：长时间任务的监控进程异常
+
+**说明**：`autoagent-exec` 在将命令转入后台运行时，会启动一个独立的监控进程来跟踪命令的完成状态并更新信号文件。
 
 **检查步骤**：
 
 ```bash
-# 检查 monitors 目录权限
-ls -la monitors/
+# 检查信号文件是否存在且状态正确
+cat .autoagent/*/lr_tasks/lr_*_signal.json
 
-# 检查监控脚本内容
-cat monitors/2.2.sh
+# 检查监控进程是否在运行（监控进程也是 autoagent_exec.py）
+ps aux | grep autoagent_exec
 
-# 手动执行监控脚本测试
-bash monitors/2.2.sh
+# 如果信号文件卡在 "running" 状态但命令已结束，
+# 可以手动更新信号文件的 status 为 "finished"
 ```
 
 ## 常见问题
@@ -813,8 +830,11 @@ bash monitors/2.2.sh
 ### Q: 如何查看当前任务进度？
 
 ```bash
-# 查看状态文件
-cat todos_state.yaml
+# 查看状态文件（在会话目录下）
+cat .autoagent/*/todos_state.yaml
+
+# 或使用内置命令
+python orchestrator.py --status
 ```
 
 ### Q: 如何中断执行？
@@ -858,14 +878,14 @@ python orchestrator.py
 python orchestrator.py --model deepseek-v3.2
 
 # 多模型（不同阶段使用不同模型）
-# 格式: "plan:模型A;default:模型B;simple:模型C"
+# 格式: "plan:模型A;default:模型B;lite:模型C"
 # - plan: idea 分解为 TODO 阶段
 # - default: 任务执行默认模型
-# - simple: 简单任务使用的轻量模型
-python orchestrator.py --model "plan:GLM-4-Flash;default:GLM-5;simple:GLM-4-Flash"
+# - lite: 简单任务使用的轻量模型
+python orchestrator.py --model "plan:GLM-4-Flash;default:GLM-5;lite:GLM-4-Flash"
 
 # 只指定部分角色（缺失的角色使用 default 的值）
-python orchestrator.py --model "default:GLM-5;simple:GLM-4-Flash"
+python orchestrator.py --model "default:GLM-5;lite:GLM-4-Flash"
 ```
 
 或在代码中指定：
@@ -890,5 +910,5 @@ orchestrator = TodoOrchestrator(provider=provider)
 - ✅ 常见问题和解决方案
 
 如有其他问题，请参考：
-- [README.md](README.md) - 项目介绍
+- [README.md](../README.md) - 项目介绍
 - [ARCHITECTURE.md](ARCHITECTURE.md) - 架构设计

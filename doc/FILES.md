@@ -1,6 +1,6 @@
 # 项目文件说明
 
-本文档详细说明 CodeBuddy Todo Orchestrator 的项目结构和各个文件的作用。
+本文档详细说明 AutoAgent 的项目结构和各个文件的作用。
 
 ## 📁 目录结构
 
@@ -16,13 +16,14 @@ autoagent/
 │   └── FILES.md                 # 本文件：项目文件说明
 ├── requirements.txt             # Python 依赖列表
 ├── .gitignore                   # Git 忽略规则
-├── config.yaml                  # 全局配置（bash_timeout 等）
+├── config.yaml                  # 全局配置（session_timeout, bash_timeout 等）
 ├── todos.example.yaml           # 任务配置示例
+├── TASK_DESIGN_GUIDE.md         # 任务设计指南（供 AI 参考）
 │
 ├── orchestrator.py              # 主程序、CLI 入口
 ├── ai_providers.py              # AI Provider 抽象层（多 CLI 工具支持）
 ├── task_executor.py             # 任务执行器 (Simple/Nested/Looping/Subtask)
-├── autoagent_exec.py            # long_running 任务启动器（AI 通过 Bash 调用）
+├── autoagent_exec.py            # long_running 任务启动器（AI 通过 wrapper 脚本调用）
 ├── codebuddy_client.py          # AIClient（统一 AI 客户端，支持 SDK 和 CLI）
 ├── state_manager.py             # 状态持久化管理
 ├── conversation_logger.py       # 对话日志记录
@@ -47,26 +48,33 @@ autoagent/
 │   ├── reset.bat                # 重置脚本
 │   ├── ideas.md                 # 示例 ideas 文件
 │   ├── todos.yaml               # 示例任务配置
-│   └── cufftdx_optimization/    # 示例项目：cuFFTDx 优化
+│   ├── cufftdx_optimization/    # 示例项目：cuFFTDx 优化
+│   └── mini_compiler/           # 示例项目：迷你编译器
 │
 ├── test/                        # 测试目录
-│   ├── simulation_test/         # 模拟测试（使用 TestProvider）
-│   └── cufftdx_optimization/    # cuFFTDx 优化测试
+│   ├── _reset_test.bat          # 测试重置脚本
+│   ├── _run_test.bat            # 测试运行脚本
+│   └── simulation_test/         # 模拟测试（使用 TestProvider）
 │
 └── <log_dir>/                   # 日志根目录（默认 .autoagent，相对 CWD）
     └── <project>_<random>/      # 项目专属会话目录（由 .autoagent_log 指定）
         ├── orchestrator.log             # Orchestrator 运行日志
         ├── todos_state.yaml             # 任务状态（自动生成）
-        ├── .ideas_processed.md          # Ideas 归档（已处理的 idea 原文）
+        ├── plans_state.yaml             # Ideas 状态跟踪（替代旧的 .ideas_processed.md）
         ├── lr_tasks/                    # long_running 任务文件目录
         │   ├── lr_<task_id>_signal.json # long_running 信号文件
         │   └── lr_<task_id>_output.log  # long_running 命令输出日志
         └── conversations/               # 对话日志目录
             ├── ideas.md                 # Ideas 拆解日志
-            ├── task_1.md                # 简单任务的对话日志
+            ├── task_1_round_1.md        # 简单任务第 1 轮对话
+            ├── task_1_round_2.md        # 简单任务第 2 轮对话
             └── subtask_2/               # 嵌套/循环任务的子任务目录
-                ├── task_2.1.md
-                └── _decisions.md        # AI 决策日志
+                ├── task_2.1_round_1.1.md                      # 子任务，主轮1 子轮1
+                ├── task_2.1_round_1.2.md                      # failure 后重试，主轮1 子轮2
+                ├── task_2.2_round_1.1.md
+                ├── failure_analysis_2.2_round_1.1.md          # 子任务 2.2 失败分析
+                ├── main_task_evaluation_round_1.md            # 主任务评估第 1 轮
+                └── main_task_evaluation_round_2.md
 ```
 
 ## 📄 文件说明
@@ -114,27 +122,37 @@ autoagent/
   # Default AI model (used when no model is specified via CLI --model or preset)
   default_model: glm-5.0-ioa
 
-  # Timeout for each AI call (in seconds).
-  bash_timeout: 3600
+  # Session timeout (hard cap on total AI session time, in seconds).
+  session_timeout: 3600
+
+  # Bash timeout (no-new-output timeout, in seconds).
+  # If the AI produces no new output for this many seconds, the session is killed.
+  bash_timeout: 300
+
+  # Fast-fail timeout for autoagent-exec (in seconds).
+  # Code fallback: 10. Configures how long autoagent-exec waits before
+  # treating a command as long-running.
+  fast_fail_timeout: 30
 
   # Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
   # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
   backoff_max_wait: 300
 
+  # Maximum number of AI review rounds when processing ideas into TODO tasks.
+  max_review_rounds: 5
+
+  # Maximum number of schema-validation retries when processing ideas.
+  max_validation_retries: 2
+
   # Truncation limits for auto-built prompts (in characters)
+  # Only 3 keys are used:
+  #   previous_subtask_summary: for subtask summaries, error text, log files
+  #   history_summary: for history attempt summaries, ai_reasoning
+  #   max: defensive upper bound for fields that should not normally be truncated
   truncation_limits:
-    suggested_fix: 1500
+    previous_subtask_summary: 4000
     history_summary: 300
-    nested_latest_fix: 2000
-    looping_latest_fix: 1500
-    log_section: 6000
-    execution_results: 4000
-    idea_content: 8000
-    tasks_yaml: 10000
-    review_feedback: 3000
-    human_feedback: 3000
-    error_text: 2000
-    log_file: 2000
+    max: 50000
 
   # Preset configurations
   preset:
@@ -143,7 +161,7 @@ autoagent/
       config: ${workspace}/todos.yaml
       provider: codebuddy
       use_cli: false
-      model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:claude-haiku-4.5"
+      model: "plan:claude-opus-4.6;default:claude-opus-4.6;lite:glm-5.0-ioa"
       human_review: true
       verbose: true
 
@@ -152,15 +170,19 @@ autoagent/
       config: ${workspace}/../todos.yaml
       provider: codebuddy
       use_cli: false
-      model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;simple:deepseek-v3-2-volc-ioa"
+      model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;lite:deepseek-v3-2-volc-ioa"
       human_review: true
       verbose: true
   ```
 - **用途**：
   - `system_prompt_prefix`: 全局系统提示词前缀，附加到所有任务的系统提示词中，可在 todos.yaml 中按任务覆盖
   - `default_model`: 默认 AI 模型，当 CLI `--model` 和 preset 均未指定时使用
-  - `bash_timeout`: 提供默认超时配置值
+  - `session_timeout`: 会话超时配置值（总时间硬上限）
+  - `bash_timeout`: 无新输出超时配置值（检测 AI 卡住）
+  - `fast_fail_timeout`: autoagent-exec 快速失败超时时间，命令在此时间内退出则立即报告结果，否则转为后台运行（代码兜底值 10 秒，shipped config.yaml 中设为 30 秒）
   - `backoff_max_wait`: AI CLI 连续失败时的最大退避等待时间（指数退避：5s→10s→20s→...→上限）
+  - `max_review_rounds`: Ideas 拆解时 AI 审查的最大轮数（代码兜底值 3，shipped config.yaml 中设为 5）
+  - `max_validation_retries`: Ideas 拆解时 schema 校验的最大重试次数（默认 2）
   - `truncation_limits`: 控制各类提示词字段的最大字符数，防止上下文过长
   - `preset`: 定义常用参数预设，通过 `--preset <name>` 快速切换配置
 - **变量替换**：Preset 中支持 `${workspace}` 变量，会被替换为当前工作目录
@@ -176,6 +198,11 @@ autoagent/
 - **作用**：任务配置示例文件
 - **内容**：包含 simple、nested、looping、long_running、simple_once、long_running_once 六种任务类型的配置示例
 - **用途**：用户可以复制此文件作为 `todos.yaml` 的模板
+
+#### TASK_DESIGN_GUIDE.md
+- **作用**：任务设计指南
+- **内容**：详细的任务设计最佳实践和规范说明
+- **用途**：供 AI 在 Ideas 拆解为任务时参考，通过 `prompts/shared.py` 的 `load_task_design_guide()` 函数加载
 
 ### 程序文件
 
@@ -200,7 +227,7 @@ autoagent/
   - `TestProvider`：测试用 Provider（从规则文件读取预定义响应）
 - **核心函数**：
   - `get_provider(name, model)`：工厂函数，根据名称创建 provider 实例
-  - `parse_model_spec(model_str)`：解析多模型规格字符串，支持 `"plan:X;default:Y;simple:Z"` 格式和单模型 `"glm-5"` 格式，返回 `{"plan": ..., "default": ..., "simple": ...}` 字典
+  - `parse_model_spec(model_str)`：解析多模型规格字符串，支持 `"plan:X;default:Y;lite:Z"` 格式和单模型 `"glm-5"` 格式，返回 `{"plan": ..., "default": ..., "lite": ...}` 字典
 
 #### task_executor.py
 - **作用**：任务执行器
@@ -212,7 +239,7 @@ autoagent/
 
 #### autoagent_exec.py
 - **作用**：long_running 任务启动器
-- **用途**：AI 通过 Bash 调用此脚本启动长时间命令，支持 10 秒快速失败检测 + 信号文件通信
+- **用途**：AI 通过 wrapper 脚本（`autoagent-exec.bat` / `autoagent-exec.sh`）调用此脚本启动长时间命令，支持快速失败检测 + 信号文件通信 + 智能输出（短输出内联打印，长输出只给路径）
 
 #### codebuddy_client.py
 - **作用**：统一 AI 客户端封装
@@ -252,8 +279,15 @@ autoagent/
   - `load_system_prompt_prefix()`: 从 config.yaml 加载并缓存 `system_prompt_prefix`
   - `get_system_prompt_prefix(task)`: 获取有效的系统提示词前缀（任务级覆盖全局）
   - `apply_system_prompt_prefix(parts, task)`: 将前缀插入到 prompt 部件列表的开头
+  - `prepend_system_prompt_prefix(prompt, task)`: 将前缀拼接到 prompt 字符串的开头
   - `load_task_design_guide()`: 加载并缓存 TASK_DESIGN_GUIDE.md 内容
-  - `build_timeout_guidance(exec_script_path, timeout_feedback)`: 构建超时警告提示
+  - `build_timeout_guidance(exec_script_path, timeout_feedback, timeout_type)`: 构建超时警告提示（支持 bash 和 session 两种超时类型）
+  - `build_sibling_context(task, parent_context)`: 构建兄弟任务上下文信息
+  - `build_history_section(history, extract_summary_fn)`: 构建历史尝试记录
+  - `build_suggested_fix_section(parent_context, fallback_msg)`: 构建修复建议
+  - `build_autoagent_exec_note(exec_script_path)`: 构建 autoagent-exec 使用说明（已废弃，保留向后兼容）
+  - `build_previous_subtask_section(parent_context)`: 构建前一子任务摘要（用于上下文隔离的子任务间传递信息）
+  - `build_long_running_reminder(exec_script_path)`: 构建长时间任务简短提醒
 
 #### prompts/simple_task.py
 - **作用**：简单任务执行 prompt 构造器
@@ -352,7 +386,8 @@ tasks:
 | `name` | string | 是 | 任务名称 |
 | `type` | string | 是 | 顶层任务类型：`simple`、`nested`、`looping`；子任务类型：`simple`、`long_running`、`simple_once`、`long_running_once` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
-| `model` | string | 否 | 模型选择：`"default"` 或 `"simple"`（默认 `"default"`） |
+| `model` | string | 否 | 模型选择：`"default"`、`"lite"` 或直接模型名称（默认 `"default"`） |
+| `system_prompt_prefix` | string | 否 | 任务级系统提示词前缀，覆盖 config.yaml 中的全局设置 |
 
 #### 简单任务 (type: simple)
 
@@ -365,7 +400,7 @@ tasks:
 | 额外字段 | 类型 | 必填 | 说明 |
 |---------|------|------|------|
 | `subtasks` | list | 是 | 子任务列表 |
-| `max_attempts` | int | 否 | 最大重试轮数（默认 20） |
+| `max_attempts` | int | 否 | 最大重试轮数（默认 5） |
 
 #### 循环任务 (type: looping)
 
@@ -373,13 +408,14 @@ tasks:
 |---------|------|------|------|
 | `subtasks` | list | 是 | 子任务列表 |
 | `repeat_count` | int | 是 | 循环次数（正整数） |
-| `max_attempts_per_loop` | int | 否 | 每轮循环内最大重试次数（默认 20） |
+| `max_attempts_per_loop` | int | 否 | 每轮循环内最大重试次数（默认 5） |
 
 #### 长时间任务 (type: long_running)
 
 | 额外字段 | 类型 | 必填 | 说明 |
 |---------|------|------|------|
-| `command` | string | 否 | 要执行的命令（可选，AI 可自行决定） |
+| `initial_hint` | string | 否 | 初始提示（给 AI 的参考信息，如要运行的命令） |
+| `command` | string | 否 | （已废弃）旧版配置字段。现在 AI 会根据任务描述自主决定要运行的命令，并通过 `autoagent-exec` 启动 |
 
 ## 📊 状态值说明
 

@@ -138,11 +138,12 @@ python orchestrator.py --status
 |------|------|------|
 | `--config` | `-c` | 任务配置文件路径（默认 `todos.yaml`） |
 | `--task` | `-t` | 只执行指定的任务 ID |
-| `--provider` | `-P` | AI Provider（`codebuddy` / `claude` / `gemini` / `opencode`） |
+| `--provider` | `-P` | AI Provider（`codebuddy` / `claude` / `gemini` / `opencode` / `test`） |
 | `--model` | `-m` | AI 模型名称 |
 | `--workspace` | `-w` | 工作目录（默认当前目录） |
 | `--ideas` | | ideas 文件路径，启用自动拆解 |
 | `--ideas-only` | | 仅拆解 ideas，不运行任务（支持人工审核） |
+| `--human-review` | | 启用 ideas 处理的人工审核 |
 | `--no-idle` | | 禁用 idle 模式 |
 | `--idle-interval` | | idle 模式检查间隔秒数（默认 30） |
 | `--preset` | | Preset 配置名称（默认 `default`），从 config.yaml 加载预设参数 |
@@ -150,6 +151,8 @@ python orchestrator.py --status
 | `--log-dir` | | 日志目录（默认 `.autoagent`） |
 | `--status` | | 显示当前任务状态 |
 | `--reset` | | 重置所有任务状态 |
+| `--validate` | | 验证配置文件并退出 |
+| `--no-skip` | | 不跳过已完成的任务 |
 | `--verbose` | `-v` | 启用详细日志 |
 | `--list-providers` | | 列出所有可用 AI Provider |
 
@@ -181,25 +184,16 @@ preset:
   - name: default
     ideas: ${workspace}/ideas.md
     config: ${workspace}/todos.yaml
-    provider: opencode
-    model: deepseek-v3.2
-
-  - name: claude
-    provider: claude
-    model: claude-sonnet-4-6
-
-  - name: debug
     provider: codebuddy
-    verbose: true
-    no_skip: true
+    model: "plan:claude-opus-4.6;default:claude-opus-4.6;lite:glm-5.0-ioa"
 ```
 
 ```bash
 # 使用 default 预设
 python orchestrator.py
 
-# 使用 claude 预设
-python orchestrator.py --preset claude
+# 使用指定预设
+python orchestrator.py --preset test
 
 # 使用预设但覆盖特定参数（命令行参数优先级更高）
 python orchestrator.py --preset default --model claude-sonnet-4-6

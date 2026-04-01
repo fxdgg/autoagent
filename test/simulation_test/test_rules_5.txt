@@ -48,7 +48,7 @@ I have set up the environment:
 # First and only execution of the one-time data preprocessing.
 I'll run the data preprocessing pipeline using autoagent-exec:
 
-autoagent-exec --cmd "python -c \"import time; time.sleep(5)\"" --task-id 1.2
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.2
 
 ⏳ LONG_RUNNING_IN_PROGRESS
 ---RULE---

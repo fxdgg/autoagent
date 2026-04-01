@@ -1,0 +1,80 @@
+# =============================================================================
+# cuFFTDx DCT3D Kernel Optimization - AutoAgent Test Task
+# =============================================================================
+# This configuration drives the AI to iteratively optimize a 3D DCT kernel
+# built on cuFFTDx. The AI must:
+#   1. Build the project & record baseline performance
+#   2. Use NVIDIA Nsight Compute (ncu) to profile kernel bottlenecks
+#   3. Modify CUDA code to improve performance
+#   4. Rebuild, benchmark, and verify correctness (Score: 100/100)
+#   5. Git commit if improved ≥ 20%, git reset if not
+#   6. Iterate until the cumulative speedup target is met
+# =============================================================================
+
+tasks:
+  # ==========================================================================
+  # Task 1: Optimize cuFFTDx DCT3D Kernel (nested task with iterative loop)
+  # ==========================================================================
+  - id: 1
+    name: "Optimize cuFFTDx DCT3D Kernel Performance"
+    type: nested
+    max_attempts: 100
+    completion_criteria: |
+      The overall performance of the cuFFTDx DCT3D kernel (64x64x64, forward + inverse) must improve by at least 20% compared to the initial baseline.
+
+    subtasks:
+      # -----------------------------------------------------------------------
+      # Step 1: Build the project and record baseline performance
+      # -----------------------------------------------------------------------
+      - id: 1.1
+        name: "Build project and record baseline performance"
+        type: simple
+        completion_criteria: |
+          The project builds successfully using CMake, the built executable runs correctly, and a baseline timing measurement is recorded.
+        initial_hint: |
+          The project uses CMake with a custom CUDA compilation setup.
+
+      # -----------------------------------------------------------------------
+      # Step 2: Profile kernels with NVIDIA Nsight Compute (ncu)
+      # -----------------------------------------------------------------------
+      - id: 1.2
+        name: "Profile kernels with ncu and identify bottlenecks"
+        type: long_running
+        completion_criteria: |
+          Write a brief analysis to ncu_analysis.txt.
+        initial_hint: |
+          Use autoagent-exec to run the ncu profiling command.
+
+      # -----------------------------------------------------------------------
+      # Step 3: Optimize the CUDA kernel code
+      # -----------------------------------------------------------------------
+      - id: 1.3
+        name: "Optimize CUDA kernel based on profiling results"
+        type: simple
+        max_attempts: 2
+        completion_criteria: |
+          Modify the CUDA code to improve performance based on the identified bottlenecks.
+        initial_hint: |
+          The core kernels are in cufftdx_dct3d.cuh.
+
+      # -----------------------------------------------------------------------
+      # Step 4: Build, benchmark, and verify correctness
+      # -----------------------------------------------------------------------
+      - id: 1.4
+        name: "Build optimized code and benchmark"
+        type: simple
+        completion_criteria: |
+          Rebuild the project and run the benchmark, write results to optimization_result.txt. If correctness fails (Score < 100/100), report this clearly as a failure
+        initial_hint: |
+          Build: cmake --build build --config Release
+
+      # -----------------------------------------------------------------------
+      # Step 5: Git commit or reset based on results
+      # -----------------------------------------------------------------------
+      - id: 1.5
+        name: "Git commit if improved, git reset if not"
+        type: simple
+        completion_criteria: |
+          If the optimization was effective, run: git add -A && git commit -m "perf: optimize cuFFTDx DCT3D kernel - X.X% speedup"
+        initial_hint: |
+          Read optimization_result.txt to determine the outcome.

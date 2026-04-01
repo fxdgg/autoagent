@@ -1,0 +1,98 @@
+# =============================================================================
+# Test Rules 7 - Subtask Containing Nested Subtask (Multi-level Nesting)
+# =============================================================================
+# This test verifies that a subtask of type "nested" works correctly when
+# it is itself a subtask of a parent nested task.
+#
+# Task structure:
+#   Task 1: nested (max_attempts=3)
+#     - 1.1: simple (setup)
+#     - 1.2: nested (max_attempts=2)  <-- subtask is itself nested!
+#       - 1.2.1: simple (inner step 1)
+#       - 1.2.2: simple (inner step 2, fails first time → inner failure analysis)
+#     - 1.3: simple (final validation)
+#
+# Expected call sequence (ask() calls in order):
+#   Rule 1:  Subtask 1.1 → ✅ completed
+#   Rule 2:  Inner subtask 1.2.1 → ✅ completed
+#   Rule 3:  Inner subtask 1.2.2 → ❌ not completed (inner failure)
+#   Rule 4:  Inner failure analysis for 1.2 → JSON: retry_from=1.2.2
+#   Rule 5:  Inner subtask 1.2.2 (retry) → ✅ completed
+#   Rule 6:  Inner main task evaluation for 1.2 → main_task_completed: true
+#   Rule 7:  Subtask 1.3 → ✅ completed
+#   Rule 8:  Outer main task evaluation for 1 → main_task_completed: true
+# =============================================================================
+
+# --- Rule 1: Subtask 1.1 - COMPLETED ---
+I have completed the initial setup.
+
+Environment configured, dependencies installed.
+
+✅ completed
+---RULE---
+# --- Rule 2: Inner subtask 1.2.1 - COMPLETED ---
+# This is the first subtask inside the nested subtask 1.2
+I have prepared the data for processing.
+
+Data files created:
+- input_data.csv (500 records)
+- config.json (processing parameters)
+
+✅ completed
+---RULE---
+# --- Rule 3: Inner subtask 1.2.2 - NOT COMPLETED ---
+# This fails, triggering failure analysis within the inner nested task 1.2
+I attempted to process the data but encountered a validation error.
+
+Error: Row 42 has invalid value in column 'score': NaN
+The data preparation step missed some null values.
+
+❌ not completed: Data validation failed - NaN values in input
+---RULE---
+# --- Rule 4: Inner failure analysis for subtask 1.2 ---
+# AI analyzes the failure within the inner nested task
+# retry_from=1.2.2 means only the processing step is retried
+{
+    "analysis": "Inner subtask 1.2.2 failed because the input data contains NaN values that were not cleaned in step 1.2.1. However, the data preparation itself was correct - we just need to add NaN handling in the processing step.",
+    "retry_from": "1.2.2",
+    "suggested_fix": "Add NaN value handling (fillna or dropna) before processing. Check for null values in the 'score' column specifically.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 5: Inner subtask 1.2.2 (retry) - COMPLETED ---
+# After inner failure analysis, the processing step is retried
+I added NaN handling and re-processed the data successfully.
+
+- Added dropna() for the 'score' column
+- Processed 498 valid records (2 dropped due to NaN)
+- Output saved to processed_results.csv
+
+✅ completed
+---RULE---
+# --- Rule 6: Inner main task evaluation for subtask 1.2 ---
+# The inner nested task evaluates whether its completion criteria are met
+{
+    "main_task_completed": true,
+    "analysis": "Both inner processing steps completed successfully. Data was prepared (1.2.1) and processed with NaN handling (1.2.2). 498 out of 500 records processed correctly.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 7: Subtask 1.3 - COMPLETED ---
+# Back to the outer task, final validation
+I have validated all results from the multi-step processing.
+
+Validation results:
+- Record count: 498 (matches processed output)
+- Data integrity: PASSED
+- Statistical checks: PASSED (mean=0.85, std=0.12)
+- No anomalies detected
+
+✅ completed
+---RULE---
+# --- Rule 8: Outer main task evaluation for task 1 ---
+# The outer nested task evaluates whether all subtasks completed
+{
+    "main_task_completed": true,
+    "analysis": "All subtasks completed successfully. Initial setup (1.1) done, multi-step processing (1.2) completed with inner retry for NaN handling, and final validation (1.3) passed all checks.",
+    "confidence": "high"
+}

@@ -27,6 +27,5 @@ from prompts.main_evaluation import build_main_evaluation_prompt
 from prompts.ideas_decompose import build_ideas_decompose_prompt
 from prompts.ideas_review import (
     build_ideas_review_prompt,
-    build_ideas_revision_prompt,
-    build_human_feedback_revision_prompt,
+    build_revision_prompt,
 )

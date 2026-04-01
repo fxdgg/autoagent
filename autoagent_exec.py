@@ -2,19 +2,36 @@
 """
 autoagent-exec: Long-running task launcher for AutoAgent.
 
-This script is called by the AI (via Bash tool) to submit a long-running task.
-It implements a "10-second fast-fail" mechanism:
+This script is called by the AI through a wrapper script (autoagent-exec.bat
+on Windows, autoagent-exec.sh on Linux/macOS).  The wrapper pre-fills all
+internal parameters (log directory, task ID, fast-fail timeout); the AI only
+needs to append the command to run (wrapped in double quotes).
+
+The command is passed as a single shell string via ``--cmd``, which means
+shell operators (&&, |, ;, etc.) are preserved and executed correctly.
+This makes autoagent-exec behave like a real terminal for the AI.
+
+It implements a fast-fail mechanism (default 10 seconds, configurable via
+config.yaml ``fast_fail_timeout``):
   - Start the command in foreground
-  - If it exits within 10 seconds with a non-zero exit code, report the error
+  - If it exits within the timeout with a non-zero exit code, report the error
     immediately so the AI can fix the command without restarting the session
-  - If it's still running after 10 seconds, detach it to the background,
+  - If it's still running after the timeout, detach it to the background,
     write a signal file, and tell the AI to end its session
 
-Usage (called by AI via Bash):
-    python <path>/autoagent_exec.py --log-dir <log_session_dir> --task-id <id> -- <command...>
+Usage (via wrapper script):
+    autoagent-exec.bat "<command...>"          (Windows)
+    bash autoagent-exec.sh "<command...>"      (Linux/macOS)
 
-Example:
-    python autoagent_exec.py --log-dir /path/to/logs/proj_abc123 --task-id 1.2 -- ncu --set full --csv ./build/Release/main.exe
+Examples:
+    autoagent-exec.bat "cd build && cmake .. && make -j8"
+    autoagent-exec.bat "python train.py --epochs 100 | tee log.txt"
+
+Internal invocation (by the wrapper script, not by the AI directly):
+    python autoagent_exec.py --log-dir <dir> --task-id <id> [--fast-fail-timeout <s>] --cmd "<command>"
+
+Legacy invocation (backward compatible):
+    python autoagent_exec.py --log-dir <dir> --task-id <id> [--fast-fail-timeout <s>] -- <command...>
 
 Signal file: <log-dir>/lr_tasks/lr_<task_id>_signal.json
 Output log:  <log-dir>/lr_tasks/lr_<task_id>_output.log
@@ -28,8 +45,10 @@ import subprocess
 import sys
 import time
 
-# Timeout in seconds for fast-fail detection
-FAST_FAIL_TIMEOUT = 10
+# Default timeout in seconds for fast-fail detection.
+# Can be overridden via --fast-fail-timeout CLI argument,
+# which is configured in config.yaml as fast_fail_timeout.
+DEFAULT_FAST_FAIL_TIMEOUT = 10
 
 
 def _ensure_utf8_stdio():
@@ -43,41 +62,76 @@ def _ensure_utf8_stdio():
 def parse_args():
     parser = argparse.ArgumentParser(
         description="AutoAgent long-running task launcher.\n\n"
-            "Runs a command with fast-fail detection:\n"
-            "  - If the command exits within 10s with an error, the error is shown immediately.\n"
-            "  - If the command is still running after 10s, it is detached to the background\n"
-            "    and a signal file is created for the orchestrator to monitor.\n\n"
+            "This script is invoked through the autoagent-exec wrapper script\n"
+            "(autoagent-exec.bat on Windows, autoagent-exec.sh on Linux/macOS).\n"
+            "All internal parameters (log directory, task ID, timeout, etc.) are\n"
+            "pre-configured in the wrapper script — you only need to append the\n"
+            "command you want to run.\n\n"
+            "The wrapper script forwards your entire command line as a single\n"
+            "shell string, so you can use shell features like cd, &&, |, ;, etc.\n"
+            "just as you would in a real terminal.\n\n"
+            "Usage (via wrapper script):\n"
+            "  <path>/autoagent-exec.bat <command...>     (Windows)\n"
+            "  bash <path>/autoagent-exec.sh <command...>  (Linux/macOS)\n\n"
             "Examples:\n"
-            "  python autoagent_exec.py --log-dir /path/to/logs --task-id 1.2 -- make -j8\n"
-            "  python autoagent_exec.py --log-dir /path/to/logs --task-id 2.1 -- python train.py --epochs 100\n"
-            "  python autoagent_exec.py --log-dir /path/to/logs --task-id 1.3 -- ncu --set full ./main.exe\n\n"
-            "Output files (created under <log-dir>/lr_tasks/):\n"
-            "  lr_<task-id>_signal.json  - Status signal file (running/finished/error)\n"
-            "  lr_<task-id>_output.log   - Full stdout+stderr output of the command",
+            "  autoagent-exec.bat make -j8\n"
+            "  autoagent-exec.bat cd build && cmake .. && make -j8\n"
+            "  autoagent-exec.bat python train.py --epochs 100 | tee log.txt\n"
+            "  bash autoagent-exec.sh ncu --set full ./main.exe\n\n"
+            "Behavior:\n"
+            "  - If the command fails quickly, the error is shown immediately\n"
+            "    so you can fix and retry without restarting the session.\n"
+            "  - If the command is still running after the fast-run window,\n"
+            "    it is detached to the background. You should then end your\n"
+            "    session; AutoAgent will call you back when it completes.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        usage="autoagent_exec.py --log-dir <dir> --task-id <id> -- <command...>",
+        usage="autoagent-exec.bat <command...>  OR  bash autoagent-exec.sh <command...>",
     )
+    # Internal parameters — hidden from --help because they are pre-filled
+    # by the wrapper script. AI should never set these manually.
     parser.add_argument(
         "--log-dir",
         required=True,
-        help="Log session directory (absolute path) where signal and output files are written",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--task-id",
         required=True,
-        help="Subtask ID (e.g. 1.2)",
+        help=argparse.SUPPRESS,
     )
-    # Everything after '--' is the command
+    parser.add_argument(
+        "--fast-fail-timeout",
+        type=int,
+        default=DEFAULT_FAST_FAIL_TIMEOUT,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--cmd",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    # Everything after '--' is the command (legacy mode)
     args, remaining = parser.parse_known_args()
 
     # Remove leading '--' if present
     if remaining and remaining[0] == "--":
         remaining = remaining[1:]
 
-    if not remaining:
-        parser.error("No command specified. Usage: autoagent_exec.py --log-dir <dir> --task-id <id> -- <command...>")
+    if args.cmd:
+        # --cmd mode: the wrapper script passes the entire command line
+        # as a single pre-joined string.  Use it verbatim so that shell
+        # operators (&&, |, ;, etc.) are preserved.
+        args.command_str = args.cmd
+    elif remaining:
+        # Legacy mode: command tokens passed after '--'.
+        # Re-join them into a shell string.
+        if os.name == "nt":
+            args.command_str = subprocess.list2cmdline(remaining)
+        else:
+            args.command_str = shlex.join(remaining)
+    else:
+        parser.error("No command specified. Append the command after the script path.")
 
-    args.command = remaining
     return args
 
 
@@ -96,14 +150,8 @@ def main():
 
     log_dir = args.log_dir
     task_id = args.task_id
-    command = args.command
-    # Re-quote the command list into a single shell string.
-    # On Windows, use subprocess.list2cmdline (handles "C:/Program Files/...").
-    # On POSIX, use shlex.join which produces /bin/sh-compatible quoting.
-    if os.name == "nt":
-        command_str = subprocess.list2cmdline(command)
-    else:
-        command_str = shlex.join(command)
+    command_str = args.command_str
+    fast_fail_timeout = args.fast_fail_timeout
 
     # Ensure lr_tasks subdirectory exists
     lr_tasks_dir = os.path.join(log_dir, "lr_tasks")
@@ -141,13 +189,13 @@ def main():
 
     pid = proc.pid
 
-    # --- Fast-fail phase: wait up to FAST_FAIL_TIMEOUT seconds ---
-    print(f"[autoagent-exec] Starting command (watching for {FAST_FAIL_TIMEOUT}s)...")
+    # --- Fast-fail phase: wait up to fast_fail_timeout seconds ---
+    print(f"[autoagent-exec] Starting command (watching for {fast_fail_timeout}s)...")
     print(f"   Command: {command_str}")
     print(f"   PID: {pid}")
 
     try:
-        exit_code = proc.wait(timeout=FAST_FAIL_TIMEOUT)
+        exit_code = proc.wait(timeout=fast_fail_timeout)
     except subprocess.TimeoutExpired:
         exit_code = None  # Still running after timeout
 
@@ -158,7 +206,7 @@ def main():
         if exit_code == 0:
             # Command finished successfully (it was fast, not really long-running)
             print(f"\n[OK] Command finished quickly (exit code 0).")
-            print(f"   Output log: {output_log}")
+            _print_output_smart(output_log)
 
             # Write a "finished" signal file
             signal_data = {
@@ -175,22 +223,8 @@ def main():
             sys.exit(0)
         else:
             # Command failed fast — print error for AI to see and retry
-            print(f"\n[FAST-FAIL] Command failed within {FAST_FAIL_TIMEOUT}s (exit code {exit_code}).")
-            print(f"   Output log: {output_log}")
-
-            # Print the log content so AI can see the error
-            try:
-                content = _read_log_file(output_log)
-                if content.strip():
-                    # Show last 3000 chars
-                    tail = content[-3000:] if len(content) > 3000 else content
-                    print(f"\n--- Command Output (last part) ---")
-                    print(tail)
-                    print(f"--- End of Output ---")
-                else:
-                    print(f"   (no output captured)")
-            except Exception as e:
-                print(f"   (failed to read output log: {e})")
+            print(f"\n[FAST-FAIL] Command failed within {fast_fail_timeout}s (exit code {exit_code}).")
+            _print_output_smart(output_log)
 
             # Do NOT write a signal file — let the AI fix and retry
             sys.exit(exit_code)
@@ -205,10 +239,7 @@ def main():
     # The subprocess will continue writing via its inherited fd.
     log_fh.close()
 
-    print(f"\n[RUNNING] Command is still running after {FAST_FAIL_TIMEOUT}s -- treating as long-running task.")
-    print(f"   PID: {pid}")
-    print(f"   Output log: {output_log}")
-    print(f"   Signal file: {signal_file}")
+    print(f"\n[RUNNING] Command is still running after {fast_fail_timeout}s -- treating as long-running task.")
 
     # Write signal file with "running" status
     signal_data = {
@@ -257,7 +288,7 @@ def main():
         print(f"   The orchestrator will fall back to process-alive checks.")
 
     print(f"\n" + "=" * 60)
-    print(f"  LONG-RUNNING TASK SUBMITTED SUCCESSFULLY")
+    print(f"  TASK SUBMITTED")
     print(f"  The task is running in the background (PID {pid}).")
     print(f"  You MUST now end your current session immediately.")
     print(f"  Output your final status as: LONG_RUNNING_IN_PROGRESS")
@@ -295,12 +326,15 @@ def monitor_mode():
     except Exception:
         signal_data = {}
 
-    # If we couldn't get exit_code, assume finished (the orchestrator
-    # will check output to determine success/failure)
+    # If we couldn't get exit_code (common on Linux where a non-parent
+    # process cannot retrieve another process's exit code), omit the
+    # exit_code field entirely so that downstream consumers (including
+    # the AI) are not misled by a fake value like -1.
     if exit_code is None:
         signal_data["status"] = "finished"
-        signal_data["exit_code"] = -1
-        signal_data["note"] = "Process exited but exit code unknown"
+        # Do NOT set exit_code — let downstream read it as None / missing
+        signal_data.pop("exit_code", None)
+        signal_data["note"] = "Process exited but exit code unavailable (platform limitation)"
     else:
         signal_data["status"] = "finished" if exit_code == 0 else "error"
         signal_data["exit_code"] = exit_code
@@ -389,6 +423,41 @@ def _wait_for_process_unix(pid: int) -> 'int | None':
 
 def _is_monitor_mode():
     return "--monitor" in sys.argv
+
+
+# Maximum output length (in characters) to print inline.
+# If the output exceeds this, only the log file path is shown.
+_INLINE_OUTPUT_MAX_CHARS = 3000
+
+
+def _print_output_smart(output_log: str):
+    """Print command output inline if short, or show the log path if long.
+
+    - If the output is empty, prints a note saying no output was captured.
+    - If the output length <= _INLINE_OUTPUT_MAX_CHARS, prints the full
+      content inline with an explicit note that it is NOT truncated, so the
+      AI does not attempt to read the file again.
+    - If the output is longer, only prints the log file path so the AI can
+      read it if needed.
+    """
+    try:
+        content = _read_log_file(output_log)
+    except Exception as e:
+        print(f"   (failed to read output log: {e})")
+        return
+
+    stripped = content.strip()
+    if not stripped:
+        print(f"   (no output captured)")
+        return
+
+    if len(stripped) <= _INLINE_OUTPUT_MAX_CHARS:
+        print(f"\n--- Command Output (complete, not truncated) ---")
+        print(stripped)
+        print(f"--- End of Output ---")
+    else:
+        print(f"   Output is too long ({len(stripped)} chars) to display inline.")
+        print(f"   Full output log: {output_log}")
 
 
 def _read_log_file(path: str) -> str:

@@ -1,0 +1,146 @@
+# ============================================================
+# MiniLang Demo: A showcase of all language features
+# ============================================================
+
+# --- Variables and Arithmetic ---
+let x = 42
+let pi = 3.14159
+let greeting = "Hello, MiniLang!"
+print(greeting)
+print("x = " + str(x))
+print("pi ≈ " + str(pi))
+
+# --- Expressions with operator precedence ---
+let result = (2 + 3) * 4 - 10 / 2
+print("(2 + 3) * 4 - 10 / 2 = " + str(result))
+
+# --- Boolean logic ---
+let a = true
+let b = false
+print("true and false = " + str(a and b))
+print("true or false  = " + str(a or b))
+print("not true       = " + str(not a))
+
+# --- If / Else ---
+let score = 85
+if (score >= 90) {
+    print("Grade: A")
+} else if (score >= 80) {
+    print("Grade: B")
+} else if (score >= 70) {
+    print("Grade: C")
+} else {
+    print("Grade: F")
+}
+
+# --- While loop ---
+let sum = 0
+let i = 1
+while (i <= 100) {
+    sum = sum + i
+    i = i + 1
+}
+print("Sum 1..100 = " + str(sum))
+
+# --- For-in loop with range ---
+print("Squares:")
+for (n in range(1, 6)) {
+    print("  " + str(n) + "^2 = " + str(n * n))
+}
+
+# --- Arrays ---
+let fruits = ["apple", "banana", "cherry"]
+push(fruits, "date")
+print("Fruits: " + str(fruits))
+print("First fruit: " + fruits[0])
+print("Array length: " + str(len(fruits)))
+
+# --- Functions ---
+fn factorial(n) {
+    if (n <= 1) {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+fn fibonacci(n) {
+    if (n <= 1) {
+        return n
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2)
+}
+
+print("5! = " + str(factorial(5)))
+print("fib(10) = " + str(fibonacci(10)))
+
+# --- Bubble Sort ---
+fn bubble_sort(arr) {
+    let n = len(arr)
+    for (i in range(n)) {
+        for (j in range(0, n - 1 - i)) {
+            if (arr[j] > arr[j + 1]) {
+                let temp = arr[j]
+                arr[j] = arr[j + 1]
+                arr[j + 1] = temp
+            }
+        }
+    }
+    return arr
+}
+
+let numbers = [64, 34, 25, 12, 22, 11, 90]
+print("Before sort: " + str(numbers))
+bubble_sort(numbers)
+print("After sort:  " + str(numbers))
+
+# --- Prime Sieve ---
+fn sieve_primes(limit) {
+    let primes = []
+    for (n in range(2, limit)) {
+        let is_prime = true
+        let k = 2
+        while (k * k <= n) {
+            if (n % k == 0) {
+                is_prime = false
+                break
+            }
+            k = k + 1
+        }
+        if (is_prime) {
+            push(primes, n)
+        }
+    }
+    return primes
+}
+
+print("Primes < 30: " + str(sieve_primes(30)))
+
+# --- Higher-order-like pattern: apply function by name ---
+fn apply_twice(val, op) {
+    # Since we don't have first-class functions, use a string dispatch
+    if (op == "double") {
+        return val * 2 * 2
+    }
+    if (op == "negate") {
+        return val * -1 * -1
+    }
+    return val
+}
+
+print("apply_twice(5, 'double') = " + str(apply_twice(5, "double")))
+
+# --- FizzBuzz ---
+print("FizzBuzz 1-20:")
+for (i in range(1, 21)) {
+    if (i % 15 == 0) {
+        print("  FizzBuzz")
+    } else if (i % 3 == 0) {
+        print("  Fizz")
+    } else if (i % 5 == 0) {
+        print("  Buzz")
+    } else {
+        print("  " + str(i))
+    }
+}
+
+print("=== Demo Complete ===")

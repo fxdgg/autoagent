@@ -1,6 +1,6 @@
 # 文档索引
 
-欢迎使用 CodeBuddy Todo Orchestrator！
+欢迎使用 AutoAgent！
 
 本文档索引帮助你快速找到需要的文档。
 

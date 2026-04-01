@@ -1,171 +1,103 @@
 #!/usr/bin/env python3
 """
-AutoAgent Test Script - cuFFTDx DCT3D Kernel Optimization
+AutoAgent Simulation Test Runner
 
-This script tests the AutoAgent system by running an AI-driven optimization
-task on a cuFFTDx-based 3D DCT kernel implementation.
+Automated test runner for AutoAgent orchestrator simulation tests.
+Runs each test using the TestProvider (mock AI), then verifies the
+resulting todos_state.yaml against expected outcomes.
 
-Test objectives:
-  1. AI can build, run, and benchmark CUDA code autonomously
-  2. AI can use ncu (NVIDIA Nsight Compute) to profile kernel performance
-  3. AI commits effective optimizations and reverts ineffective ones via git
-  4. AI iterates until achieving >= 20% overall speedup
+Test definitions are read from test_schema.json in the test root directory.
 
 Usage:
-    python run_test.py                                # Run with defaults (CodeBuddy)
-    python run_test.py --provider claude              # Use Claude Code
-    python run_test.py --provider gemini              # Use Gemini Cli
-    python run_test.py --dry-run                      # Validate config only
-    python run_test.py --status                       # Check current status
-    python run_test.py --reset                        # Reset and start over
-    python run_test.py --model deepseek-v3.2            # Override model
-    python run_test.py --project-root /path/to        # Override project root
-    python run_test.py --autoagent-dir /path/to       # Override autoagent dir
-    python run_test.py --list-providers               # List available AI providers
-    python run_test.py --ideas ideas.md               # Process ideas.md into TODOs
-python run_test.py --ideas ideas.md               # Run then idle for new ideas (idle is default)
+    python run_test.py                        # Run all tests
+    python run_test.py --test 5               # Run only test 5
+    python run_test.py --test 5 --test 8      # Run tests 5 and 8
+    python run_test.py --verbose              # Show orchestrator output
+    python run_test.py --list                 # List all tests
+    python run_test.py --test-root /path/to   # Override test root directory
 """
 
 import os
 import sys
+import json
+import time
+import shutil
 import argparse
 import subprocess
-import shutil
 
 
-def get_default_project_root():
-    """Get the default project root (directory containing this script)."""
+# =============================================================================
+# Path Resolution
+# =============================================================================
+
+def get_script_dir():
+    """Get the directory containing this script (autoagent/)."""
     return os.path.dirname(os.path.abspath(__file__))
 
 
-def get_default_autoagent_dir(project_root):
-    """Get the default autoagent/ directory relative to project root."""
-    return os.path.normpath(os.path.join(project_root, "..", "..", "autoagent"))
+def get_default_test_root():
+    """Get the default test root directory based on this script's location.
 
-
-def check_prerequisites(project_root, autoagent_dir, **kwargs):
-    """Check that all prerequisites are met before running.
-    
-    Args:
-        project_root: Path to the test project directory
-        autoagent_dir: Path to the autoagent directory
-        **kwargs: Additional options:
-            - provider_name: AI provider name (default: 'codebuddy')
-            - executable: Override executable path for the AI tool
+    Default: <script_dir>/test/simulation_test/
     """
-    errors = []
+    return os.path.join(get_script_dir(), "test", "simulation_test")
 
-    # Check autoagent files exist
-    required_autoagent_files = [
-        "orchestrator.py",
-        "codebuddy_client.py",
-        "ai_providers.py",
-        "task_executor.py",
-        "state_manager.py",
-    ]
-    for f in required_autoagent_files:
-        path = os.path.join(autoagent_dir, f)
-        if not os.path.exists(path):
-            errors.append(f"Missing autoagent file: {path}")
 
-    # Check test project files
-    required_test_files = [
-        "CMakeLists.txt",
-        "cufftdx_dct3d.cuh",
-        "cufftdx_dct3d_dispatch.cu",
-        "main.cpp",
-        "todos.yaml",
-    ]
-    for f in required_test_files:
-        path = os.path.join(project_root, f)
-        if not os.path.exists(path):
-            errors.append(f"Missing test file: {path}")
+def load_test_schema(test_root):
+    """Load test case definitions from test_schema.json in the test root.
 
-    # Check Python dependencies
-    try:
-        import yaml
-    except ImportError:
-        errors.append("Missing Python package: pyyaml (pip install pyyaml)")
+    Returns a list of test case dicts.
+    """
+    schema_path = os.path.join(test_root, "test_schema.json")
+    if not os.path.isfile(schema_path):
+        print(f"ERROR: test_schema.json not found at: {schema_path}")
+        sys.exit(1)
 
-    # Check AI tool availability based on provider
-    provider_name = kwargs.get("provider_name", "codebuddy")
-    executable = kwargs.get("executable", None)
-    
-    # Map provider to its default executable
-    provider_executables = {
-        "codebuddy": "codebuddy",
-        "claude": "claude",
-        "gemini": "gemini",
-    }
-    check_exe = executable or provider_executables.get(provider_name, provider_name)
-    
-    try:
-        result = subprocess.run(
-            f"{check_exe} --version",
-            shell=True, capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 0:
-            errors.append(
-                f"AI tool '{check_exe}' not found or not working. "
-                f"Make sure '{check_exe}' is in your PATH."
-            )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        errors.append(
-            f"AI tool '{check_exe}' not found. "
-            f"Make sure '{check_exe}' is in your PATH."
-        )
+    with open(schema_path, "r", encoding="utf-8") as f:
+        test_cases = json.load(f)
 
-    # Check git repo
-    result = subprocess.run(
-        "git status",
-        shell=True, capture_output=True, text=True,
-        cwd=project_root,
-    )
-    if result.returncode != 0:
-        errors.append(
-            "Not a git repository. Please initialize git:\n"
-            f"  cd {project_root}\n"
-            "  git init && git add -A && git commit -m 'initial'"
-        )
+    if not isinstance(test_cases, list) or len(test_cases) == 0:
+        print(f"ERROR: test_schema.json must be a non-empty JSON array")
+        sys.exit(1)
 
-    return errors
+    return test_cases
 
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
 
 def ensure_git_initialized(project_root):
-    """Ensure the test directory has a proper git state for the AI to work with."""
+    """Ensure the test project has a git repository."""
     result = subprocess.run(
         "git status --porcelain",
         shell=True, capture_output=True, text=True,
         cwd=project_root,
     )
     if result.returncode != 0:
-        print("⚠️  Initializing git repository...")
-        subprocess.run("git init", shell=True, cwd=project_root)
-        subprocess.run("git add -A", shell=True, cwd=project_root)
+        subprocess.run("git init", shell=True, cwd=project_root,
+                        capture_output=True)
+        subprocess.run("git add -A", shell=True, cwd=project_root,
+                        capture_output=True)
         subprocess.run(
-            'git commit -m "initial: cuFFTDx DCT3D baseline"',
-            shell=True, cwd=project_root,
+            'git commit -m "initial commit"',
+            shell=True, cwd=project_root, capture_output=True,
         )
-        print("✅ Git repository initialized with baseline commit.")
 
 
-def clean_log_dirs(project_root, log_dir=None):
-    """Clean up the log session directory recorded in .autoagent_log.
+def reset_test(project_root, log_dir):
+    """Reset a test project to clean state.
 
-    The .autoagent_log marker file (inside *project_root*) stores a single
-    subdirectory name such as ``cufftdx_optimization_ko53bi1b``.  This
-    function reads that name, joins it with *log_dir* to form the full
-    session path, removes that directory, and finally removes the marker.
-
-    Args:
-        project_root: Path to the test project directory.
-        log_dir: Root log directory (absolute path).  When *None* the
-                 default ``.autoagent`` under CWD is used, mirroring
-                 the orchestrator default.
+    1. Git checkout + clean to restore tracked files and remove untracked ones
+    2. Remove the log session directory (from .autoagent_log marker)
     """
-    if log_dir is None:
-        log_dir = os.path.join(os.getcwd(), ".autoagent")
+    # Git reset
+    subprocess.run("git checkout -- .", shell=True, cwd=project_root,
+                    capture_output=True)
+    subprocess.run("git clean -fd", shell=True, cwd=project_root,
+                    capture_output=True)
 
+    # Clean log session
     marker = os.path.join(project_root, ".autoagent_log")
     if os.path.exists(marker):
         try:
@@ -178,441 +110,383 @@ def clean_log_dirs(project_root, log_dir=None):
             session_dir = os.path.join(log_dir, subdir_name)
             if os.path.exists(session_dir):
                 shutil.rmtree(session_dir)
-                print(f"  Removed session dir: {session_dir}")
 
         os.remove(marker)
-        print(f"  Removed: .autoagent_log")
-    else:
-        print(f"  No .autoagent_log found; nothing to clean.")
 
-    # Also clean any leftover long-running output files in project root
-    for pattern_dir in ["monitors", "logs"]:
-        target = os.path.join(project_root, pattern_dir)
+    # Clean leftover dirs
+    for d in ["monitors", "logs"]:
+        target = os.path.join(project_root, d)
         if os.path.exists(target):
             shutil.rmtree(target)
-            print(f"  Removed: {pattern_dir}/")
 
 
-def run_orchestrator(
-    project_root,
-    autoagent_dir,
-    provider_name="codebuddy",
-    model=None,
-    executable=None,
-    extra_provider_args=None,
-    extra_args=None,
-):
+def find_session_dir(project_root, log_dir):
+    """Find the session directory created by the orchestrator.
+
+    Reads the .autoagent_log marker in project_root to get the session
+    subdirectory name, then joins it with log_dir.
+    Returns the absolute path, or None if not found.
     """
-    Run the AutoAgent orchestrator on the test task.
-    
-    Args:
-        project_root: Path to test/cufftdx_optimization
-        autoagent_dir: Path to autoagent/
-        provider_name: AI provider name (codebuddy, claude, gemini)
-        model: AI model to use (None = use provider default)
-        executable: Override the default executable for the provider
-        extra_provider_args: Additional CLI arguments for the AI tool
-        extra_args: Additional CLI arguments for the orchestrator
-    """
-    todos_yaml = os.path.join(project_root, "todos.yaml")
+    marker = os.path.join(project_root, ".autoagent_log")
+    if not os.path.exists(marker):
+        return None
+    try:
+        with open(marker, "r", encoding="utf-8") as f:
+            subdir_name = f.read().strip()
+    except Exception:
+        return None
+    if not subdir_name:
+        return None
+    session_dir = os.path.join(log_dir, subdir_name)
+    if os.path.isdir(session_dir):
+        return session_dir
+    return None
+
+
+def run_orchestrator(project_root, autoagent_dir, test_rules, log_dir,
+                     extra_args=None, verbose=False):
+    """Run the orchestrator with TestProvider and return the exit code."""
     orchestrator_py = os.path.join(autoagent_dir, "orchestrator.py")
+    todos_yaml = os.path.join(project_root, "todos.yaml")
 
     cmd_parts = [
-        sys.executable,
+        sys.executable, "-X", "utf8",
         orchestrator_py,
         "--config", todos_yaml,
-        "--provider", provider_name,
+        "--provider", "test",
+        "--test-rules", os.path.abspath(test_rules),
         "--workspace", project_root,
-        "--preset", "none",  # Disable preset to avoid injecting ideas/model from config.yaml
+        "--preset", "none",
+        "--log-dir", log_dir,
         "--verbose",
     ]
-
-    if model:
-        cmd_parts.extend(["--model", model])
-    if executable:
-        cmd_parts.extend(["--executable", executable])
-    if extra_provider_args:
-        cmd_parts.extend(["--extra-args", extra_provider_args])
 
     if extra_args:
         cmd_parts.extend(extra_args)
 
-    cmd = " ".join(f'"{p}"' if " " in p else p for p in cmd_parts)
-
-    # Resolve display model
-    provider_default_models = {
-        "codebuddy": "deepseek-v3.2",
-        "claude": "claude-sonnet-4-6",
-        "gemini": "gemini-2.5-pro",
-    }
-    display_model = model or provider_default_models.get(provider_name, "(default)")
-
-    print(f"\n{'=' * 70}")
-    print(f"  AutoAgent Test: cuFFTDx DCT3D Kernel Optimization")
-    print(f"{'=' * 70}")
-    print(f"  Working directory : {project_root}")
-    print(f"  Config            : {todos_yaml}")
-    print(f"  Provider          : {provider_name}")
-    print(f"  Model             : {display_model}")
-    print(f"  AutoAgent         : {autoagent_dir}")
-    print(f"{'=' * 70}")
-    print(f"\n  Command: {cmd}\n")
-
     # Set PYTHONPATH so orchestrator can import its modules
     env = os.environ.copy()
     existing_pypath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = autoagent_dir + (os.pathsep + existing_pypath if existing_pypath else "")
-
-    # Run the orchestrator
-    try:
-        result = subprocess.run(
-            cmd_parts,
-            cwd=project_root,
-            env=env,
-        )
-        return result.returncode
-    except KeyboardInterrupt:
-        print("\n\n⚠️  Test interrupted by user.")
-        print("    Run again to resume, or use --reset to start over.")
-        return 130
-
-
-def show_results(project_root):
-    """Display test results if available."""
-    print(f"\n{'=' * 70}")
-    print(f"  Test Results")
-    print(f"{'=' * 70}")
-
-    # Show optimization result
-    result_file = os.path.join(project_root, "optimization_result.txt")
-    if os.path.exists(result_file):
-        with open(result_file, 'r') as f:
-            print(f"\n📊 Optimization Result:")
-            print(f.read())
-    else:
-        print("\n📊 No optimization result file found yet.")
-
-    # Show baseline
-    baseline_file = os.path.join(project_root, "baseline_timing.txt")
-    if os.path.exists(baseline_file):
-        with open(baseline_file, 'r') as f:
-            print(f"\n⏱️  Baseline Timing:")
-            print(f.read())
-
-    # Show git log
-    print(f"\n📝 Git Log (recent commits):")
-    subprocess.run(
-        "git log --oneline -10",
-        shell=True, cwd=project_root,
+    env["PYTHONPATH"] = autoagent_dir + (
+        os.pathsep + existing_pypath if existing_pypath else ""
     )
 
-    # Show ncu analysis
-    analysis_file = os.path.join(project_root, "ncu_analysis.txt")
-    if os.path.exists(analysis_file):
-        with open(analysis_file, 'r') as f:
-            content = f.read()
-            print(f"\n🔍 NCU Analysis (first 1000 chars):")
-            print(content[:1000])
-            if len(content) > 1000:
-                print("... (truncated)")
+    kwargs = {
+        "cwd": project_root,
+        "env": env,
+    }
+    if not verbose:
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.PIPE
+        kwargs["text"] = True
+        kwargs["encoding"] = "utf-8"
+        kwargs["errors"] = "replace"
 
-    print(f"\n{'=' * 70}")
+    try:
+        result = subprocess.run(cmd_parts, **kwargs)
+        return result.returncode, result
+    except KeyboardInterrupt:
+        return 130, None
 
+
+def verify_test(test_case, session_dir, actual_exit_code):
+    """Verify test results against expected outcomes.
+
+    Returns (passed: bool, errors: list[str]).
+    """
+    import yaml
+
+    errors = []
+
+    # 1. Check exit code
+    expected_exit = test_case["expected_exit_code"]
+    if actual_exit_code != expected_exit:
+        errors.append(
+            f"Exit code: expected {expected_exit}, got {actual_exit_code}"
+        )
+
+    # 2. Check todos_state.yaml
+    if session_dir is None:
+        errors.append("Session directory not found (no .autoagent_log marker)")
+        return len(errors) == 0, errors
+
+    state_file = os.path.join(session_dir, "todos_state.yaml")
+    if not os.path.exists(state_file):
+        errors.append(f"todos_state.yaml not found in {session_dir}")
+        return len(errors) == 0, errors
+
+    with open(state_file, "r", encoding="utf-8") as f:
+        state = yaml.safe_load(f)
+
+    if not state or "tasks" not in state:
+        errors.append("todos_state.yaml is empty or malformed")
+        return len(errors) == 0, errors
+
+    tasks = state["tasks"]
+
+    for task_id, expected in test_case["expected_tasks"].items():
+        task_key = str(task_id)
+        if task_key not in tasks:
+            errors.append(f"Task '{task_id}': not found in todos_state.yaml")
+            continue
+
+        task_state = tasks[task_key]
+
+        # Check status
+        if "status" in expected:
+            actual_status = task_state.get("status", "<missing>")
+            if actual_status != expected["status"]:
+                errors.append(
+                    f"Task '{task_id}': expected status='{expected['status']}', "
+                    f"got '{actual_status}'"
+                )
+
+        # Check max_history_len (for once-type: history should be short)
+        if "max_history_len" in expected:
+            history = task_state.get("history", [])
+            if len(history) > expected["max_history_len"]:
+                errors.append(
+                    f"Task '{task_id}': expected history_len <= "
+                    f"{expected['max_history_len']}, got {len(history)}"
+                )
+
+        # Check has_not_completed (history should contain a not_completed entry)
+        if expected.get("has_not_completed"):
+            history = task_state.get("history", [])
+            has_nc = any(
+                h.get("result") == "not_completed" for h in history
+            )
+            if not has_nc:
+                errors.append(
+                    f"Task '{task_id}': expected history to contain a "
+                    f"not_completed entry, but none found"
+                )
+
+    return len(errors) == 0, errors
+
+
+def cleanup_test(test_case, project_root):
+    """Post-test cleanup: restore specific files via git checkout."""
+    cleanup_files = test_case.get("cleanup_files", [])
+    if cleanup_files:
+        for f in cleanup_files:
+            subprocess.run(
+                f'git checkout -- "{f}"',
+                shell=True, cwd=project_root, capture_output=True,
+            )
+
+
+def print_test_list(test_cases):
+    """Print the list of available tests."""
+    print(f"\n{'=' * 60}")
+    print(f"  Available Simulation Tests")
+    print(f"{'=' * 60}")
+    for i, tc in enumerate(test_cases, 1):
+        exit_info = f"exit={tc['expected_exit_code']}"
+        print(f"  {i:2d}. {tc['name']}")
+        print(f"      project: {tc['project_root']}, rules: {tc['test_rules']}, {exit_info}")
+    print(f"{'=' * 60}")
+
+
+# =============================================================================
+# Main
+# =============================================================================
 
 def main():
     parser = argparse.ArgumentParser(
-        description="AutoAgent Test: cuFFTDx DCT3D Kernel Optimization",
+        description="AutoAgent Simulation Test Runner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Test Flow:
-  1. Build project & record baseline performance
-  2. Profile kernels with ncu (NVIDIA Nsight Compute)
-  3. AI modifies CUDA code based on profiling results
-  4. Rebuild, benchmark, verify correctness (Score: 100/100)
-  5. Git commit if improved, git reset if not
-  6. Repeat until >= 20% cumulative speedup is achieved
-
-Supported AI Providers:
-  codebuddy  - CodeBuddy CLI (default, model: deepseek-v3.2)
-  claude     - Claude Code (model: claude-sonnet-4-6)
-  gemini     - Gemini Cli (model: gemini-2.5-pro)
-
 Examples:
-  python run_test.py                              # Run full test (CodeBuddy)
-  python run_test.py --provider claude             # Use Claude Code
-  python run_test.py --provider gemini             # Use Gemini Cli
-  python run_test.py --dry-run                     # Validate config only
-  python run_test.py --status                      # Show current progress
-  python run_test.py --reset                       # Reset and start fresh
-  python run_test.py --model deepseek-v3.2           # Use specific model
-  python run_test.py --project-root /path/to/project  # Custom project root
-  python run_test.py --autoagent-dir /path/to/agent   # Custom autoagent dir
-  python run_test.py --results                     # Show results summary
-  python run_test.py --list-providers              # List available AI providers
-  python run_test.py --ideas ideas.md              # Process ideas.md into TODOs
-  python run_test.py --ideas ideas.md --ideas-only # Process ideas only (no task execution)
-  python run_test.py --ideas ideas.md --human-review # Process ideas with human review
-python run_test.py --ideas ideas.md               # Run then idle for new ideas (idle is default)
+  python run_test.py                        # Run all tests
+  python run_test.py --test 5               # Run only test 5
+  python run_test.py --test 5 --test 8      # Run tests 5 and 8
+  python run_test.py --verbose              # Show orchestrator output
+  python run_test.py --list                 # List available tests
+  python run_test.py --test-root /path/to   # Override test root directory
         """,
     )
-
     parser.add_argument(
-        "--provider", "-P",
-        default="codebuddy",
-        help="AI provider to use: codebuddy (default), claude, gemini. "
-             "Use --list-providers to see all available options.",
-    )
-    parser.add_argument(
-        "--model", "-m",
-        default=None,
-        help="AI model to use (default depends on provider: "
-             "codebuddy=deepseek-v3.2, claude=claude-sonnet-4-6, gemini=gemini-2.5-pro)",
-    )
-    parser.add_argument(
-        "--executable",
-        default=None,
-        help="Override the default executable path for the AI provider",
-    )
-    parser.add_argument(
-        "--extra-provider-args",
-        default=None,
-        help="Additional CLI arguments to pass to the AI tool",
-    )
-    parser.add_argument(
-        "--list-providers",
-        action="store_true",
-        help="List available AI providers and exit",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Only validate configuration, don't execute",
-    )
-    parser.add_argument(
-        "--status",
-        action="store_true",
-        help="Show current task status",
-    )
-    parser.add_argument(
-        "--reset",
-        action="store_true",
-        help="Reset all state and clean artifacts",
-    )
-    parser.add_argument(
-        "--results",
-        action="store_true",
-        help="Show test results summary",
-    )
-    parser.add_argument(
-        "--project-root",
-        default=None,
-        help="Path to the test project directory (default: directory containing this script)",
-    )
-    parser.add_argument(
-        "--autoagent-dir",
-        default=None,
-        help="Path to the autoagent/ directory (default: inferred from project root)",
-    )
-    parser.add_argument(
-        "--skip-checks",
-        action="store_true",
-        help="Skip prerequisite checks",
-    )
-    parser.add_argument(
-        "--task", "-t",
-        type=str,
-        default=None,
-        help="Run only the specified task ID",
-    )
-    parser.add_argument(
-        "--log-dir",
-        default=None,
-        help="Root directory for all output files: conversation logs, state files, "
-             "and orchestrator.log (default: .autoagent under CWD)",
-    )
-    parser.add_argument(
-        "--ideas",
-        default=None,
-        help="Path to ideas.md file. When set, new ideas will be processed into TODO tasks.",
-    )
-    parser.add_argument(
-        "--ideas-only",
-        action="store_true",
-        help="Only process ideas.md, do not run the TODO task list. "
-             "Requires --ideas.",
-    )
-    parser.add_argument(
-        "--human-review",
-        action="store_true",
-        help="Enable human review for ideas processing. After AI review passes, "
-             "pauses for human approval. (default: disabled)",
-    )
-    parser.add_argument(
-        "--no-idle",
-        action="store_true",
-        help="Disable idle mode. By default, when --ideas is set, idle mode is enabled "
-             "(waits for new ideas after tasks complete). Use --no-idle to run once and exit.",
-    )
-    parser.add_argument(
-        "--idle-interval",
+        "--test", "-t",
         type=int,
-        default=30,
-        help="Seconds between idle checks for new ideas (default: 30)",
+        action="append",
+        dest="tests",
+        help="Test number(s) to run (1-N). Can be specified multiple times. "
+             "Default: run all tests.",
     )
     parser.add_argument(
-        "--use-cli",
+        "--verbose", "-v",
         action="store_true",
-        help="Use CLI subprocess instead of CodeBuddy Agent SDK (default is SDK). "
-             "Only works with --provider codebuddy.",
+        help="Show orchestrator stdout/stderr (not captured).",
     )
     parser.add_argument(
-        "--test-rules",
+        "--list", "-l",
+        action="store_true",
+        help="List all available tests and exit.",
+    )
+    parser.add_argument(
+        "--test-root",
         default=None,
-        help="Path to test rules file for --provider test. "
-             "Each rule is separated by '---RULE---' delimiter.",
+        help="Path to the test root directory containing test_schema.json "
+             "and test project subdirectories. "
+             "Default: <script_dir>/test/simulation_test/",
     )
 
     args = parser.parse_args()
 
-    project_root = os.path.abspath(args.project_root) if args.project_root else get_default_project_root()
-    autoagent_dir = os.path.abspath(args.autoagent_dir) if args.autoagent_dir else get_default_autoagent_dir(project_root)
+    # Resolve test root: --test-root > default (based on script location)
+    if args.test_root:
+        test_root = os.path.abspath(args.test_root)
+    else:
+        test_root = get_default_test_root()
 
-    print(f"🚀 AutoAgent Test: cuFFTDx DCT3D Kernel Optimization")
-    print(f"   Project:  {project_root}")
-    print(f"   Agent:    {autoagent_dir}")
-    print(f"   Provider: {args.provider}")
+    if not os.path.isdir(test_root):
+        print(f"ERROR: Test root directory not found: {test_root}")
+        sys.exit(1)
 
-    # List providers mode
-    if args.list_providers:
-        # Import from autoagent dir
-        if autoagent_dir not in sys.path:
-            sys.path.insert(0, autoagent_dir)
-        from ai_providers import list_providers as _list_providers
-        providers = _list_providers()
-        print(f"\n{'=' * 50}")
-        print(f"  Available AI Providers")
-        print(f"{'=' * 50}")
-        for name, info in providers.items():
-            aliases = ", ".join(info['aliases']) if info['aliases'] else "(none)"
-            print(f"\n  📌 {name}")
-            print(f"     Executable: {info['default_executable']}")
-            print(f"     Default model: {info['default_model']}")
-            print(f"     Aliases: {aliases}")
-        print(f"\n{'=' * 50}")
+    # Load test definitions from test_schema.json
+    test_cases = load_test_schema(test_root)
+
+    if args.list:
+        print_test_list(test_cases)
         return
 
-    # Results mode
-    if args.results:
-        show_results(project_root)
-        return
+    # Resolve paths
+    autoagent_dir = get_script_dir()  # run_test.py lives in autoagent/
+    log_dir = os.path.abspath(os.path.join(test_root, "logs"))
 
-    # Prerequisite checks
-    if not args.skip_checks:
-        print(f"\n🔍 Checking prerequisites...")
-        errors = check_prerequisites(
-            project_root, autoagent_dir,
-            provider_name=args.provider,
-            executable=args.executable,
+    # Validate that we can import yaml
+    try:
+        import yaml  # noqa: F401
+    except ImportError:
+        print("ERROR: pyyaml is required. Install with: pip install pyyaml")
+        sys.exit(1)
+
+    # Select tests
+    if args.tests:
+        selected = []
+        for t in args.tests:
+            if t < 1 or t > len(test_cases):
+                print(f"ERROR: Test {t} does not exist (valid: 1-{len(test_cases)})")
+                sys.exit(1)
+            selected.append((t, test_cases[t - 1]))
+    else:
+        selected = [(i + 1, tc) for i, tc in enumerate(test_cases)]
+
+    total = len(selected)
+
+    print(f"\n{'=' * 60}")
+    print(f"  AutoAgent Simulation Test Runner")
+    print(f"  Test root: {test_root}")
+    print(f"  Running {total} test(s)")
+    print(f"{'=' * 60}")
+
+    results = []  # list of (test_num, name, passed, errors, elapsed)
+
+    for idx, (test_num, tc) in enumerate(selected, 1):
+        name = tc["name"]
+        project_root = os.path.abspath(
+            os.path.join(test_root, tc["project_root"])
         )
-        if errors:
-            print(f"\n❌ Prerequisite check failed:")
-            for err in errors:
-                print(f"   • {err}")
-            print(f"\nFix the issues above and try again, or use --skip-checks to bypass.")
-            sys.exit(1)
-        print(f"   ✅ All prerequisites met.")
+        test_rules = os.path.join(test_root, tc["test_rules"])
 
-    # Reset mode
-    if args.reset:
-        print(f"\n🔄 Resetting test state...")
-        # 1. Git reset: restore all tracked files and remove untracked ones
-        subprocess.run("git checkout -- .", shell=True, cwd=project_root)
-        subprocess.run("git clean -fd", shell=True, cwd=project_root)
-        print(f"   ✅ Git: all files restored to HEAD, untracked files removed.")
-        # 2. Remove log session directory (reads .autoagent_log to find it)
-        log_dir = os.path.abspath(args.log_dir) if args.log_dir else None
-        clean_log_dirs(project_root, log_dir=log_dir)
-        print(f"   ✅ Log directories cleaned.")
-        return
+        print(f"\n[{idx}/{total}] Test {test_num}: {name}")
 
-    # Status mode
-    if args.status:
-        extra = ["--status"]
-        run_orchestrator(
-            project_root, autoagent_dir,
-            provider_name=args.provider, model=args.model,
-            executable=args.executable, extra_provider_args=args.extra_provider_args,
-            extra_args=extra,
+        # Validate paths
+        if not os.path.isdir(project_root):
+            print(f"  SKIP - project directory not found: {project_root}")
+            results.append((test_num, name, False, ["Project directory not found"], 0))
+            continue
+        if not os.path.isfile(test_rules):
+            print(f"  SKIP - test rules not found: {test_rules}")
+            results.append((test_num, name, False, ["Test rules file not found"], 0))
+            continue
+
+        # Ensure git initialized
+        ensure_git_initialized(project_root)
+
+        # Reset
+        print(f"  Resetting...", end=" ", flush=True)
+        reset_test(project_root, log_dir)
+        print(f"done")
+
+        # Build extra_args (resolve relative paths)
+        extra_args = []
+        for arg in tc.get("extra_args", []):
+            if arg.startswith("-"):
+                extra_args.append(arg)
+            elif "." in os.path.basename(arg):
+                # Looks like a file path — resolve relative to test_root
+                extra_args.append(os.path.abspath(
+                    os.path.join(test_root, arg)
+                ))
+            else:
+                extra_args.append(arg)
+
+        # Run
+        print(f"  Running...", end=" ", flush=True)
+        t0 = time.time()
+        exit_code, proc_result = run_orchestrator(
+            project_root, autoagent_dir, test_rules, log_dir,
+            extra_args=extra_args, verbose=args.verbose,
         )
-        show_results(project_root)
-        return
+        elapsed = time.time() - t0
 
-    # Dry-run mode
-    if args.dry_run:
-        extra = ["--validate"]
-        ret = run_orchestrator(
-            project_root, autoagent_dir,
-            provider_name=args.provider, model=args.model,
-            executable=args.executable, extra_provider_args=args.extra_provider_args,
-            extra_args=extra,
-        )
-        if ret == 0:
-            print("\n✅ Configuration is valid. Ready to run.")
+        # Find session dir
+        session_dir = find_session_dir(project_root, log_dir)
+
+        # Verify
+        passed, errors = verify_test(tc, session_dir, exit_code)
+
+        # Cleanup
+        cleanup_test(tc, project_root)
+
+        if passed:
+            print(f"PASS ({elapsed:.1f}s)")
         else:
-            print("\n❌ Configuration validation failed.")
-        sys.exit(ret)
+            print(f"FAIL ({elapsed:.1f}s)")
+            for err in errors:
+                print(f"    - {err}")
+            # Show orchestrator output on failure if not verbose mode
+            if not args.verbose and proc_result and hasattr(proc_result, "stdout"):
+                if proc_result.stdout:
+                    # Show last 30 lines of output
+                    lines = proc_result.stdout.strip().split("\n")
+                    if len(lines) > 30:
+                        print(f"\n  --- Last 30 lines of orchestrator output ---")
+                        for line in lines[-30:]:
+                            print(f"    {line}")
+                    else:
+                        print(f"\n  --- Orchestrator output ---")
+                        for line in lines:
+                            print(f"    {line}")
+                if proc_result.stderr:
+                    stderr_lines = proc_result.stderr.strip().split("\n")
+                    print(f"\n  --- Orchestrator stderr (last 15 lines) ---")
+                    for line in stderr_lines[-15:]:
+                        print(f"    {line}")
 
-    # Ensure git state
-    ensure_git_initialized(project_root)
+        results.append((test_num, name, passed, errors, elapsed))
 
-    # Build extra args
-    extra = []
-    if args.task:
-        extra.extend(["--task", args.task])
-    if args.log_dir:
-        # log_dir is relative to the console's current working directory, not project_root
-        log_dir = os.path.abspath(args.log_dir)
-        extra.extend(["--log-dir", log_dir])
-    # Note: when --log-dir is not specified, orchestrator defaults to .autoagent (CWD-relative)
-    if args.ideas:
-        ideas_path = os.path.abspath(os.path.join(project_root, args.ideas))
-        extra.extend(["--ideas", ideas_path])
-    if args.ideas_only:
-        if not args.ideas:
-            print("\n❌ --ideas-only mode requires --ideas to be set.")
-            sys.exit(1)
-        extra.append("--ideas-only")
-    if args.human_review:
-        extra.append("--human-review")
-    # Idle mode is enabled by default when --ideas is set
-    idle_mode = bool(args.ideas) and not args.no_idle
-    if idle_mode:
-        extra.extend(["--idle-interval", str(args.idle_interval)])
+    # Summary
+    passed_count = sum(1 for _, _, p, _, _ in results if p)
+    failed_count = total - passed_count
+    total_time = sum(e for _, _, _, _, e in results)
+
+    print(f"\n{'=' * 60}")
+    if failed_count == 0:
+        print(f"  Results: {passed_count}/{total} PASSED  ({total_time:.1f}s)")
     else:
-        extra.append("--no-idle")
-    if args.use_cli:
-        extra.append("--use-cli")
-    if args.test_rules:
-        extra.extend(["--test-rules", os.path.abspath(args.test_rules)])
+        print(f"  Results: {passed_count}/{total} PASSED, {failed_count} FAILED  ({total_time:.1f}s)")
+        print()
+        for test_num, name, passed, errors, _ in results:
+            if not passed:
+                print(f"  FAILED: Test {test_num} - {name}")
+                for err in errors:
+                    print(f"    - {err}")
+    print(f"{'=' * 60}")
 
-    # Run the test
-    print(f"\n🏁 Starting AutoAgent test...")
-    ret = run_orchestrator(
-        project_root, autoagent_dir,
-        provider_name=args.provider, model=args.model,
-        executable=args.executable, extra_provider_args=args.extra_provider_args,
-        extra_args=extra,
-    )
-
-    # Show results
-    show_results(project_root)
-
-    if ret == 0:
-        print(f"\n🎉 Test completed successfully!")
-    else:
-        print(f"\n⚠️  Test finished with exit code {ret}")
-
-    sys.exit(ret)
+    sys.exit(0 if failed_count == 0 else 1)
 
 
 if __name__ == "__main__":

@@ -31,7 +31,7 @@ commands, and analyze code and outputs. Design your tasks and completion criteri
 
 ## Idea
 
-{idea_content[:limits.get('idea_content')] + chr(10) + chr(10) + '(idea text truncated)' if len(idea_content) > limits.get('idea_content') else idea_content}
+{idea_content[:limits.get('max')] + chr(10) + chr(10) + '(idea text truncated)' if len(idea_content) > limits.get('max') else idea_content}
 
 ## Task Design Guide
 
@@ -61,7 +61,7 @@ Below are minimal examples covering the main task types:
 - id: {next_id}
   name: "Refactor logging module"
   type: simple
-  model: simple
+  model: lite
   completion_criteria: |
     1. All log calls use the new structured format.
     2. No references to the old logging helper remain.
