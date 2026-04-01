@@ -42,6 +42,32 @@ from prompts.ideas_review import (
     build_revision_prompt,
 )
 
+
+def _load_ideas_config() -> dict:
+    """Load ideas-related settings from config.yaml.
+
+    Returns:
+        dict with keys 'max_review_rounds' and 'max_validation_retries'.
+    """
+    defaults = {
+        'max_review_rounds': 3,
+        'max_validation_retries': 2,
+    }
+    config_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "config.yaml"
+    )
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f) or {}
+            for key in defaults:
+                val = config.get(key)
+                if val is not None:
+                    defaults[key] = int(val)
+        except Exception as e:
+            logger.warning(f"Failed to load ideas config from config.yaml: {e}")
+    return defaults
+
 logger = logging.getLogger(__name__)
 
 
@@ -87,6 +113,11 @@ class IdeasWatcher:
         self._lock = threading.Lock()
         self._plans_state = self._load_plans_state()
         self._last_mtime = 0.0
+
+        # Load configurable review/validation limits from config.yaml
+        ideas_cfg = _load_ideas_config()
+        self.max_review_rounds = ideas_cfg['max_review_rounds']
+        self.max_validation_retries = ideas_cfg['max_validation_retries']
 
     # ── Plans state management ──────────────────────────────────────────
 
@@ -277,11 +308,11 @@ class IdeasWatcher:
 
         return ideas
 
-    # Maximum number of review rounds before accepting the tasks as-is
-    MAX_REVIEW_ROUNDS = 3
+    # Default maximum number of review rounds before accepting the tasks as-is
+    _DEFAULT_MAX_REVIEW_ROUNDS = 3
 
-    # Maximum number of schema-validation retries before accepting as-is
-    MAX_VALIDATION_RETRIES = 2
+    # Default maximum number of schema-validation retries before accepting as-is
+    _DEFAULT_MAX_VALIDATION_RETRIES = 2
 
     def _get_temp_tasks_path(self) -> str:
         """Return the absolute path to the temporary tasks YAML file.
@@ -349,7 +380,8 @@ class IdeasWatcher:
 
         # Validate task type
         if is_subtask:
-            valid_types = ['simple', 'long_running', 'simple_once', 'long_running_once']
+            valid_types = ['simple', 'long_running', 'simple_once', 'long_running_once',
+                           'nested', 'looping']
         else:
             valid_types = ['simple', 'nested', 'looping']
         if task_type not in valid_types:
@@ -594,11 +626,11 @@ class IdeasWatcher:
         """
         result = raw_yaml_response
 
-        for validation_attempt in range(1, self.MAX_VALIDATION_RETRIES + 2):
+        for validation_attempt in range(1, self.max_validation_retries + 2):
             # --- AI review loop ---
             if review_client and tasks:
                 last_feedback = ""
-                for review_round in range(1, self.MAX_REVIEW_ROUNDS + 1):
+                for review_round in range(1, self.max_review_rounds + 1):
                     review_passed, review_feedback, revised_tasks = self._review_tasks(
                         review_client, idea, tasks, result,
                         conv_logger=conv_logger,
@@ -620,7 +652,7 @@ class IdeasWatcher:
                             break
                 else:
                     print(
-                        f"   ⚠️  Max review rounds ({self.MAX_REVIEW_ROUNDS}) reached, "
+                        f"   ⚠️  Max review rounds ({self.max_review_rounds}) reached, "
                         f"accepting current tasks"
                     )
 
@@ -634,12 +666,12 @@ class IdeasWatcher:
                 break
             else:
                 error_text = '\n'.join(f"  - {e}" for e in errors)
-                print(f"   ❌ Schema validation failed (attempt {validation_attempt}/{self.MAX_VALIDATION_RETRIES + 1}):")
+                print(f"   ❌ Schema validation failed (attempt {validation_attempt}/{self.max_validation_retries + 1}):")
                 for e in errors:
                     print(f"      • {e}")
 
-                if validation_attempt > self.MAX_VALIDATION_RETRIES:
-                    print(f"   ⚠️  Max validation retries ({self.MAX_VALIDATION_RETRIES}) exceeded, accepting current tasks")
+                if validation_attempt > self.max_validation_retries:
+                    print(f"   ⚠️  Max validation retries ({self.max_validation_retries}) exceeded, accepting current tasks")
                     break
 
                 # Feed validation errors back as review feedback for the reviewer to fix
@@ -651,7 +683,9 @@ class IdeasWatcher:
                 print(f"   🔄 Sending validation errors to reviewer for revision...")
 
                 # Send to the reviewer (same session) to fix
-                self._cleanup_temp_file()
+                # NOTE: Do NOT delete the temp file here — the AI may try to
+                # read it before writing.  It will be overwritten by the AI
+                # and cleaned up after we read the result.
                 temp_tasks_path = self._get_temp_tasks_path()
                 revision_prompt = build_revision_prompt(
                     temp_tasks_path=temp_tasks_path,
@@ -930,8 +964,10 @@ class IdeasWatcher:
                     )
 
                 # Step 3-4: Send revision prompt to the SAME reviewer
+                # NOTE: Do NOT delete the temp file here — the AI may try to
+                # read it before writing.  It will be overwritten by the AI
+                # and cleaned up after we read the result.
                 print(f"   🔄 Sending human feedback to reviewer for revision...")
-                self._cleanup_temp_file()
 
                 revision_prompt = build_revision_prompt(
                     temp_tasks_path=temp_tasks_path,

@@ -43,6 +43,16 @@ fast_fail_timeout: 30
 # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
 backoff_max_wait: 300
 
+# Maximum number of AI review rounds when processing ideas into TODO tasks.
+# Each round sends the generated tasks to a fresh reviewer AI for quality check.
+# If the reviewer keeps rejecting, tasks are accepted after this many rounds.
+max_review_rounds: 5
+
+# Maximum number of schema-validation retries when processing ideas.
+# If generated tasks fail schema validation, the errors are fed back to the
+# reviewer AI for correction. Tasks are accepted as-is after this many retries.
+max_validation_retries: 2
+
 # Truncation limits for auto-built prompts (in characters).
 # Only 3 keys are used:
 #   previous_subtask_summary: for subtask summaries, error text, log files
@@ -76,7 +86,7 @@ preset:
     human_review: true  # When processing ideas, force human review After AI review
     verbose: true
 
-  - name: default2
+  - name: nbf
     ideas: ${workspace}/../ideas.md
     config: ${workspace}/../todos_nbf.yaml
     provider: codebuddy

@@ -434,6 +434,9 @@ class AIClient:
 
         elif event_type == "assistant":
             # CodeBuddy/Claude format: AI message with content[] array
+            # Ensure newline between separate assistant messages
+            if assistant_text_parts and not assistant_text_parts[-1].endswith("\n"):
+                assistant_text_parts.append("\n")
             message = event.get("message", {})
             content_blocks = message.get("content", [])
             for block in content_blocks:
@@ -456,6 +459,9 @@ class AIClient:
             # Gemini format: "message" event with "role" field
             role = event.get("role", "")
             if role == "assistant":
+                # Ensure newline between separate assistant messages
+                if assistant_text_parts and not assistant_text_parts[-1].endswith("\n"):
+                    assistant_text_parts.append("\n")
                 content = event.get("content", "")
                 if isinstance(content, str) and content:
                     assistant_text_parts.append(content)
@@ -1003,6 +1009,9 @@ class AIClientSDK:
                     continue
 
                 if isinstance(message, AssistantMessage):
+                    # Ensure newline between separate assistant messages
+                    if assistant_text_parts and not assistant_text_parts[-1].endswith("\n"):
+                        assistant_text_parts.append("\n")
                     for block in (message.content or []):
                         if isinstance(block, TextBlock):
                             text = block.text or ""

@@ -1464,10 +1464,14 @@ class SubtaskExecutor:
         """
         subtask_type = subtask.get('type', 'simple')
 
-        # Switch model based on subtask's model field (default/simple)
+        # Switch model based on subtask's model field (default/simple or direct model name)
         subtask_model_role = subtask.get('model', 'default')
         if self.model_roles and hasattr(client, 'provider') and client.provider:
-            target_model = self.model_roles.get(subtask_model_role, self.model_roles.get('default', ''))
+            if subtask_model_role in self.model_roles:
+                target_model = self.model_roles[subtask_model_role]
+            else:
+                # Treat as a direct model name
+                target_model = subtask_model_role
             if target_model:
                 client.provider.set_model(target_model)
         

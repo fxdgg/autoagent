@@ -71,7 +71,7 @@ Evaluate the generated tasks against these criteria:
    - Multi-step ideas should use nested/looping, not a single simple task.
    - Iterative optimize-test cycles should use looping, not nested.
    - long_running is only used as a subtask, never top-level.
-   - nested/looping are never used as subtask types.
+   - nested/looping CAN be used as subtask types (multi-level nesting is supported).
 4. **Completion criteria quality**: Is every completion_criteria specific, measurable,
    and objectively verifiable by an AI agent?
    \u2705 Good: "All unit tests pass with 0 failures"
@@ -79,8 +79,10 @@ Evaluate the generated tasks against these criteria:
 5. **Decomposition granularity**: Does the decomposition fully cover the idea without
    over-decomposing into trivial subtasks or leaving gaps?
 6. **YAML validity**: Is the YAML structure well-formed and parseable?
-7. **Model field**: If present, the model field must be either "default" or "simple".
-   Tasks requiring complex reasoning should use "default"; straightforward tasks can use "simple".
+7. **Model field**: If present, the model field must be `"default"`, `"simple"`, or a direct
+   model name string. Tasks requiring complex reasoning should use `"default"`;
+   straightforward tasks can use `"simple"`. The `model` field is valid on ALL task types
+   (including `long_running` and `long_running_once`).
 
 ## Instructions
 
