@@ -1442,7 +1442,7 @@ def execute_task(self, task: dict) -> bool:
 autoagent 支持在不同阶段使用不同的 AI 模型，通过 `--model` 参数的多角色格式指定：
 
 ```
---model "plan:glm-4-flash;default:glm-5;simple:glm-4-flash"
+--model "plan:glm-4-flash;default:glm-5;lite:glm-4-flash"
 ```
 
 ### 模型角色
@@ -1451,14 +1451,14 @@ autoagent 支持在不同阶段使用不同的 AI 模型，通过 `--model` 参�
 |------|------|---------|
 | `plan` | Idea 分解为 TODO 任务 | `check_and_process_ideas()` 中的 AI 调用 |
 | `default` | 任务执行默认模型 | 复杂任务、AI 决策点 |
-| `simple` | 轻量模型 | 简单任务（运行命令、简单文件编辑） |
+| `lite` | 轻量模型 | 简单任务（运行命令、简单文件编辑） |
 
 ### 模型规格解析
 
 `parse_model_spec()` 函数（`ai_providers.py`）支持两种格式：
 
 1. **单模型**：`"glm-5"` → 三个角色使用同一模型
-2. **多角色**：`"plan:X;default:Y;simple:Z"` → 各角色使用指定模型
+2. **多角色**：`"plan:X;default:Y;lite:Z"` → 各角色使用指定模型
    - 缺失的角色继承 `default` 的值
    - `default` 角色必须存在
 
@@ -1490,11 +1490,11 @@ main() 解析 --model → model_roles dict
 - id: 1
   name: "运行代码检查"
   type: simple
-  model: simple  # 使用轻量模型
+  model: lite  # 使用轻量模型
   completion_criteria: "pylint 评分 >= 9.0"
 ```
 
-`model` 字段只接受 `"default"`、`"simple"` 或直接的模型名称，默认为 `"default"`。
+`model` 字段只接受 `"default"`、`"lite"` 或直接的模型名称，默认为 `"default"`。
 
 ### 线程安全
 

@@ -129,9 +129,9 @@ autoagent/
   bash_timeout: 300
 
   # Fast-fail timeout for autoagent-exec (in seconds).
-  # Default: 10. Configures how long autoagent-exec waits before
+  # Default: 30. Configures how long autoagent-exec waits before
   # treating a command as long-running.
-  fast_fail_timeout: 10
+  fast_fail_timeout: 30
 
   # Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
   # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
@@ -160,7 +160,7 @@ autoagent/
       config: ${workspace}/todos.yaml
       provider: codebuddy
       use_cli: false
-      model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:glm-5.0-ioa"
+      model: "plan:claude-opus-4.6;default:claude-opus-4.6;lite:glm-5.0-ioa"
       human_review: true
       verbose: true
 
@@ -169,7 +169,7 @@ autoagent/
       config: ${workspace}/../todos.yaml
       provider: codebuddy
       use_cli: false
-      model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;simple:deepseek-v3-2-volc-ioa"
+      model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;lite:deepseek-v3-2-volc-ioa"
       human_review: true
       verbose: true
   ```
@@ -226,7 +226,7 @@ autoagent/
   - `TestProvider`：测试用 Provider（从规则文件读取预定义响应）
 - **核心函数**：
   - `get_provider(name, model)`：工厂函数，根据名称创建 provider 实例
-  - `parse_model_spec(model_str)`：解析多模型规格字符串，支持 `"plan:X;default:Y;simple:Z"` 格式和单模型 `"glm-5"` 格式，返回 `{"plan": ..., "default": ..., "simple": ...}` 字典
+  - `parse_model_spec(model_str)`：解析多模型规格字符串，支持 `"plan:X;default:Y;lite:Z"` 格式和单模型 `"glm-5"` 格式，返回 `{"plan": ..., "default": ..., "lite": ...}` 字典
 
 #### task_executor.py
 - **作用**：任务执行器
@@ -385,7 +385,7 @@ tasks:
 | `name` | string | 是 | 任务名称 |
 | `type` | string | 是 | 顶层任务类型：`simple`、`nested`、`looping`；子任务类型：`simple`、`long_running`、`simple_once`、`long_running_once` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
-| `model` | string | 否 | 模型选择：`"default"`、`"simple"` 或直接模型名称（默认 `"default"`） |
+| `model` | string | 否 | 模型选择：`"default"`、`"lite"` 或直接模型名称（默认 `"default"`） |
 | `system_prompt_prefix` | string | 否 | 任务级系统提示词前缀，覆盖 config.yaml 中的全局设置 |
 
 #### 简单任务 (type: simple)
@@ -399,7 +399,7 @@ tasks:
 | 额外字段 | 类型 | 必填 | 说明 |
 |---------|------|------|------|
 | `subtasks` | list | 是 | 子任务列表 |
-| `max_attempts` | int | 否 | 最大重试轮数（默认 20） |
+| `max_attempts` | int | 否 | 最大重试轮数（默认 5） |
 
 #### 循环任务 (type: looping)
 
@@ -407,7 +407,7 @@ tasks:
 |---------|------|------|------|
 | `subtasks` | list | 是 | 子任务列表 |
 | `repeat_count` | int | 是 | 循环次数（正整数） |
-| `max_attempts_per_loop` | int | 否 | 每轮循环内最大重试次数（默认 20） |
+| `max_attempts_per_loop` | int | 否 | 每轮循环内最大重试次数（默认 5） |
 
 #### 长时间任务 (type: long_running)
 

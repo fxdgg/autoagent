@@ -53,8 +53,8 @@ opencode --version
 session_timeout: 3600  # Hard cap on total AI session time (seconds)
 bash_timeout: 300      # No-new-output timeout (seconds)
 
-# Fast-fail timeout for autoagent-exec (in seconds, default: 10)
-fast_fail_timeout: 10
+# Fast-fail timeout for autoagent-exec (in seconds, default: 30)
+fast_fail_timeout: 30
 
 # Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
 # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
@@ -72,16 +72,16 @@ preset:
     config: ${workspace}/todos.yaml
     provider: codebuddy
     use_cli: false
-    model: "plan:claude-opus-4.6;default:claude-opus-4.6;simple:glm-5.0-ioa"
+    model: "plan:claude-opus-4.6;default:claude-opus-4.6;lite:glm-5.0-ioa"
     human_review: true
     verbose: true
-  
+
   - name: test
     ideas: ${workspace}/../ideas.md
     config: ${workspace}/../todos.yaml
     provider: codebuddy
     use_cli: false
-    model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;simple:deepseek-v3-2-volc-ioa"
+    model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;lite:deepseek-v3-2-volc-ioa"
     human_review: true
     verbose: true
 ```
@@ -92,11 +92,11 @@ preset:
 # 使用 default 预设
 python orchestrator.py
 
-# 使用 claude 预设
-python orchestrator.py --preset claude
+# 使用指定预设
+python orchestrator.py --preset test
 
-# 使用 debug 预设（覆盖 verbose 为 true）
-python orchestrator.py --preset debug --verbose
+# 使用预设并覆盖参数
+python orchestrator.py --preset default --verbose
 ```
 
 ### 5. 配置截断限制（可选）
@@ -265,7 +265,7 @@ tasks:
 |------|------|------|------|
 | `subtasks` | list | 是 | 子任务列表 |
 | `repeat_count` | int | 是 | 循环次数（正整数） |
-| `max_attempts_per_loop` | int | 否 | 每轮循环内最大重试次数（默认 20） |
+| `max_attempts_per_loop` | int | 否 | 每轮循环内最大重试次数（默认 5） |
 | `completion_criteria` | string | 是 | 完成标准 |
 
 #### 长时间任务 (type: long_running)
@@ -432,11 +432,8 @@ tasks:
 # 使用 default 预设
 python orchestrator.py
 
-# 使用 codebuddy 预设
-python orchestrator.py --preset codebuddy
-
-# 使用 claude 预设
-python orchestrator.py --preset claude
+# 使用指定预设
+python orchestrator.py --preset test
 
 # 使用预设但覆盖特定参数
 python orchestrator.py --preset default --model claude-sonnet-4-6
@@ -540,7 +537,7 @@ python orchestrator.py --reset
 python orchestrator.py --verbose
 
 # 使用预设配置
-python orchestrator.py --preset claude
+python orchestrator.py --preset test
 
 # 列出所有可用 provider
 python orchestrator.py --list-providers
@@ -865,14 +862,14 @@ python orchestrator.py
 python orchestrator.py --model deepseek-v3.2
 
 # 多模型（不同阶段使用不同模型）
-# 格式: "plan:模型A;default:模型B;simple:模型C"
+# 格式: "plan:模型A;default:模型B;lite:模型C"
 # - plan: idea 分解为 TODO 阶段
 # - default: 任务执行默认模型
-# - simple: 简单任务使用的轻量模型
-python orchestrator.py --model "plan:GLM-4-Flash;default:GLM-5;simple:GLM-4-Flash"
+# - lite: 简单任务使用的轻量模型
+python orchestrator.py --model "plan:GLM-4-Flash;default:GLM-5;lite:GLM-4-Flash"
 
 # 只指定部分角色（缺失的角色使用 default 的值）
-python orchestrator.py --model "default:GLM-5;simple:GLM-4-Flash"
+python orchestrator.py --model "default:GLM-5;lite:GLM-4-Flash"
 ```
 
 或在代码中指定：

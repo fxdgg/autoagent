@@ -184,25 +184,16 @@ preset:
   - name: default
     ideas: ${workspace}/ideas.md
     config: ${workspace}/todos.yaml
-    provider: opencode
-    model: deepseek-v3.2
-
-  - name: claude
-    provider: claude
-    model: claude-sonnet-4-6
-
-  - name: debug
     provider: codebuddy
-    verbose: true
-    no_skip: true
+    model: "plan:claude-opus-4.6;default:claude-opus-4.6;lite:glm-5.0-ioa"
 ```
 
 ```bash
 # 使用 default 预设
 python orchestrator.py
 
-# 使用 claude 预设
-python orchestrator.py --preset claude
+# 使用指定预设
+python orchestrator.py --preset test
 
 # 使用预设但覆盖特定参数（命令行参数优先级更高）
 python orchestrator.py --preset default --model claude-sonnet-4-6

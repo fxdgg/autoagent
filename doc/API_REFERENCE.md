@@ -37,6 +37,9 @@ class TodoOrchestrator:
         use_cli: bool = False,
         backoff_max_wait: int = 300,
         model_roles: dict = None,
+        # Legacy parameters for backward compatibility
+        codebuddy_path: str = None,
+        model: str = None,
     )
 ```
 
@@ -54,7 +57,7 @@ class TodoOrchestrator:
 | `idle_interval` | int | 30 | idle 模式检查间隔（秒） |
 | `use_cli` | bool | False | 强制使用 CLI 子进程模式（而非 CodeBuddy Agent SDK）。非 codebuddy provider 自动启用 |
 | `backoff_max_wait` | int | 300 | AI CLI 连续失败时的最大退避等待时间（秒），来自 `config.yaml` 的 `backoff_max_wait` |
-| `model_roles` | dict | None | 模型角色字典（`{"plan": ..., "default": ..., "simple": ...}`），由 `parse_model_spec()` 解析生成 |
+| `model_roles` | dict | None | 模型角色字典（`{"plan": ..., "default": ..., "lite": ...}`），由 `parse_model_spec()` 解析生成 |
 
 > **注意**：`state_file` 参数已废弃。`todos_state.yaml`、`orchestrator.log`、`plans_state.yaml` 等运行时文件
 > 现在统一放置在由 `log_dir` + `.autoagent_log` 推导出的会话目录下，不再出现在项目目录中。
@@ -210,8 +213,8 @@ def parse_model_spec(model_str: str) -> dict
 解析模型规格字符串为角色→模型字典。
 
 **输入格式**：
-- 单模型：`"glm-5"` → `{"plan": "glm-5", "default": "glm-5", "simple": "glm-5"}`
-- 多角色：`"plan:X;default:Y;simple:Z"` → `{"plan": "X", "default": "Y", "simple": "Z"}`
+- 单模型：`"glm-5"` → `{"plan": "glm-5", "default": "glm-5", "lite": "glm-5"}`
+- 多角色：`"plan:X;default:Y;lite:Z"` → `{"plan": "X", "default": "Y", "lite": "Z"}`
 
 **规则**：
 - 只允许 `plan`、`default`、`simple` 三个角色
@@ -310,6 +313,8 @@ def get_provider(
     executable: str = None,
     model: str = None,
     extra_args: str = None,
+    test_rules_file: str = None,
+    include_directories: List[str] = None,
 ) -> AIProvider
 ```
 
@@ -505,7 +510,7 @@ class SimpleTaskExecutor:
 
 ```python
 attempts = 0
-max_attempts = task.get('max_attempts', 20)
+max_attempts = task.get('max_attempts', 5)
 
 while attempts < max_attempts:
     result = client.ask(prompt)
@@ -1177,10 +1182,10 @@ class TaskConfig(TypedDict, total=False):
     type: Literal["simple", "nested", "looping"]  # 必填，任务类型（顶层）
     completion_criteria: str                            # 必填，完成标准
     initial_hint: str                                  # simple 可选
-    max_attempts: int                                  # 可选，默认 20
+    max_attempts: int                                  # 可选，默认 5
     subtasks: List['SubtaskConfig']                    # nested/looping 必填
     repeat_count: int                                  # looping 必填，循环次数
-    max_attempts_per_loop: int                         # looping 可选，每轮最大重试次数（默认 20）
+    max_attempts_per_loop: int                         # looping 可选，每轮最大重试次数（默认 5）
 ```
 
 ### SubtaskConfig
@@ -1240,7 +1245,7 @@ class SessionTimeoutError(AICallError):
 | `--include-directories` | - | None | 逗号分隔的额外目录列表，允许 AI 工具访问工作区外的目录（仅 Gemini） |
 | `--list-providers` | - | - | 列出所有可用 AI provider 并退出 |
 | `--codebuddy-path` | - | None | （Legacy）CodeBuddy 可执行文件路径，建议用 `--provider` + `--executable` |
-| `--model` | `-m` | 取决于 provider | AI 模型。支持单模型（如 `glm-5`）和多角色格式（如 `"plan:X;default:Y;simple:Z"`）。codebuddy 默认从 config.yaml 的 `default_model` 加载 |
+| `--model` | `-m` | 取决于 provider | AI 模型。支持单模型（如 `glm-5`）和多角色格式（如 `"plan:X;default:Y;lite:Z"`）。codebuddy 默认从 config.yaml 的 `default_model` 加载 |
 | `--workspace` | `-w` | `.` | 工作目录 |
 | `--timeout` | - | 3600 | AI 会话超时时间（秒），默认值来自 `config.yaml` 的 `session_timeout`（如果 config.yaml 不存在则为 3600） |
 | `--log-dir` | - | `.autoagent` | 日志根目录（相对于 CWD） |
@@ -1286,8 +1291,8 @@ class SessionTimeoutError(AICallError):
 # 使用 default preset
 python orchestrator.py
 
-# 使用 claude preset
-python orchestrator.py --preset claude
+# 使用指定 preset
+python orchestrator.py --preset test
 
 # 使用 preset 但覆盖特定参数
 python orchestrator.py --preset default --model claude-sonnet-4-6
