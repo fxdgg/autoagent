@@ -63,6 +63,47 @@ def _load_fast_fail_timeout() -> int:
     return _fast_fail_timeout_cache
 
 
+def _save_previous_subtask_summary(session_dir: str, summary: str) -> None:
+    """Persist the latest previous_subtask_summary to disk.
+
+    The file is written to ``<session_dir>/previous_subtask_summary.txt``
+    and is overwritten each time so that only the most recent summary is
+    kept.  On resume the orchestrator reads this file to restore context
+    that would otherwise be lost when completed subtasks are skipped.
+    """
+    if not session_dir:
+        return
+    path = os.path.join(session_dir, "previous_subtask_summary.txt")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(summary or "")
+        logger.debug(f"Saved previous_subtask_summary ({len(summary or '')} chars)")
+    except OSError as e:
+        logger.warning(f"Failed to save previous_subtask_summary: {e}")
+
+
+def _load_previous_subtask_summary(session_dir: str) -> str:
+    """Load the persisted previous_subtask_summary from disk.
+
+    Returns the stored text, or an empty string if the file does not
+    exist or is empty.
+    """
+    if not session_dir:
+        return ""
+    path = os.path.join(session_dir, "previous_subtask_summary.txt")
+    if not os.path.exists(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        if content:
+            logger.debug(f"Loaded previous_subtask_summary ({len(content)} chars)")
+        return content
+    except OSError as e:
+        logger.warning(f"Failed to load previous_subtask_summary: {e}")
+        return ""
+
+
 def _read_log_file_smart(path: str) -> str:
     """Read a log file with smart encoding detection.
 
@@ -735,15 +776,20 @@ class NestedTaskExecutor:
             }
 
             context_isolation = task.get('context_isolation', True)
-            previous_subtask_summary = ""
-            
+            # Restore previous_subtask_summary from disk so that resumed
+            # runs have context from the last completed subtask.
+            previous_subtask_summary = _load_previous_subtask_summary(self.session_dir)
+
             for subtask in subtasks:
                 subtask_id = str(subtask['id'])
                 subtask_state = state_manager.get_task_state(subtask_id)
-                
+
                 # Skip already completed subtasks
                 if subtask_state.get('status') == 'completed':
                     print(f"\n   📌 Subtask {subtask_id}: {subtask['name']} (already completed, skipping)")
+                    # Keep the summary up-to-date so the next non-skipped
+                    # subtask receives context from its predecessor.
+                    previous_subtask_summary = subtask_state.get('ai_reasoning', '') or previous_subtask_summary
                     continue
 
                 # Reset session before each subtask (except the first) to
@@ -752,20 +798,20 @@ class NestedTaskExecutor:
                     client.reset_session()
 
                 parent_context['previous_subtask_summary'] = previous_subtask_summary
-                
+
                 print(f"\n   📌 Executing subtask {subtask_id}: {subtask['name']}")
                 print(f"      Type: {subtask['type']}")
-                
+
                 result = self.subtask_executor.execute(
                     subtask, client, state_manager,
                     conv_logger=conv_logger, parent_task_id=task_id,
                     parent_context=parent_context,
                 )
-                
+
                 if not result.success:
                     all_completed = False
                     print(f"\n   ❌ Subtask {subtask_id} failed!")
-                    
+
                     # AI Decision Point 1: Analyze failure
                     round_label = f"{_main_round}.{_failure_sub_round}"
                     ai_decision = self._ai_analyze_failure(
@@ -794,6 +840,8 @@ class NestedTaskExecutor:
                 else:
                     # Capture response for next subtask's context
                     previous_subtask_summary = result.response_text or result.output
+                    # Persist to disk so it survives interruptions
+                    _save_previous_subtask_summary(self.session_dir, previous_subtask_summary)
             
             if not all_completed:
                 print(f"\n   ⏳ Subtask failed, starting new round...")
@@ -1173,7 +1221,16 @@ class LoopingTaskExecutor:
 
         logger.info(f"Executing looping task {task_id}: {task['name']} (repeat_count={repeat_count})")
 
-        for loop_idx in range(1, repeat_count + 1):
+        # Resume from the last saved loop index if the task was interrupted.
+        # current_loop is persisted in state on each iteration start, so on
+        # restart we pick up where we left off instead of re-running from 1.
+        current_state = state_manager.get_task_state(task_id)
+        start_loop = current_state.get('current_loop', 1)
+        if start_loop > 1:
+            logger.info(f"Resuming looping task {task_id} from loop {start_loop} (was interrupted)")
+            print(f"   🔄 Resuming from loop {start_loop}/{repeat_count}")
+
+        for loop_idx in range(start_loop, repeat_count + 1):
             print(f"\n   🔁 Loop iteration {loop_idx}/{repeat_count} of task {task_id}")
 
             # Reset all subtask states at the start of each iteration
@@ -1267,7 +1324,9 @@ class LoopingTaskExecutor:
             }
 
             context_isolation = task.get('context_isolation', True)
-            previous_subtask_summary = ""
+            # Restore previous_subtask_summary from disk so that resumed
+            # runs have context from the last completed subtask.
+            previous_subtask_summary = _load_previous_subtask_summary(self.session_dir)
 
             for subtask in subtasks:
                 subtask_id = str(subtask['id'])
@@ -1276,6 +1335,9 @@ class LoopingTaskExecutor:
                 # Skip already completed subtasks
                 if subtask_state.get('status') == 'completed':
                     print(f"\n   📌 Subtask {subtask_id}: {subtask['name']} (already completed, skipping)")
+                    # Keep the summary up-to-date so the next non-skipped
+                    # subtask receives context from its predecessor.
+                    previous_subtask_summary = subtask_state.get('ai_reasoning', '') or previous_subtask_summary
                     continue
 
                 # Reset session before each subtask (except the first) to
@@ -1324,6 +1386,8 @@ class LoopingTaskExecutor:
                 else:
                     # Capture response for next subtask's context
                     previous_subtask_summary = result.response_text or result.output
+                    # Persist to disk so it survives interruptions
+                    _save_previous_subtask_summary(self.session_dir, previous_subtask_summary)
 
             if all_completed:
                 return True
