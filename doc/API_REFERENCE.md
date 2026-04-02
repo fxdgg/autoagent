@@ -1013,7 +1013,7 @@ class IdeasWatcher:
 |------|------|--------|------|
 | `ideas_file` | str | "ideas.md" | Ideas 文件路径 |
 | `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
-| `plans_state_file` | str | None | 已处理 ideas 状态文件路径（默认为会话目录下的 `plans_state.yaml`） |
+| `plans_state_file` | str | None | Ideas 状态文件路径（默认为会话目录下的 `plans_state.yaml`）。存储 idea 处理状态及 plan 阶段的断点续传数据（`plan_tasks`） |
 
 ### 方法
 
@@ -1053,7 +1053,9 @@ def process_new_ideas(
 ) -> int
 ```
 
-处理所有新 ideas：解析 → 调用 AI 分解 → AI 审查 → 可选人工审核 → 追加到 todos.yaml → 归档并从 ideas.md 删除。返回处理的 idea 数量。
+处理所有新 ideas：解析 → 调用 AI 分解（或从断点续传恢复） → AI 审查 → 可选人工审核 → 追加到 todos.yaml → 归档并从 ideas.md 删除。返回处理的 idea 数量。
+
+处理失败的 idea 不会被标记为 `failed`，而是保持 `in_progress` 状态，下次运行时自动重试。如果 plan 阶段已完成（`plan_tasks` 已保存），重试时会跳过 plan 直接进入 review 阶段。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|

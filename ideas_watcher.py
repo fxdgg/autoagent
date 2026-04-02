@@ -154,20 +154,24 @@ class IdeasWatcher:
         entry = self._plans_state.get("ideas", {}).get(idea_hash)
         if entry is None:
             return False
-        return entry.get("status") in ("completed", "failed")
+        return entry.get("status") == "completed"
 
     def _record_idea_state(
         self,
         idea: dict,
         status: str,
         task_ids: Optional[List[int]] = None,
+        plan_tasks: Optional[List[dict]] = None,
     ):
         """Record or update an idea's state in plans_state.yaml.
 
         Args:
             idea: Idea dict with 'hash', 'content', 'title' fields.
-            status: One of 'in_progress', 'completed', 'failed'.
+            status: One of 'in_progress', 'completed'.
             task_ids: List of generated task IDs (for completed ideas).
+            plan_tasks: Intermediate plan output (task dicts) saved after
+                the plan phase completes so that a resumed run can skip
+                directly to the review phase.
         """
         idea_hash = idea['hash']
         if "ideas" not in self._plans_state:
@@ -180,6 +184,11 @@ class IdeasWatcher:
         entry["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         if status == "completed" and task_ids is not None:
             entry["task_ids"] = task_ids
+        if plan_tasks is not None:
+            entry["plan_tasks"] = plan_tasks
+        # Clear plan_tasks when the idea reaches a terminal state
+        if status in ("completed", "failed") and "plan_tasks" in entry:
+            del entry["plan_tasks"]
         self._plans_state["ideas"][idea_hash] = entry
         self._save_plans_state()
         logger.debug(f"Recorded idea '{idea['title']}' as {status} in {self.plans_state_file}")
@@ -496,7 +505,9 @@ class IdeasWatcher:
                 processed_count += 1
 
             except Exception as e:
-                self._record_idea_state(idea, "failed")
+                # Do NOT record as "failed" — leave the idea in_progress so
+                # the next run will retry it (resuming from plan checkpoint
+                # if available).
                 logger.error(f"Failed to process idea '{idea['title']}': {e}")
                 print(f"   ❌ Failed to process idea: {idea['title']} - {e}")
 
@@ -548,53 +559,66 @@ class IdeasWatcher:
         # Clean up any leftover temp file from a previous run
         self._cleanup_temp_file()
 
-        prompt = build_ideas_decompose_prompt(
-            idea_content=idea['content'],
-            next_id=next_id,
-            temp_tasks_path=temp_tasks_path,
-        )
+        # ── Resume checkpoint: skip plan phase if tasks already generated ──
+        saved_plan = self._plans_state.get("ideas", {}).get(idea['hash'], {}).get("plan_tasks")
+        if saved_plan and isinstance(saved_plan, list) and len(saved_plan) > 0:
+            print(f"   ♻️  Resuming from saved plan (skipping decomposition phase)")
+            logger.info(f"Resuming idea '{idea['title']}' from saved plan_tasks ({len(saved_plan)} tasks)")
+            tasks = saved_plan
+            result = yaml.dump(tasks, Dumper=_BlockStyleDumper, default_flow_style=False,
+                               allow_unicode=True, sort_keys=False)
+        else:
+            prompt = build_ideas_decompose_prompt(
+                idea_content=idea['content'],
+                next_id=next_id,
+                temp_tasks_path=temp_tasks_path,
+            )
 
-        try:
-            # Log prompt before AI call (crash-safe)
-            if conv_logger:
-                conv_logger.log_ideas_prompt(idea['title'], idea_index, prompt)
+            try:
+                # Log prompt before AI call (crash-safe)
+                if conv_logger:
+                    conv_logger.log_ideas_prompt(idea['title'], idea_index, prompt)
 
-            result = client.ask(prompt)
+                result = client.ask(prompt)
 
-            # Log response after AI call
-            if conv_logger:
-                conv_logger.log_ideas_response(result)
+                # Log response after AI call
+                if conv_logger:
+                    conv_logger.log_ideas_response(result)
 
-            # Parse the YAML: prefer temp file, fall back to response text
-            tasks = self._read_tasks_from_temp_file()
-            if tasks is None:
-                logger.info("Temp file not found or empty, falling back to response text parsing")
-                tasks = self._extract_yaml_tasks(result)
-            self._cleanup_temp_file()
+                # Parse the YAML: prefer temp file, fall back to response text
+                tasks = self._read_tasks_from_temp_file()
+                if tasks is None:
+                    logger.info("Temp file not found or empty, falling back to response text parsing")
+                    tasks = self._extract_yaml_tasks(result)
+                self._cleanup_temp_file()
 
-            # Review + validation loop
+            except AICallError as e:
+                logger.error(f"AI call failed for idea decomposition: {e}")
+                raise
+
+            # Save plan output as checkpoint so a resumed run can skip to review
             if tasks:
-                tasks, result = self._review_and_validate_loop(
-                    client, review_client, idea, tasks, result,
-                    conv_logger=conv_logger,
-                )
+                self._record_idea_state(idea, "in_progress", plan_tasks=tasks)
 
-            # Human review loop: after AI review + validation passes, pause for human approval
-            if human_review and tasks:
-                tasks = self._human_review_loop(
-                    client, review_client, idea, tasks, result,
-                    conv_logger=conv_logger,
-                )
+        # Review + validation loop
+        if tasks:
+            tasks, result = self._review_and_validate_loop(
+                client, review_client, idea, tasks, result,
+                conv_logger=conv_logger,
+            )
 
-            # Write section end separator
-            if conv_logger:
-                conv_logger.log_ideas_section_end()
+        # Human review loop: after AI review + validation passes, pause for human approval
+        if human_review and tasks:
+            tasks = self._human_review_loop(
+                client, review_client, idea, tasks, result,
+                conv_logger=conv_logger,
+            )
 
-            return tasks
+        # Write section end separator
+        if conv_logger:
+            conv_logger.log_ideas_section_end()
 
-        except AICallError as e:
-            logger.error(f"AI call failed for idea decomposition: {e}")
-            raise
+        return tasks
 
     def _review_and_validate_loop(
         self,

@@ -1947,7 +1947,6 @@ AI 审查 prompt...
 ### Review Response
 
 ❌ not completed
-任务 ID 不连续，缺少 completion_criteria...
 
 ### Revision #1 Prompt
 
@@ -2077,13 +2076,26 @@ ideas:
     updated_at: "2026-03-30T10:00:00"
   b2c3d4e5f6g7h8i9:
     display_title: "优化内存访问模式"
-    status: completed
+    status: in_progress
+    plan_tasks:          # plan 阶段完成后保存的中间结果（断点续传用）
+      - id: 3            # 下次启动时如果 plan_tasks 存在，跳过 plan 直接进入 review
+        name: "..."
+        type: simple
+        completion_criteria: "..."
     updated_at: "2026-03-30T10:05:00"
 
 ---
 ```
 
 每次处理一个 idea 后，该 idea 的状态被记录到 `plans_state.yaml` 中，并从 `ideas.md` 中移除对应条目。
+
+**状态说明**：
+- `in_progress`：idea 正在处理中，或处理过程中断（程序崩溃/CLI 中断等）。下次启动会自动重试。
+- `completed`：idea 已成功处理并生成了 TODO 任务。只有此状态才视为"已处理"，会被跳过。
+
+**断点续传**：当 plan（分解）阶段完成但 review（审查）阶段未完成时中断，`plan_tasks` 字段保留了 plan 阶段的输出。下次重启时检测到 `plan_tasks` 存在，会跳过 plan 阶段直接进入 review。idea 达到 `completed` 状态后，`plan_tasks` 字段会被自动清理。
+
+**失败处理**：如果 idea 处理过程中发生异常（CLI 中断、AI 调用失败等），不会将状态标记为 `failed`，而是保持 `in_progress` 状态，确保下次启动时自动重试。
 
 ### Idea → TODO 转换流程
 
@@ -2093,17 +2105,21 @@ ideas:
 2. 解析 ideas.md，提取各个 idea section（以 --- 分隔）
    ↓
 3. 对每个新 idea：
-   ├─ 加载现有 todos.yaml 确定下一个可用 task ID
-   ├─ 构造 prompt 发送给 AI（decompose）
-   ├─ 记录 prompt 到 conversations/ideas.md
-   ├─ AI 返回 YAML 格式的任务定义
-   ├─ 记录 response 到 conversations/ideas.md
-   ├─ 解析 AI 响应（支持纯 YAML、代码块包裹、混合文本提取）
+   ├─ 检查 plans_state.yaml 中是否已有 plan_tasks（断点续传）
+   │   ├─ 有 → 跳过 plan 阶段，直接使用已保存的 tasks
+   │   └─ 无 → 执行 plan 阶段：
+   │       ├─ 加载现有 todos.yaml 确定下一个可用 task ID
+   │       ├─ 构造 prompt 发送给 AI（decompose）
+   │       ├─ 记录 prompt 到 conversations/ideas.md
+   │       ├─ AI 返回 YAML 格式的任务定义
+   │       ├─ 记录 response 到 conversations/ideas.md
+   │       ├─ 解析 AI 响应（支持纯 YAML、代码块包裹、混合文本提取）
+   │       └─ 保存 plan_tasks 到 plans_state.yaml（checkpoint）
    │
    ├─ 【AI 审查循环】（如果提供了 review_client）
    │   ├─ 将生成的任务发送给全新上下文的 AI 审查
    │   ├─ 审查通过（✅ completed）→ 跳出循环
-   │   └─ 审查拒绝（❌ not completed）→ 反馈给原 AI 修订 → 重新审查
+   │   └─ 审查拒绝（❌ not completed）→ reviewer 直接修改 YAML 文件 → 重新审查
    │       （最多 max_review_rounds 轮，默认 3，可通过 config.yaml 配置）
    │
    ├─ 【人工审核循环】（如果 human_review=True）
@@ -2112,7 +2128,7 @@ ideas:
    │   └─ 输入 n → 人工输入反馈 → AI 修订 → AI 重新审查 → 再次人工审核
    │
    ├─ 追加新任务到 todos.yaml
-   ├─ 归档 idea 到 plans_state.yaml
+   ├─ 归档 idea 到 plans_state.yaml（status=completed，清理 plan_tasks）
    └─ 从 ideas.md 中删除该 idea
    ↓
 4. 通知 Orchestrator 重新加载任务列表
@@ -2127,7 +2143,7 @@ ideas:
 ```mermaid
 graph TD
     A[AI 拆解 idea 为 tasks] --> B[AI 审查<br/>全新上下文]
-    B -->|❌ 拒绝| C[AI 修订<br/>原上下文]
+    B -->|❌ 拒绝| C[Reviewer 直接修改 YAML 文件]
     C --> B
     B -->|✅ 通过| D{human_review?}
     D -->|否| E[添加到 todos.yaml]
@@ -2145,6 +2161,8 @@ graph TD
 4. 分解是否完整覆盖了原始想法
 5. 是否有遗漏或冗余的任务
 6. YAML 结构是否有效且格式良好
+
+**审查拒绝时的行为**：reviewer 被要求**先直接修改 YAML 临时文件**，然后再输出 `❌ not completed` 标记。这样确保文件修改在标记输出之前完成，且不要求 reviewer 输出冗余的分析说明（因为每轮审查使用全新 session，上一轮的分析对下一轮不可见）。
 
 **完成检测**：使用与 `SimpleTaskExecutor._check_completion()` 相同的三层检测策略：
 1. 严格否定标记：`❌ not completed` → 拒绝
