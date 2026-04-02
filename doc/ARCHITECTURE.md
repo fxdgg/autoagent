@@ -610,6 +610,33 @@ for task_id, task_state in state['tasks'].items():
 
 ## 任务类型
 
+### 根级别字段
+
+`todos.yaml` 的根级别支持以下字段：
+
+| 字段          | 类型   | 必填 | 说明                                                   |
+|---------------|--------|------|--------------------------------------------------------|
+| `description` | string | 否   | 项目级描述，注入到每个任务的 prompt 中                 |
+| `tasks`       | list   | 是   | 任务列表                                               |
+
+`description` 字段为 AI 提供项目全局上下文。当任务被拆分得很细时，单个任务的
+名称和完成条件可能不足以让 AI 理解"整个项目到底要干什么"。`description` 会
+作为 Context 部分的 **Project Description** 出现在每个任务（包括子任务）的
+prompt 中。
+
+```yaml
+description: |
+  优化一个 CUDA 图像处理 pipeline，目标是最大化吞吐量。
+  项目使用 CMake + CUDA 12，目标 GPU 为 RTX 4090，
+  必须始终保持正确性测试 Score 100/100。
+
+tasks:
+  - id: 1
+    name: "编译项目并记录基准耗时"
+    type: simple
+    ...
+```
+
 ### 1. 简单任务 (simple)
 
 **定义**：由 AI 自主完成的任务，涵盖命令执行、代码修改、分析等所有场景

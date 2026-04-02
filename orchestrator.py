@@ -199,12 +199,16 @@ class TodoOrchestrator:
             )
         else:
             self.ideas_watcher = None
-        
+
+        self.project_description = ''
         self.todos = self._load_todos(allow_empty=self.ideas_watcher is not None)
 
     def _load_todos(self, allow_empty: bool = False) -> list:
         """
         Load and validate task configuration from YAML file.
+
+        Also extracts the optional root-level ``description`` field and
+        stores it in ``self.project_description``.
         
         Args:
             allow_empty: If True, allow empty/missing config (for idle mode)
@@ -237,7 +241,13 @@ class TodoOrchestrator:
             if allow_empty:
                 return []
             raise ConfigError(f"No tasks defined in {self.todos_file}")
-        
+
+        # Extract optional root-level project description
+        description = config.get('description', '')
+        if description and not isinstance(description, str):
+            raise ConfigError(f"'description' must be a string in {self.todos_file}")
+        self.project_description = description or ''
+
         # Validate each task
         for task in tasks:
             self._validate_task(task)
@@ -519,16 +529,19 @@ class TodoOrchestrator:
                 return self.simple_executor.execute(
                     task, client, self.state_manager, is_subtask=False,
                     conv_logger=self.conv_logger,
+                    project_description=self.project_description,
                 )
             elif task_type == 'nested':
                 return self.nested_executor.execute(
                     task, client, self.state_manager,
                     conv_logger=self.conv_logger,
+                    project_description=self.project_description,
                 )
             elif task_type == 'looping':
                 return self.looping_executor.execute(
                     task, client, self.state_manager,
                     conv_logger=self.conv_logger,
+                    project_description=self.project_description,
                 )
             else:
                 raise ConfigError(f"Unknown task type: {task_type}")

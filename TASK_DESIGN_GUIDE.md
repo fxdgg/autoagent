@@ -204,6 +204,43 @@ When a reset or new iteration would normally set a subtask back to "pending",
 
 ## 3. Task Schema Reference
 
+### 3.0 Root-Level Fields
+
+| Field         | Type   | Required | Description                                                  |
+|---------------|--------|----------|--------------------------------------------------------------|
+| `description` | string | **Yes**  | Project-level description injected into every task's prompt  |
+| `tasks`       | list   | Yes      | Ordered list of top-level task definitions                   |
+
+The `description` field provides high-level context about what the entire project
+is trying to achieve. It is included in the **Context** section of every task
+prompt (both top-level and subtask), so the AI always understands the big picture
+even when individual tasks are very fine-grained.
+
+> **⚠️ Important:** You **MUST** always include a `description` at the root
+> level of `todos.yaml`. Without it, the AI executing individual tasks has no
+> way to understand the overall project objective — it only sees the single
+> task's name and completion criteria. This is especially critical when tasks
+> are decomposed into fine-grained steps: the AI will know *how* to do a step
+> but not *why*, leading to poor decisions and missed context.
+>
+> A good `description` should explain:
+> - What the project is trying to accomplish (the goal)
+> - Key constraints or invariants the AI must respect at all times
+> - Important technical context (language, framework, target platform, etc.)
+
+```yaml
+description: |
+  Optimize a CUDA image-processing pipeline for maximum throughput.
+  The project uses CMake + CUDA 12, targets an RTX 4090, and must
+  maintain Score 100/100 on the correctness test at all times.
+
+tasks:
+  - id: 1
+    name: "Build project and establish baseline timing"
+    type: simple
+    ...
+```
+
 ### 3.1 Common Fields (all types)
 
 | Field                | Type   | Required | Description                                    |

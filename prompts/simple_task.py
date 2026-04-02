@@ -22,6 +22,7 @@ def build_simple_task_prompt(
     timeout_feedback: str = None,
     timeout_type: str = None,
     exec_script_path: str = "",
+    project_description: str = "",
 ) -> str:
     """Build the prompt sent to AI for a simple task execution.
 
@@ -50,6 +51,8 @@ def build_simple_task_prompt(
             the style of timeout guidance injected into the prompt.
         exec_script_path: Absolute path to the generated ``autoagent-exec``
             convenience script (forward-slash normalised).
+        project_description: Optional root-level description from
+            ``todos.yaml`` providing project-wide context.
     """
     parts = []
 
@@ -65,8 +68,11 @@ def build_simple_task_prompt(
 
     # ── Section 2: Context ───────────────────────────────────────────
     context_lines = []
+    if project_description:
+        context_lines.append(f"Project Description: {project_description}")
+
     if parent_context and parent_context.get('main_task_criteria'):
-        context_lines.append(f"Main Task Goal: {parent_context['main_task_criteria']}")
+        context_lines.append(f"Subtask Goal: {parent_context['main_task_criteria']}")
 
     sibling = build_sibling_context(task, parent_context)
     if sibling:

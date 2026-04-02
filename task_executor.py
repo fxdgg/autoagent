@@ -195,10 +195,10 @@ class SimpleTaskExecutor:
         self.session_dir = session_dir
         self.last_response_text = ""
 
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, **kwargs) -> bool:
+    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, project_description: str = "", **kwargs) -> bool:
         """
         Execute a simple task.
-        
+
         Args:
             task: Task configuration dict
             client: CodeBuddyClient instance
@@ -206,7 +206,8 @@ class SimpleTaskExecutor:
             conv_logger: Optional ConversationLogger instance
             parent_task_id: Parent task ID if this is a subtask (for log organization)
             parent_context: Optional context from parent task for prompt enrichment
-            
+            project_description: Optional project-level description from todos.yaml
+
         Returns:
             bool: True if task completed successfully
         """
@@ -240,6 +241,7 @@ class SimpleTaskExecutor:
                 parent_context=parent_context,
                 timeout_feedback=last_timeout_error,
                 timeout_type=last_timeout_type,
+                project_description=project_description,
             )
             last_timeout_error = None  # Reset after injecting into prompt
             last_timeout_type = None
@@ -370,7 +372,7 @@ class SimpleTaskExecutor:
         )
         return False
 
-    def _build_prompt(self, task: dict, attempt: int, state: dict, parent_context: dict = None, timeout_feedback: str = None, timeout_type: str = None) -> tuple:
+    def _build_prompt(self, task: dict, attempt: int, state: dict, parent_context: dict = None, timeout_feedback: str = None, timeout_type: str = None, project_description: str = "") -> tuple:
         """Build the prompt for AI.
         
         Delegates to ``prompts.simple_task.build_simple_task_prompt``.
@@ -407,6 +409,7 @@ class SimpleTaskExecutor:
             timeout_feedback=timeout_feedback,
             timeout_type=timeout_type,
             exec_script_path=exec_script_path,
+            project_description=project_description,
         ), exec_script_path
 
     @staticmethod
@@ -652,16 +655,17 @@ class NestedTaskExecutor:
         self.session_dir = session_dir
         self.model_roles = model_roles or {}
 
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None) -> bool:
+    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None, project_description: str = "", **kwargs) -> bool:
         """
         Execute a nested task.
-        
+
         Args:
             task: Task configuration with subtasks
-            client: CodeBuddyClient instance  
+            client: CodeBuddyClient instance
             state_manager: State manager for persistence
             conv_logger: Optional ConversationLogger instance
-            
+            project_description: Optional project-level description from todos.yaml
+
         Returns:
             bool: True if main task completed
         """
@@ -727,6 +731,7 @@ class NestedTaskExecutor:
                 'ai_decisions': ai_decisions,
                 'main_task_criteria': task.get('completion_criteria', ''),
                 'round_label': f"{_main_round}.{_failure_sub_round}",
+                'project_description': project_description,
             }
 
             context_isolation = task.get('context_isolation', True)
@@ -1139,7 +1144,7 @@ class LoopingTaskExecutor:
         self.session_dir = session_dir
         self.model_roles = model_roles or {}
 
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None) -> bool:
+    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None, project_description: str = "", **kwargs) -> bool:
         """
         Execute a looping task.
 
@@ -1148,6 +1153,7 @@ class LoopingTaskExecutor:
             client: CodeBuddyClient instance
             state_manager: State manager for persistence
             conv_logger: Optional ConversationLogger instance
+            project_description: Optional project-level description from todos.yaml
 
         Returns:
             bool: True if all iterations completed successfully
@@ -1193,6 +1199,7 @@ class LoopingTaskExecutor:
                 conv_logger=conv_logger,
                 loop_idx=loop_idx,
                 max_attempts=max_attempts_per_loop,
+                project_description=project_description,
             )
 
             if not iteration_success:
@@ -1218,6 +1225,7 @@ class LoopingTaskExecutor:
     def _run_iteration(
         self, task, subtasks, client, state_manager,
         conv_logger=None, loop_idx=1, max_attempts=5,
+        project_description: str = "",
     ) -> bool:
         """
         Run one iteration of the subtask sequence with retry support.
@@ -1255,6 +1263,7 @@ class LoopingTaskExecutor:
                 'ai_decisions': ai_decisions,
                 'main_task_criteria': task.get('completion_criteria', ''),
                 'round_label': f"{loop_idx}.{_failure_sub_round}",
+                'project_description': project_description,
             }
 
             context_isolation = task.get('context_isolation', True)
@@ -1533,11 +1542,13 @@ class SubtaskExecutor:
             return self._execute_nested_subtask(
                 subtask, client, state_manager,
                 conv_logger=conv_logger,
+                parent_context=parent_context,
             )
         elif subtask_type == 'looping':
             return self._execute_looping_subtask(
                 subtask, client, state_manager,
                 conv_logger=conv_logger,
+                parent_context=parent_context,
             )
         else:
             raise ConfigError(f"Unknown subtask type: {subtask_type}")
@@ -1547,10 +1558,12 @@ class SubtaskExecutor:
         conv_logger=None, parent_task_id: str = None, parent_context: dict = None,
     ) -> SubtaskResult:
         """Execute a simple subtask via AI."""
+        project_description = (parent_context or {}).get('project_description', '')
         success = self.simple_executor.execute(
             subtask, client, state_manager,
             conv_logger=conv_logger, parent_task_id=parent_task_id,
             parent_context=parent_context,
+            project_description=project_description,
         )
         
         subtask_id = str(subtask['id'])
@@ -1566,14 +1579,16 @@ class SubtaskExecutor:
 
     def _execute_nested_subtask(
         self, subtask: dict, client: CodeBuddyClient, state_manager,
-        conv_logger=None,
+        conv_logger=None, parent_context: dict = None,
     ) -> SubtaskResult:
         """Execute a nested subtask by delegating to NestedTaskExecutor."""
+        project_description = (parent_context or {}).get('project_description', '')
         executor = NestedTaskExecutor(
             session_dir=self.session_dir, model_roles=self.model_roles,
         )
         success = executor.execute(
             subtask, client, state_manager, conv_logger=conv_logger,
+            project_description=project_description,
         )
         subtask_id = str(subtask['id'])
         state = state_manager.get_task_state(subtask_id)
@@ -1586,14 +1601,16 @@ class SubtaskExecutor:
 
     def _execute_looping_subtask(
         self, subtask: dict, client: CodeBuddyClient, state_manager,
-        conv_logger=None,
+        conv_logger=None, parent_context: dict = None,
     ) -> SubtaskResult:
         """Execute a looping subtask by delegating to LoopingTaskExecutor."""
+        project_description = (parent_context or {}).get('project_description', '')
         executor = LoopingTaskExecutor(
             session_dir=self.session_dir, model_roles=self.model_roles,
         )
         success = executor.execute(
             subtask, client, state_manager, conv_logger=conv_logger,
+            project_description=project_description,
         )
         subtask_id = str(subtask['id'])
         state = state_manager.get_task_state(subtask_id)
@@ -1825,6 +1842,7 @@ class SubtaskExecutor:
             state=state,
             extract_summary_fn=SimpleTaskExecutor._extract_summary,
             parent_context=parent_context,
+            project_description=(parent_context or {}).get('project_description', ''),
         )
 
     def _check_long_running_in_progress(self, response: str) -> bool:

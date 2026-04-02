@@ -32,6 +32,9 @@ env/
 *.swo
 *~
 
+# Coding tools
+.claude/
+
 # 项目特定
 .autoagent/
 logs/
@@ -45,3 +48,4 @@ htmlcov/
 tmp/
 temp/
 *.tmp
+nul
