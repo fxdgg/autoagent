@@ -144,8 +144,13 @@ def find_session_dir(project_root, log_dir):
 
 
 def run_orchestrator(project_root, autoagent_dir, test_rules, log_dir,
-                     extra_args=None, verbose=False):
-    """Run the orchestrator with TestProvider and return the exit code."""
+                     extra_args=None, verbose=False, timeout=30):
+    """Run the orchestrator with TestProvider and return the exit code.
+
+    Args:
+        timeout: Maximum seconds to wait before killing the process.
+                 Default 30s.  Set via "timeout" in test_schema.json.
+    """
     orchestrator_py = os.path.join(autoagent_dir, "orchestrator.py")
     todos_yaml = os.path.join(project_root, "todos.yaml")
 
@@ -183,8 +188,10 @@ def run_orchestrator(project_root, autoagent_dir, test_rules, log_dir,
         kwargs["errors"] = "replace"
 
     try:
-        result = subprocess.run(cmd_parts, **kwargs)
+        result = subprocess.run(cmd_parts, timeout=timeout, **kwargs)
         return result.returncode, result
+    except subprocess.TimeoutExpired:
+        return -1, None
     except KeyboardInterrupt:
         return 130, None
 
@@ -198,14 +205,19 @@ def verify_test(test_case, session_dir, actual_exit_code):
 
     errors = []
 
-    # 1. Check exit code
+    # 1. Check for timeout
+    if actual_exit_code == -1:
+        errors.append("TIMEOUT: orchestrator did not finish within the time limit")
+        return False, errors
+
+    # 2. Check exit code
     expected_exit = test_case["expected_exit_code"]
     if actual_exit_code != expected_exit:
         errors.append(
             f"Exit code: expected {expected_exit}, got {actual_exit_code}"
         )
 
-    # 2. Check todos_state.yaml
+    # 3. Check todos_state.yaml
     if session_dir is None:
         errors.append("Session directory not found (no .autoagent_log marker)")
         return len(errors) == 0, errors
@@ -424,11 +436,13 @@ Examples:
                 extra_args.append(arg)
 
         # Run
-        print(f"  Running...", end=" ", flush=True)
+        test_timeout = tc.get("timeout", 30)
+        print(f"  Running (timeout={test_timeout}s)...", end=" ", flush=True)
         t0 = time.time()
         exit_code, proc_result = run_orchestrator(
             project_root, autoagent_dir, test_rules, log_dir,
             extra_args=extra_args, verbose=args.verbose,
+            timeout=test_timeout,
         )
         elapsed = time.time() - t0
 
