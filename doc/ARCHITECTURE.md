@@ -2107,7 +2107,8 @@ ideas:
 3. 对每个新 idea：
    ├─ 检查 plans_state.yaml 中是否已有 plan_tasks（断点续传）
    │   ├─ 有 → 跳过 plan 阶段，直接使用已保存的 tasks
-   │   └─ 无 → 执行 plan 阶段：
+   │   └─ 无 → 执行 plan 阶段（最多 max_plan_retries 次，默认 3）：
+   │       ├─ 每次重试使用全新 AI session（避免前次错误污染上下文）
    │       ├─ 加载现有 todos.yaml 确定下一个可用 task ID
    │       ├─ 构造 prompt 发送给 AI（decompose）
    │       ├─ 启动临时文件监控线程（见下文"临时文件监控"）
@@ -2115,8 +2116,8 @@ ideas:
    │       ├─ AI 返回 YAML 格式的任务定义
    │       ├─ 记录 response 到 conversations/ideas.md
    │       ├─ 读取临时文件（优先磁盘，fallback 到监控缓存）
-   │       ├─ 解析 AI 响应（支持纯 YAML、代码块包裹、混合文本提取）
-   │       └─ 保存 plan_tasks 到 plans_state.yaml（checkpoint）
+   │       ├─ 解析失败或结果为空 → 重新开始下一次 plan 重试
+   │       └─ 解析成功 → 保存 plan_tasks 到 plans_state.yaml（checkpoint）
    │
    ├─ 【AI 审查循环】（如果提供了 review_client）
    │   ├─ 启动临时文件监控线程
@@ -2145,7 +2146,10 @@ ideas:
 
 ```mermaid
 graph TD
-    A[AI 拆解 idea 为 tasks] --> B[AI 审查<br/>全新上下文]
+    P[Plan: AI 拆解 idea 为 tasks] -->|解析失败/空结果| P2[重试 plan<br/>全新 session]
+    P2 -->|未超过 max_plan_retries| P
+    P2 -->|超过重试上限| SKIP[跳过该 idea]
+    P -->|解析成功| B[AI 审查<br/>全新上下文]
     B -->|❌ 拒绝| C[Reviewer 直接修改 YAML 文件]
     C --> B
     B -->|✅ 通过| D{human_review?}

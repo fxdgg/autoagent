@@ -47,11 +47,13 @@ def _load_ideas_config() -> dict:
     """Load ideas-related settings from config.yaml.
 
     Returns:
-        dict with keys 'max_review_rounds' and 'max_validation_retries'.
+        dict with keys 'max_review_rounds', 'max_validation_retries',
+        and 'max_plan_retries'.
     """
     defaults = {
         'max_review_rounds': 3,
         'max_validation_retries': 2,
+        'max_plan_retries': 3,
     }
     config_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "config.yaml"
@@ -118,6 +120,7 @@ class IdeasWatcher:
         ideas_cfg = _load_ideas_config()
         self.max_review_rounds = ideas_cfg['max_review_rounds']
         self.max_validation_retries = ideas_cfg['max_validation_retries']
+        self.max_plan_retries = ideas_cfg['max_plan_retries']
 
     # ── Plans state management ──────────────────────────────────────────
 
@@ -649,35 +652,60 @@ class IdeasWatcher:
             result = yaml.dump(tasks, Dumper=_BlockStyleDumper, default_flow_style=False,
                                allow_unicode=True, sort_keys=False)
         else:
-            prompt = build_ideas_decompose_prompt(
-                idea_content=idea['content'],
-                next_id=next_id,
-                temp_tasks_path=temp_tasks_path,
-            )
+            # ── Plan phase with retry loop ──
+            # Each attempt uses a fresh AI session (reset_session) to avoid
+            # issues carried over from a previous failed session.
+            tasks = None
+            result = ""
+            for plan_attempt in range(1, self.max_plan_retries + 1):
+                prompt = build_ideas_decompose_prompt(
+                    idea_content=idea['content'],
+                    next_id=next_id,
+                    temp_tasks_path=temp_tasks_path,
+                )
 
-            try:
-                # Log prompt before AI call (crash-safe)
-                if conv_logger:
-                    conv_logger.log_ideas_prompt(idea['title'], idea_index, prompt)
+                try:
+                    # Fresh session for each plan attempt
+                    if plan_attempt > 1:
+                        client.reset_session()
+                        print(f"   🔄 Plan retry {plan_attempt}/{self.max_plan_retries} (new session)")
 
-                self._start_temp_file_watcher()
-                result = client.ask(prompt)
+                    # Log prompt before AI call (crash-safe)
+                    if conv_logger:
+                        conv_logger.log_ideas_prompt(idea['title'], idea_index, prompt)
 
-                # Log response after AI call
-                if conv_logger:
-                    conv_logger.log_ideas_response(result)
+                    self._start_temp_file_watcher()
+                    result = client.ask(prompt)
 
-                # Parse the YAML: prefer temp file, fall back to response text
-                tasks = self._read_tasks_from_temp_file()
-                if tasks is None:
-                    logger.info("Temp file not found or empty, falling back to response text parsing")
-                    tasks = self._extract_yaml_tasks(result)
-                self._cleanup_temp_file()
+                    # Log response after AI call
+                    if conv_logger:
+                        conv_logger.log_ideas_response(result)
 
-            except AICallError as e:
-                self._stop_temp_file_watcher()
-                logger.error(f"AI call failed for idea decomposition: {e}")
-                raise
+                    # Parse the YAML: prefer temp file, fall back to response text
+                    tasks = self._read_tasks_from_temp_file()
+                    if tasks is None:
+                        logger.info("Temp file not found or empty, falling back to response text parsing")
+                        tasks = self._extract_yaml_tasks(result)
+                    self._cleanup_temp_file()
+
+                except AICallError as e:
+                    self._stop_temp_file_watcher()
+                    logger.error(f"AI call failed for idea decomposition (attempt {plan_attempt}): {e}")
+                    if plan_attempt >= self.max_plan_retries:
+                        raise
+                    print(f"   ❌ Plan attempt {plan_attempt} failed: {e}")
+                    continue
+
+                if tasks:
+                    if plan_attempt > 1:
+                        print(f"   ✅ Plan succeeded on attempt {plan_attempt}")
+                    break
+                else:
+                    logger.warning(f"Plan attempt {plan_attempt} produced no valid tasks")
+                    if plan_attempt < self.max_plan_retries:
+                        print(f"   ❌ Plan attempt {plan_attempt} produced no valid tasks, retrying...")
+                    else:
+                        print(f"   ❌ Plan failed after {self.max_plan_retries} attempts, skipping idea")
 
             # Save plan output as checkpoint so a resumed run can skip to review
             if tasks:

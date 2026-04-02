@@ -1055,7 +1055,7 @@ def process_new_ideas(
 
 处理所有新 ideas：解析 → 调用 AI 分解（或从断点续传恢复） → AI 审查 → 可选人工审核 → 追加到 todos.yaml → 归档并从 ideas.md 删除。返回处理的 idea 数量。
 
-处理失败的 idea 不会被标记为 `failed`，而是保持 `in_progress` 状态，下次运行时自动重试。如果 plan 阶段已完成（`plan_tasks` 已保存），重试时会跳过 plan 直接进入 review 阶段。
+Plan 阶段内置重试机制（`max_plan_retries`，默认 3）：如果 AI 调用失败、YAML 解析失败或结果为空，会使用全新 AI session 重试。超过重试上限则跳过该 idea。处理失败的 idea 保持 `in_progress` 状态，下次运行时自动重试。如果 plan 阶段已完成（`plan_tasks` 已保存），重试时会跳过 plan 直接进入 review 阶段。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
