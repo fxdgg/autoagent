@@ -29,6 +29,7 @@ from prompts.failure_analysis import (
     build_looping_failure_analysis_prompt,
 )
 from prompts.main_evaluation import build_main_evaluation_prompt
+from prompts.marker_nudge import MAX_MARKER_NUDGES, MARKER_NUDGE_PROMPT
 from truncation_limits import limits
 
 logger = logging.getLogger(__name__)
@@ -352,7 +353,23 @@ class SimpleTaskExecutor:
                 # Check if AI reports completion
                 # Extract a meaningful summary from the AI response
                 completion_status = self._check_completion(result)
-                
+
+                # If no marker found, nudge AI in the same session instead
+                # of wasting a full retry attempt.  The AI just finished its
+                # work — all context is fresh — so a short follow-up asking
+                # "did you meet the criteria?" is far cheaper than a full
+                # session reset + re-execution.
+                if completion_status is None:
+                    nudge_result = self._nudge_for_marker(
+                        client, task, result,
+                        conv_logger=conv_logger,
+                        parent_task_id=parent_task_id,
+                        log_round=_log_round,
+                    )
+                    if nudge_result is not None:
+                        result = nudge_result
+                        completion_status = self._check_completion(result)
+
                 if completion_status is True:
                     summary = self._extract_summary(result)
                     print(f"   ✅ Task {task_id} completed!")
@@ -572,6 +589,85 @@ class SimpleTaskExecutor:
     # Marker names used in "Cannot find ... in previous response" messages
     _SIMPLE_TASK_MARKERS = "'✅ completed', '❌ not completed', or '⏳ LONG_RUNNING_IN_PROGRESS'"
     _LONG_RUNNING_MARKERS = "'✅ completed', '❌ not completed', or '⏳ LONG_RUNNING_IN_PROGRESS'"
+
+    def _nudge_for_marker(
+        self,
+        client,
+        task: dict,
+        last_response: str,
+        conv_logger=None,
+        parent_task_id: str = None,
+        log_round: str = None,
+        max_nudges: int = None,
+    ) -> Optional[str]:
+        """Send a lightweight follow-up in the same session to elicit a marker.
+
+        When the AI finishes its work but forgets to emit a completion
+        marker, the worst thing we can do is reset the session and replay
+        everything — the AI already *has* all the context.  Instead, we
+        send a tiny prompt asking it to evaluate and reply with just the
+        marker.
+
+        Args:
+            client: The AI client (session is kept alive).
+            task: Current task dict (used only for logging).
+            last_response: The AI's previous response (for logging context).
+            conv_logger: Optional conversation logger.
+            parent_task_id: Parent task ID for log organisation.
+            log_round: Round label for log file naming.
+            max_nudges: Override ``MAX_MARKER_NUDGES`` (for tests).
+
+        Returns:
+            The AI's response string if a nudge was sent and answered,
+            or ``None`` if all nudges were exhausted without a marker.
+        """
+        task_id = str(task['id'])
+        remaining = max_nudges if max_nudges is not None else MAX_MARKER_NUDGES
+
+        for i in range(1, remaining + 1):
+            print(f"   🔔 Nudging AI for status marker (nudge {i}/{remaining})...")
+            try:
+                if conv_logger:
+                    conv_logger.log_prompt(
+                        task_id=task_id,
+                        task_name=task['name'],
+                        prompt=MARKER_NUDGE_PROMPT,
+                        attempt=log_round or "nudge",
+                        parent_task_id=parent_task_id,
+                        metadata={"type": "marker_nudge", "nudge": i},
+                    )
+
+                result = client.ask(MARKER_NUDGE_PROMPT)
+                self.last_response_text = result
+
+                if conv_logger:
+                    conv_logger.log_response(
+                        task_id=task_id,
+                        response=client.last_full_log or result,
+                        parent_task_id=parent_task_id,
+                        attempt=log_round or "nudge",
+                    )
+
+                # Check if the nudge response contains a marker
+                status = self._check_completion(result)
+                if status is not None:
+                    # Got a definitive answer (True or False)
+                    return result
+
+                lr_check = self._check_long_running_in_progress_static(result)
+                if lr_check:
+                    return result
+
+                logger.info(
+                    f"Task {task_id}: nudge {i} still no marker, "
+                    f"response: {result.strip()[:120]}"
+                )
+            except AICallError as e:
+                logger.warning(f"Task {task_id}: nudge {i} failed: {e}")
+                break  # Don't keep nudging if the API is failing
+
+        # All nudges exhausted — caller will fall through to normal retry
+        return None
 
     @staticmethod
     def _check_long_running_in_progress_static(response: str) -> bool:
@@ -1857,6 +1953,19 @@ class SubtaskExecutor:
                 
                 # Check for normal completion (AI might have handled it directly)
                 completion_status = self.simple_executor._check_completion(result)
+
+                # Nudge for marker if missing (same logic as SimpleTaskExecutor)
+                if completion_status is None:
+                    nudge_result = self.simple_executor._nudge_for_marker(
+                        client, subtask, result,
+                        conv_logger=conv_logger,
+                        parent_task_id=parent_task_id,
+                        log_round=_log_round,
+                    )
+                    if nudge_result is not None:
+                        result = nudge_result
+                        completion_status = self.simple_executor._check_completion(result)
+
                 if completion_status is True:
                     summary = SimpleTaskExecutor._extract_summary(result)
                     print(f"      ✅ Long-running task {subtask_id} completed directly!")
@@ -2166,6 +2275,19 @@ class SubtaskExecutor:
             
             # Reuse the same robust check logic from SimpleTaskExecutor
             completion_status = self.simple_executor._check_completion(result)
+
+            # Nudge for marker if missing (same logic as SimpleTaskExecutor)
+            if completion_status is None:
+                nudge_result = self.simple_executor._nudge_for_marker(
+                    client, subtask, result,
+                    conv_logger=conv_logger,
+                    parent_task_id=parent_task_id,
+                    log_round=_log_round,
+                )
+                if nudge_result is not None:
+                    result = nudge_result
+                    completion_status = self.simple_executor._check_completion(result)
+
             is_completed = completion_status is True
             
             # Read log content for SubtaskResult

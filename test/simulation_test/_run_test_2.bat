@@ -1,2 +1,0 @@
-python -X utf8 ../../run_test.py --project-root cufftdx_optimization --autoagent-dir ../.. --reset --skip-checks
-python -X utf8 ../../run_test.py --project-root cufftdx_optimization --autoagent-dir ../.. --log-dir logs --skip-checks --provider test --test-rules test_rules_2.txt
