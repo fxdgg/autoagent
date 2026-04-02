@@ -2110,13 +2110,16 @@ ideas:
    │   └─ 无 → 执行 plan 阶段：
    │       ├─ 加载现有 todos.yaml 确定下一个可用 task ID
    │       ├─ 构造 prompt 发送给 AI（decompose）
+   │       ├─ 启动临时文件监控线程（见下文"临时文件监控"）
    │       ├─ 记录 prompt 到 conversations/ideas.md
    │       ├─ AI 返回 YAML 格式的任务定义
    │       ├─ 记录 response 到 conversations/ideas.md
+   │       ├─ 读取临时文件（优先磁盘，fallback 到监控缓存）
    │       ├─ 解析 AI 响应（支持纯 YAML、代码块包裹、混合文本提取）
    │       └─ 保存 plan_tasks 到 plans_state.yaml（checkpoint）
    │
    ├─ 【AI 审查循环】（如果提供了 review_client）
+   │   ├─ 启动临时文件监控线程
    │   ├─ 将生成的任务发送给全新上下文的 AI 审查
    │   ├─ 审查通过（✅ completed）→ 跳出循环
    │   └─ 审查拒绝（❌ not completed）→ reviewer 直接修改 YAML 文件 → 重新审查
@@ -2168,6 +2171,34 @@ graph TD
 1. 严格否定标记：`❌ not completed` → 拒绝
 2. 严格肯定标记：`✅ completed` → 通过
 3. 模糊肯定匹配（兜底）
+
+### 临时文件监控（Temp File Watcher）
+
+**问题背景**：某些 AI CLI 工具（如 Claude Code 的 `--print` 模式）在 session 结束时会自动清理 session 期间创建或修改的文件。AI 通过 Write tool 将 YAML 写入 `.ideas_tasks_temp.yaml` 后，session 退出时文件可能被删除，导致 Python 进程读不到。
+
+**临时文件位置**：`.ideas_tasks_temp.yaml` 存放在会话 log 目录（与 `plans_state.yaml` 同级），而非项目目录。这样：
+- 避免 AI CLI 按 workspace 范围清理时误删
+- 断点续传时文件路径稳定可预测
+
+**解决方案**：在每次 `client.ask()` 调用前启动后台守护线程，每 0.5 秒轮询临时文件变化。一旦检测到非空内容，立即缓存到内存（`_temp_file_cache`）。`_read_tasks_from_temp_file()` 先停止 watcher（`join()` 保证跨线程内存可见性），然后优先读磁盘文件，文件不存在时 fallback 到缓存。
+
+```
+AI session 运行中                              AI session 结束后
+─────────────────────                          ─────────────────
+AI Write → 文件出现在磁盘                       CLI cleanup → 文件被删除
+           ↓                                                ↓
+Watcher 线程检测到 → 缓存到内存                  _read_tasks_from_temp_file()
+                                                ├─ stop watcher（join 保证缓存可见）
+                                                ├─ 磁盘读取 → 失败
+                                                └─ 缓存读取 → ✅ 使用缓存内容
+```
+
+**生命周期**：
+- `_start_temp_file_watcher()`：在 `ask()` 前启动
+- `_stop_temp_file_watcher()`：在 `_read_tasks_from_temp_file()` 中首先调用（确保缓存可见），也在 `_cleanup_temp_file()` 和 `except` 路径中调用（幂等，可安全重复调用）
+- 缓存在 `_cleanup_temp_file()` 时一并清除
+
+**失败兜底**：如果临时文件和缓存都为空（AI 未写入有效 YAML），idea 保持 `in_progress` 状态，不从 `ideas.md` 中删除，下次运行自动重试。
 
 ### 人工审核模式（--ideas-only）
 

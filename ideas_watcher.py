@@ -326,40 +326,121 @@ class IdeasWatcher:
     def _get_temp_tasks_path(self) -> str:
         """Return the absolute path to the temporary tasks YAML file.
 
-        The file is placed next to the todos.yaml file so that the AI
-        tool can write to it in the project working directory.
+        The file is placed next to the plans_state.yaml file (in the
+        session log directory) so that it survives across runs for
+        checkpoint/resume, and avoids issues with AI CLI tools that
+        clean up files relative to the workspace.
         """
         return os.path.join(
-            os.path.dirname(os.path.abspath(self.todos_file)) or os.getcwd(),
+            os.path.dirname(os.path.abspath(self.plans_state_file)) or os.getcwd(),
             self.TEMP_TASKS_FILE,
         )
+
+    # ── Temp file watcher ─────────────────────────────────────────────
+    #
+    # Some AI CLI tools (e.g. Claude Code ``--print`` mode) clean up files
+    # they created when the session ends.  The temp YAML file written by
+    # the AI may therefore vanish before ``_read_tasks_from_temp_file()``
+    # is called.  To work around this we poll the file in a background
+    # thread while the AI session is running and cache the latest content
+    # in memory.
+
+    def _start_temp_file_watcher(self):
+        """Start a background thread that polls the temp file for changes.
+
+        While the AI session is running, this thread checks the temp file
+        every 0.5 s.  Whenever the file is found with non-empty content
+        that differs from the previous snapshot, the content is cached in
+        ``self._temp_file_cache``.  This way, even if the AI CLI removes
+        the file on session exit, we still have the last good content.
+        """
+        self._temp_file_cache: Optional[str] = None
+        self._watcher_stop = threading.Event()
+        temp_path = self._get_temp_tasks_path()
+
+        def _poll():
+            last_mtime = 0.0
+            while not self._watcher_stop.is_set():
+                try:
+                    if os.path.exists(temp_path):
+                        mtime = os.path.getmtime(temp_path)
+                        if mtime != last_mtime:
+                            with open(temp_path, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                            if content.strip():
+                                self._temp_file_cache = content
+                                last_mtime = mtime
+                                logger.debug(
+                                    f"Temp file watcher: cached {len(content)} chars "
+                                    f"from {temp_path}"
+                                )
+                except Exception:
+                    pass  # file may be mid-write; ignore transient errors
+                self._watcher_stop.wait(0.5)
+
+        self._watcher_thread = threading.Thread(target=_poll, daemon=True)
+        self._watcher_thread.start()
+
+    def _stop_temp_file_watcher(self):
+        """Stop the background watcher thread."""
+        if hasattr(self, '_watcher_stop'):
+            self._watcher_stop.set()
+            self._watcher_thread.join(timeout=2)
 
     def _read_tasks_from_temp_file(self) -> Optional[List[dict]]:
         """Try to read and parse tasks from the temporary YAML file.
 
+        First stops the watcher thread (joining it ensures the cache is
+        visible to the calling thread).  Then checks the live file on
+        disk.  If the file is missing or empty (which can happen when
+        the AI CLI cleans up on session exit), falls back to the
+        in-memory cache populated by the background watcher thread.
+
         Returns:
-            List[dict] if the file exists and contains a valid YAML list,
-            None otherwise.  The caller is responsible for cleaning up the
-            temp file via ``_cleanup_temp_file()`` when appropriate.
+            List[dict] if a valid YAML list is found, None otherwise.
+            The caller is responsible for cleaning up the temp file via
+            ``_cleanup_temp_file()`` when appropriate.
         """
+        # Stop the watcher first — join() guarantees the cached content
+        # written by the watcher thread is visible in this thread.
+        self._stop_temp_file_watcher()
+
         temp_path = self._get_temp_tasks_path()
-        if not os.path.exists(temp_path):
+
+        # Try reading the live file first
+        content = None
+        if os.path.exists(temp_path):
+            try:
+                with open(temp_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                if not content.strip():
+                    content = None
+            except Exception as e:
+                logger.warning(f"Failed to read temp tasks file {temp_path}: {e}")
+
+        # Fall back to watcher cache
+        if content is None and getattr(self, '_temp_file_cache', None):
+            logger.info(
+                "Temp file missing on disk, using cached content from watcher"
+            )
+            content = self._temp_file_cache
+
+        if content is None:
             return None
+
         try:
-            with open(temp_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            if not content.strip():
-                return None
             parsed = yaml.safe_load(content)
             if isinstance(parsed, list) and len(parsed) > 0:
                 logger.info(f"Successfully read {len(parsed)} task(s) from temp file {temp_path}")
                 return parsed
         except Exception as e:
-            logger.warning(f"Failed to read/parse temp tasks file {temp_path}: {e}")
+            logger.warning(f"Failed to parse temp tasks YAML: {e}")
         return None
 
     def _cleanup_temp_file(self):
-        """Remove the temporary tasks file if it exists."""
+        """Remove the temporary tasks file if it exists and clear the cache."""
+        self._stop_temp_file_watcher()
+        self._temp_file_cache = None
         temp_path = self._get_temp_tasks_path()
         try:
             if os.path.exists(temp_path):
@@ -496,13 +577,13 @@ class IdeasWatcher:
                     task_ids = [t.get('id') for t in new_tasks if t.get('id') is not None]
                     self._record_idea_state(idea, "completed", task_ids=task_ids)
                     print(f"   ✅ Added {len(new_tasks)} task(s) from idea: {idea['title']}")
+                    # Remove the processed idea from ideas.md
+                    self._remove_idea_from_file(idea)
+                    processed_count += 1
                 else:
-                    self._record_idea_state(idea, "completed", task_ids=[])
-                    print(f"   ⚠️  No tasks generated from idea: {idea['title']}")
-
-                # Remove the processed idea from ideas.md
-                self._remove_idea_from_file(idea)
-                processed_count += 1
+                    # Do NOT mark as completed — keep in_progress so the
+                    # next run will retry this idea.
+                    print(f"   ⚠️  No tasks generated from idea: {idea['title']}, will retry next run")
 
             except Exception as e:
                 # Do NOT record as "failed" — leave the idea in_progress so
@@ -579,6 +660,7 @@ class IdeasWatcher:
                 if conv_logger:
                     conv_logger.log_ideas_prompt(idea['title'], idea_index, prompt)
 
+                self._start_temp_file_watcher()
                 result = client.ask(prompt)
 
                 # Log response after AI call
@@ -593,6 +675,7 @@ class IdeasWatcher:
                 self._cleanup_temp_file()
 
             except AICallError as e:
+                self._stop_temp_file_watcher()
                 logger.error(f"AI call failed for idea decomposition: {e}")
                 raise
 
@@ -718,6 +801,7 @@ class IdeasWatcher:
                 try:
                     if conv_logger:
                         conv_logger.log_ideas_revision_prompt(validation_attempt, revision_prompt)
+                    self._start_temp_file_watcher()
                     revision_result = review_client.ask(revision_prompt)
                     if conv_logger:
                         conv_logger.log_ideas_revision_response(revision_result)
@@ -728,6 +812,7 @@ class IdeasWatcher:
                     self._cleanup_temp_file()
                     result = revision_result
                 except AICallError as e:
+                    self._stop_temp_file_watcher()
                     logger.error(f"AI call failed during validation-retry revision: {e}")
                     break
                 # Loop back to AI review + validation
@@ -793,6 +878,7 @@ class IdeasWatcher:
             if conv_logger:
                 conv_logger.log_ideas_review_prompt(review_round, review_prompt)
 
+            self._start_temp_file_watcher()
             review_result = review_client.ask(review_prompt)
 
             if conv_logger:
@@ -999,6 +1085,7 @@ class IdeasWatcher:
                     current_tasks_yaml=human_edited_yaml,
                 )
                 try:
+                    self._start_temp_file_watcher()
                     result = review_client.ask(revision_prompt)
 
                     if conv_logger:
@@ -1015,6 +1102,7 @@ class IdeasWatcher:
                         continue
 
                 except AICallError as e:
+                    self._stop_temp_file_watcher()
                     logger.error(f"AI call failed during reviewer revision: {e}")
                     print(f"   ❌ Reviewer revision failed: {e}")
                     print(f"   Keeping previous version.")

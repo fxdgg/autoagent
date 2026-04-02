@@ -61,6 +61,7 @@ autoagent/
 │       ├── orchestrator.log             # Orchestrator 运行日志
 │       ├── todos_state.yaml             # 任务状态（自动生成）
 │       ├── plans_state.yaml             # Ideas 状态跟踪（含 plan_tasks 断点续传数据）
+│       ├── .ideas_tasks_temp.yaml      # AI 生成的临时 YAML（会话期间使用，完成后清理）
 │       ├── previous_subtask_summary.txt # 上一个子任务的摘要（断点续传用）
 │       ├── lr_tasks/                    # long_running 任务文件目录        │   ├── lr_<task_id>_signal.json # long_running 信号文件
         │   └── lr_<task_id>_output.log  # long_running 命令输出日志
