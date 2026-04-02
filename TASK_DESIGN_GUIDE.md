@@ -30,9 +30,19 @@ Key implications for task design:
   context growth). A summary of the previous subtask's output is passed
   to the next subtask via the prompt.
 - Each top-level `simple` task runs in its own independent AI session.
-- Within a single subtask, the AI session is NOT reset between retry
-  attempts — the AI retains conversation history across retries of the
-  same subtask.
+- The AI session is **reset before each retry attempt** (for both
+  top-level simple tasks and subtasks). The full task description and
+  previous-attempt context are included in every prompt, so the AI loses
+  nothing important. This prevents unbounded context accumulation across
+  retries (which can cause output truncation and a vicious retry cycle).
+- When the AI completes its work but forgets to emit a completion status
+  marker (✅/❌/⏳), AutoAgent uses a **marker-nudge** mechanism: instead
+  of resetting the session and replaying the entire task, a lightweight
+  follow-up prompt is sent in the same session asking the AI to
+  self-evaluate. The number of nudge attempts is configurable via
+  `max_marker_nudges` in `config.yaml` (default: 2). If all nudges are
+  exhausted without a marker, the system falls back to the normal retry
+  loop (which resets the session).
 - The AI's persona/role can be customized per-task via the
   `system_prompt_prefix` field in `todos.yaml` (see §12 below).
 
@@ -382,6 +392,20 @@ retries it with additional context:
 - **Previous Attempts**: Summary of what was tried and what happened.
 - **Suggested Fix**: If this is a subtask and the parent's failure analyzer
   provided a fix, it's included in the prompt.
+
+**Session reset on retry:** The AI session is reset before each retry
+attempt. This prevents context from accumulating across retries (which
+can cause the AI's output to be truncated before it emits the completion
+marker). The full task description and previous-attempt summaries are
+included in every prompt, so no important context is lost.
+
+**Marker-nudge mechanism:** If the AI finishes its work but forgets to
+output a status marker, AutoAgent sends a short follow-up prompt in the
+same session (without resetting) asking the AI to self-evaluate. This is
+much cheaper than a full retry. The number of nudge attempts is
+configurable via `max_marker_nudges` in `config.yaml` (default: 2).
+After all nudges are exhausted, the system falls back to the normal
+retry loop.
 
 ### 5.2 Nested/Looping Failure Analysis
 
@@ -803,13 +827,23 @@ subtask's output** to the next subtask via the prompt. This means:
 - Design subtasks to be self-contained: include enough context in
   `completion_criteria` and `initial_hint` so the AI can work without
   relying on memory from previous subtasks.
-- When a **retry** happens within the same subtask, the AI session is NOT
-  reset — the AI retains conversation history across retries of the same
-  subtask. The retried subtask's prompt includes the `suggested_fix` from
-  the failure analysis and previous attempt summaries.
+- When a **retry** happens within the same subtask, the AI session is
+  reset before each retry attempt. The retried subtask's prompt includes
+  the `suggested_fix` from the failure analysis and previous attempt
+  summaries, so no important context is lost despite the session reset.
 - In **looping** tasks, sessions are also reset between iterations. Each
   iteration starts fresh, with only the previous subtask summary carried
   forward within the same iteration.
+
+**Resume behavior:** The previous subtask summary is **persisted to disk**
+(`previous_subtask_summary.txt` in the session directory). If execution is
+interrupted and resumed, the summary is restored from disk so that the
+next subtask still receives context from its predecessor — even though the
+completed subtasks are skipped on resume.
+
+For **looping** tasks, the current loop index is also persisted. If a
+looping task is interrupted mid-iteration, it resumes from the last saved
+loop index rather than restarting from iteration 1.
 
 **Best practice:** Persist important intermediate results to files (e.g.,
 analysis reports, configuration changes, benchmark results) rather than

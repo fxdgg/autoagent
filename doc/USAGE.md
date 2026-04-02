@@ -67,6 +67,11 @@ fast_fail_timeout: 30
 # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
 backoff_max_wait: 300
 
+# Maximum number of lightweight "nudge" follow-ups when the AI forgets to
+# emit a completion status marker. Nudges are sent in the same session
+# instead of resetting and replaying the entire task.
+max_marker_nudges: 2
+
 # System prompt prefix (appended to the system prompt for all tasks)
 system_prompt_prefix: "You are an AI coding agent. ..."
 
@@ -526,6 +531,11 @@ python orchestrator.py
 ```
 
 状态保存在 `todos_state.yaml` 中，程序会自动读取并继续执行。
+
+**断点续传的具体行为**：
+- 已完成的子任务会被跳过
+- `previous_subtask_summary` 会持久化到磁盘（`previous_subtask_summary.txt`），恢复后下一个子任务仍能获得前一个子任务的上下文
+- **looping 任务**的当前循环索引也会持久化，中断后从上次的 loop 继续（而非从第 1 轮重新开始）
 
 ### 6. 查看状态
 

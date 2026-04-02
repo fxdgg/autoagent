@@ -399,7 +399,7 @@ class AIClient:
 |------|------|------|
 | 主任务 | 独立 context | 每个主任务创建独立的 AIClient，互不干扰 |
 | 子任务 | 独立 session | 每个子任务重置 session，通过 previous_subtask_summary 传递上下文 |
-| 重试 | 共享 session | 同一子任务的重试共享 session，保持对话历史 |
+| 重试 | 重置 session | 每次 retry 前重置 session，防止上下文累积导致输出截断。完整任务描述和历史摘要包含在每次 prompt 中 |
 
 ```python
 from ai_providers import get_provider
@@ -1429,6 +1429,18 @@ limits.reload()                                    # 重新从 config.yaml 加�
 | `max_validation_retries` | 2 | Schema 校验最大重试次数。如果生成的任务未通过 schema 校验，将错误反馈给 AI 修正，达到此次数后按原样接受 |
 
 所有字段都有内置默认值，`config.yaml` 中只需配置想调整的项。
+
+---
+
+## Marker Nudge 配置（config.yaml）
+
+控制当 AI 忘记输出完成状态标记时的轻量级追问机制。通过 `prompts/marker_nudge.py` 加载。
+
+### 配置字段
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `max_marker_nudges` | 2 | 最大 nudge 次数。当 AI 完成工作但未输出状态标记（✅/❌/⏳）时，在同一 session 中发送轻量级追问。耗尽后回退到正常 retry 循环 |
 
 ---
 
