@@ -262,20 +262,35 @@ class SimpleTaskExecutor:
         
         last_timeout_error = None  # Track if previous attempt timed out
         last_timeout_type = None   # "bash" or "session"
-        
+
         while attempts < max_attempts:
             attempts += 1
+
+            # Reset session before each retry attempt to prevent unbounded
+            # context growth.  The full task description and Previous Attempts
+            # section is included in every prompt, so the AI loses nothing
+            # important by starting a fresh session.  Without this reset,
+            # turns accumulate across retries (75 → 100 → 373 → 500+ turns)
+            # and the AI's output gets truncated before it can emit the
+            # completion marker — creating a vicious cycle.
+            if attempts > 1:
+                client.reset_session()
+                logger.info(
+                    f"Task {task_id}: reset session before retry attempt {attempts} "
+                    f"(preventing context accumulation)"
+                )
+
             state_manager.mark_task_status(
                 task_id, "in_progress",
                 attempts=attempts,
                 last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
             )
-            
+
             print(f"\n   Attempt #{attempts}")
-            
+
             # Re-fetch state each attempt so history from previous attempts is visible
             current_state = state_manager.get_task_state(task_id)
-            
+
             # Build prompt (with timeout feedback if previous attempt timed out)
             prompt, exec_script_path = self._build_prompt(
                 task, attempts, current_state,
@@ -1726,12 +1741,21 @@ class SubtaskExecutor:
         logger.info(f"  log session dir: {log_session_dir}")
         
         for attempt in range(1, max_attempts + 1):
+            # Reset session before each retry to prevent context accumulation
+            # (same rationale as SimpleTaskExecutor — see comment there).
+            if attempt > 1:
+                client.reset_session()
+                logger.info(
+                    f"Long-running task {subtask_id}: reset session before retry "
+                    f"attempt {attempt} (preventing context accumulation)"
+                )
+
             state_manager.mark_task_status(
                 subtask_id, "in_progress",
                 attempts=attempt,
                 last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
             )
-            
+
             print(f"\n      Long-running task attempt #{attempt}")
             
             # Build prompt for AI
