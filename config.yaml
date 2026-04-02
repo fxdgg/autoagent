@@ -53,6 +53,19 @@ max_review_rounds: 5
 # reviewer AI for correction. Tasks are accepted as-is after this many retries.
 max_validation_retries: 2
 
+# Maximum number of plan (decomposition) retries for a single idea.
+# If the plan phase fails (AI call error, YAML parse failure, empty result,
+# etc.), a fresh AI session is started and the plan is retried.
+# After this many failures the idea is skipped for this run.
+max_plan_retries: 3
+
+# Maximum number of lightweight "nudge" follow-ups when the AI forgets to
+# emit a completion status marker (✅/❌/⏳).  Instead of resetting the
+# session and replaying the entire task, a short prompt is sent in the same
+# session asking the AI to self-evaluate.  After this many nudges without a
+# marker, the system falls back to the normal retry loop.
+max_marker_nudges: 2
+
 # Truncation limits for auto-built prompts (in characters).
 # Only 3 keys are used:
 #   previous_subtask_summary: for subtask summaries, error text, log files

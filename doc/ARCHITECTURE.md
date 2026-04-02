@@ -101,6 +101,7 @@ orchestrator.py
     │   ├── autoagent_exec.py (long_running 任务启动器)
     │   │   └── subprocess (启动后台进程 + 信号文件)
     │   ├── truncation_limits.py (截断限制配置)
+    │   ├── prompts/marker_nudge.py (marker nudge 机制)
     │   └── subprocess (执行命令)
     ├── state_manager.py (状态持久化)
     ├── conversation_logger.py (对话日志)
@@ -109,11 +110,11 @@ orchestrator.py
     │   ├── codebuddy_client.py → AIClient (AI 审查 + 修订)
     │   ├── truncation_limits.py (截断限制配置)
     │   └── yaml (追加任务到 todos.yaml)
-    └── prompts/                  # Prompt 模板
+├── prompts/                  # Prompt 模板
         ├── shared.py → truncation_limits.py
+        ├── marker_nudge.py → config.yaml (max_marker_nudges)
         ├── ideas_decompose.py → truncation_limits.py
-        └── ideas_review.py → truncation_limits.py
-```
+        └── ideas_review.py → truncation_limits.py```
 
 ## 核心组件
 
@@ -463,6 +464,10 @@ class TodoOrchestrator:
 - ✅ 避免 context 污染（比如任务1修改了代码，任务2不受影响）
 - ✅ 便于调试和分析（可以追溯特定任务的完整对话历史）
 
+> **注意**：AI session 会在**每次 retry 前重置**（包括顶层 simple 任务和子任务的 retry）。
+> 完整的任务描述和历史尝试摘要会包含在每次 prompt 中，因此不会丢失重要上下文。
+> 这样做是为了防止上下文在 retry 间无限累积，导致输出截断和恶性重试循环。
+
 > **注意**：每个主任务使用独立的 AIClient 实例，session_id 自动管理会话续接。`context_id` 主要用于状态记录和日志追踪。
 
 #### 2. 子任务级别的 Context 隔离
@@ -491,7 +496,7 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
 - ✅ 防止上下文无限增长（每个子任务独立 session）
 - ✅ 通过 previous_subtask_summary 保持必要的上下文连续性
 - ✅ 子任务之间可以引用前一个子任务创建的文件（文件在磁盘上）
-- ✅ 同一子任务的重试仍共享 session（保持重试上下文）
+- ✅ 同一子任务的重试也会重置 session（防止上下文累积导致输出截断）
 
 **完成检测三层策略**：
 
@@ -502,7 +507,18 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
 3. **模糊肯定匹配**（兜底）：使用正则表达式匹配 `✅.*completed`、`all criteria met` 等变体，
    同时排除含有 `not completed`、`fail` 等否定词的情况
 
-默认（无匹配）返回 `False`，即认为未完成。
+默认（无匹配）返回 `None`，表示未检测到任何标记。
+
+**Marker Nudge 机制**：
+
+当 `_check_completion()` 返回 `None`（AI 忘记输出状态标记）时，系统不会立即浪费一次完整的 retry，
+而是在**同一 session** 中发送一个轻量级的 nudge prompt，要求 AI 自我评估并输出标记。
+
+- Nudge prompt 只有几十个 token，远比重置 session 并重放整个任务描述要廉价
+- 最大 nudge 次数由 `config.yaml` 的 `max_marker_nudges` 配置（默认 2）
+- 所有 nudge 耗尽后仍无标记，才回退到正常的 retry 循环（重置 session）
+- Nudge 机制在 `SimpleTaskExecutor._nudge_for_marker()` 中实现，
+  `SubtaskExecutor` 的 simple 和 long_running 子任务执行路径中也会调用
 
 #### 3. Context 生命周期管理
 
@@ -522,6 +538,12 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
 调用 AI 评估主任务（独立 session）
     ↓
 主任务完成/失败
+
+注意：
+- 每个子任务的 retry 也会重置 session（防止上下文累积）
+- previous_subtask_summary 会持久化到磁盘（`previous_subtask_summary.txt`），
+  中断恢复后能正确加载
+- looping 任务的 current_loop 索引也会持久化，中断后从上次的 loop 继续
 ```
 
 ### 状态文件中的 Context 信息
@@ -609,6 +631,33 @@ for task_id, task_state in state['tasks'].items():
    - 同一个主任务的子任务必须串行执行
 
 ## 任务类型
+
+### 根级别字段
+
+`todos.yaml` 的根级别支持以下字段：
+
+| 字段          | 类型   | 必填 | 说明                                                   |
+|---------------|--------|------|--------------------------------------------------------|
+| `description` | string | 否   | 项目级描述，注入到每个任务的 prompt 中                 |
+| `tasks`       | list   | 是   | 任务列表                                               |
+
+`description` 字段为 AI 提供项目全局上下文。当任务被拆分得很细时，单个任务的
+名称和完成条件可能不足以让 AI 理解"整个项目到底要干什么"。`description` 会
+作为 Context 部分的 **Project Description** 出现在每个任务（包括子任务）的
+prompt 中。
+
+```yaml
+description: |
+  优化一个 CUDA 图像处理 pipeline，目标是最大化吞吐量。
+  项目使用 CMake + CUDA 12，目标 GPU 为 RTX 4090，
+  必须始终保持正确性测试 Score 100/100。
+
+tasks:
+  - id: 1
+    name: "编译项目并记录基准耗时"
+    type: simple
+    ...
+```
 
 ### 1. 简单任务 (simple)
 
@@ -1213,6 +1262,7 @@ autoagent/
 │       ├── orchestrator.log           # Orchestrator 运行日志
 │       ├── todos_state.yaml           # 任务状态（自动生成）
 │       ├── plans_state.yaml            # Ideas 状态跟踪（替代旧的 .ideas_processed.md）
+│       ├── previous_subtask_summary.txt  # 上一个子任务的摘要（断点续传用）
 │       ├── lr_tasks/                  # long_running 任务文件目录
 │       │   ├── lr_<task_id>_signal.json   # long_running 信号文件（自动生成）
 │       │   └── lr_<task_id>_output.log    # long_running 命令输出日志（自动生成）
@@ -1897,7 +1947,6 @@ AI 审查 prompt...
 ### Review Response
 
 ❌ not completed
-任务 ID 不连续，缺少 completion_criteria...
 
 ### Revision #1 Prompt
 
@@ -2027,13 +2076,26 @@ ideas:
     updated_at: "2026-03-30T10:00:00"
   b2c3d4e5f6g7h8i9:
     display_title: "优化内存访问模式"
-    status: completed
+    status: in_progress
+    plan_tasks:          # plan 阶段完成后保存的中间结果（断点续传用）
+      - id: 3            # 下次启动时如果 plan_tasks 存在，跳过 plan 直接进入 review
+        name: "..."
+        type: simple
+        completion_criteria: "..."
     updated_at: "2026-03-30T10:05:00"
 
 ---
 ```
 
 每次处理一个 idea 后，该 idea 的状态被记录到 `plans_state.yaml` 中，并从 `ideas.md` 中移除对应条目。
+
+**状态说明**：
+- `in_progress`：idea 正在处理中，或处理过程中断（程序崩溃/CLI 中断等）。下次启动会自动重试。
+- `completed`：idea 已成功处理并生成了 TODO 任务。只有此状态才视为"已处理"，会被跳过。
+
+**断点续传**：当 plan（分解）阶段完成但 review（审查）阶段未完成时中断，`plan_tasks` 字段保留了 plan 阶段的输出。下次重启时检测到 `plan_tasks` 存在，会跳过 plan 阶段直接进入 review。idea 达到 `completed` 状态后，`plan_tasks` 字段会被自动清理。
+
+**失败处理**：如果 idea 处理过程中发生异常（CLI 中断、AI 调用失败等），不会将状态标记为 `failed`，而是保持 `in_progress` 状态，确保下次启动时自动重试。
 
 ### Idea → TODO 转换流程
 
@@ -2043,17 +2105,25 @@ ideas:
 2. 解析 ideas.md，提取各个 idea section（以 --- 分隔）
    ↓
 3. 对每个新 idea：
-   ├─ 加载现有 todos.yaml 确定下一个可用 task ID
-   ├─ 构造 prompt 发送给 AI（decompose）
-   ├─ 记录 prompt 到 conversations/ideas.md
-   ├─ AI 返回 YAML 格式的任务定义
-   ├─ 记录 response 到 conversations/ideas.md
-   ├─ 解析 AI 响应（支持纯 YAML、代码块包裹、混合文本提取）
+   ├─ 检查 plans_state.yaml 中是否已有 plan_tasks（断点续传）
+   │   ├─ 有 → 跳过 plan 阶段，直接使用已保存的 tasks
+   │   └─ 无 → 执行 plan 阶段（最多 max_plan_retries 次，默认 3）：
+   │       ├─ 每次重试使用全新 AI session（避免前次错误污染上下文）
+   │       ├─ 加载现有 todos.yaml 确定下一个可用 task ID
+   │       ├─ 构造 prompt 发送给 AI（decompose）
+   │       ├─ 启动临时文件监控线程（见下文"临时文件监控"）
+   │       ├─ 记录 prompt 到 conversations/ideas.md
+   │       ├─ AI 返回 YAML 格式的任务定义
+   │       ├─ 记录 response 到 conversations/ideas.md
+   │       ├─ 读取临时文件（优先磁盘，fallback 到监控缓存）
+   │       ├─ 解析失败或结果为空 → 重新开始下一次 plan 重试
+   │       └─ 解析成功 → 保存 plan_tasks 到 plans_state.yaml（checkpoint）
    │
    ├─ 【AI 审查循环】（如果提供了 review_client）
+   │   ├─ 启动临时文件监控线程
    │   ├─ 将生成的任务发送给全新上下文的 AI 审查
    │   ├─ 审查通过（✅ completed）→ 跳出循环
-   │   └─ 审查拒绝（❌ not completed）→ 反馈给原 AI 修订 → 重新审查
+   │   └─ 审查拒绝（❌ not completed）→ reviewer 直接修改 YAML 文件 → 重新审查
    │       （最多 max_review_rounds 轮，默认 3，可通过 config.yaml 配置）
    │
    ├─ 【人工审核循环】（如果 human_review=True）
@@ -2062,7 +2132,7 @@ ideas:
    │   └─ 输入 n → 人工输入反馈 → AI 修订 → AI 重新审查 → 再次人工审核
    │
    ├─ 追加新任务到 todos.yaml
-   ├─ 归档 idea 到 plans_state.yaml
+   ├─ 归档 idea 到 plans_state.yaml（status=completed，清理 plan_tasks）
    └─ 从 ideas.md 中删除该 idea
    ↓
 4. 通知 Orchestrator 重新加载任务列表
@@ -2076,8 +2146,11 @@ ideas:
 
 ```mermaid
 graph TD
-    A[AI 拆解 idea 为 tasks] --> B[AI 审查<br/>全新上下文]
-    B -->|❌ 拒绝| C[AI 修订<br/>原上下文]
+    P[Plan: AI 拆解 idea 为 tasks] -->|解析失败/空结果| P2[重试 plan<br/>全新 session]
+    P2 -->|未超过 max_plan_retries| P
+    P2 -->|超过重试上限| SKIP[跳过该 idea]
+    P -->|解析成功| B[AI 审查<br/>全新上下文]
+    B -->|❌ 拒绝| C[Reviewer 直接修改 YAML 文件]
     C --> B
     B -->|✅ 通过| D{human_review?}
     D -->|否| E[添加到 todos.yaml]
@@ -2096,10 +2169,40 @@ graph TD
 5. 是否有遗漏或冗余的任务
 6. YAML 结构是否有效且格式良好
 
+**审查拒绝时的行为**：reviewer 被要求**先直接修改 YAML 临时文件**，然后再输出 `❌ not completed` 标记。这样确保文件修改在标记输出之前完成，且不要求 reviewer 输出冗余的分析说明（因为每轮审查使用全新 session，上一轮的分析对下一轮不可见）。
+
 **完成检测**：使用与 `SimpleTaskExecutor._check_completion()` 相同的三层检测策略：
 1. 严格否定标记：`❌ not completed` → 拒绝
 2. 严格肯定标记：`✅ completed` → 通过
 3. 模糊肯定匹配（兜底）
+
+### 临时文件监控（Temp File Watcher）
+
+**问题背景**：某些 AI CLI 工具（如 Claude Code 的 `--print` 模式）在 session 结束时会自动清理 session 期间创建或修改的文件。AI 通过 Write tool 将 YAML 写入 `.ideas_tasks_temp.yaml` 后，session 退出时文件可能被删除，导致 Python 进程读不到。
+
+**临时文件位置**：`.ideas_tasks_temp.yaml` 存放在会话 log 目录（与 `plans_state.yaml` 同级），而非项目目录。这样：
+- 避免 AI CLI 按 workspace 范围清理时误删
+- 断点续传时文件路径稳定可预测
+
+**解决方案**：在每次 `client.ask()` 调用前启动后台守护线程，每 0.5 秒轮询临时文件变化。一旦检测到非空内容，立即缓存到内存（`_temp_file_cache`）。`_read_tasks_from_temp_file()` 先停止 watcher（`join()` 保证跨线程内存可见性），然后优先读磁盘文件，文件不存在时 fallback 到缓存。
+
+```
+AI session 运行中                              AI session 结束后
+─────────────────────                          ─────────────────
+AI Write → 文件出现在磁盘                       CLI cleanup → 文件被删除
+           ↓                                                ↓
+Watcher 线程检测到 → 缓存到内存                  _read_tasks_from_temp_file()
+                                                ├─ stop watcher（join 保证缓存可见）
+                                                ├─ 磁盘读取 → 失败
+                                                └─ 缓存读取 → ✅ 使用缓存内容
+```
+
+**生命周期**：
+- `_start_temp_file_watcher()`：在 `ask()` 前启动
+- `_stop_temp_file_watcher()`：在 `_read_tasks_from_temp_file()` 中首先调用（确保缓存可见），也在 `_cleanup_temp_file()` 和 `except` 路径中调用（幂等，可安全重复调用）
+- 缓存在 `_cleanup_temp_file()` 时一并清除
+
+**失败兜底**：如果临时文件和缓存都为空（AI 未写入有效 YAML），idea 保持 `in_progress` 状态，不从 `ideas.md` 中删除，下次运行自动重试。
 
 ### 人工审核模式（--ideas-only）
 

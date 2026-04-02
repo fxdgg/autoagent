@@ -7,6 +7,14 @@
 # For the full design guide, see TASK_DESIGN_GUIDE.md.
 # ==========================================================================
 
+# Optional project-level description.
+# This is injected into every task's prompt so the AI always knows
+# the big picture, even when individual tasks are very fine-grained.
+description: |
+  Optimize a CUDA image-processing pipeline for maximum throughput.
+  The project uses CMake + CUDA 12, targets an RTX 4090, and must
+  maintain Score 100/100 on the correctness test at all times.
+
 tasks:
   # ========================================================================
   # Example 1: Top-level simple task — straightforward single-step work

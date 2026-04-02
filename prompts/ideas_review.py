@@ -90,12 +90,11 @@ If the tasks pass ALL criteria, respond with EXACTLY:
 \u2705 completed
 
 If the tasks need improvement:
-1. Respond with: \u274c not completed
-2. Briefly explain what needs to be fixed.
-3. Then DIRECTLY modify the YAML file at:
+1. DIRECTLY modify the YAML file at:
      {temp_tasks_path}
    Write the corrected full task list into that file.
    Do NOT include markdown code fences or any extra text in the file.
+2. After modifying the file, respond with: \u274c not completed
 """
 
 

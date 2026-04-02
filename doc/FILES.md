@@ -31,16 +31,16 @@ autoagent/
 ├── truncation_limits.py         # 提示词截断限制（从 config.yaml 加载）
 ├── run_test.py                  # 测试运行脚本
 │
-├── prompts/                     # AI Prompt 模板
-│   ├── __init__.py              # 包初始化，导出所有 prompt 构造函数
-│   ├── shared.py                # 共享常量：角色定义、状态标记、工具函数
-│   ├── simple_task.py           # 简单任务执行 prompt 构造
-│   ├── long_running_task.py     # 长时间任务启动与结果分析 prompt 构造
-│   ├── failure_analysis.py      # 子任务失败分析 prompt（nested + looping）
-│   ├── main_evaluation.py       # 主任务完成评估 prompt
-│   ├── ideas_decompose.py       # Idea 拆解为任务的 prompt
-│   └── ideas_review.py          # 任务审查与修订 prompt
-│
+│   ├── prompts/                     # AI Prompt 模板
+│   │   ├── __init__.py              # 包初始化，导出所有 prompt 构造函数
+│   │   ├── shared.py                # 共享常量：角色定义、状态标记、工具函数
+│   │   ├── simple_task.py           # 简单任务执行 prompt 构造
+│   │   ├── long_running_task.py     # 长时间任务启动与结果分析 prompt 构造
+│   │   ├── failure_analysis.py      # 子任务失败分析 prompt（nested + looping）
+│   │   ├── main_evaluation.py       # 主任务完成评估 prompt
+│   │   ├── marker_nudge.py          # Marker nudge 机制（AI 忘记输出状态标记时的轻量级追问）
+│   │   ├── ideas_decompose.py       # Idea 拆解为任务的 prompt
+│   │   └── ideas_review.py          # 任务审查与修订 prompt│
 ├── sample/                      # 示例项目目录
 │   ├── auto_run.bat             # 自动运行脚本
 │   ├── manual_run.bat           # 手动运行脚本
@@ -58,11 +58,12 @@ autoagent/
 │
 └── <log_dir>/                   # 日志根目录（默认 .autoagent，相对 CWD）
     └── <project>_<random>/      # 项目专属会话目录（由 .autoagent_log 指定）
-        ├── orchestrator.log             # Orchestrator 运行日志
-        ├── todos_state.yaml             # 任务状态（自动生成）
-        ├── plans_state.yaml             # Ideas 状态跟踪（替代旧的 .ideas_processed.md）
-        ├── lr_tasks/                    # long_running 任务文件目录
-        │   ├── lr_<task_id>_signal.json # long_running 信号文件
+│       ├── orchestrator.log             # Orchestrator 运行日志
+│       ├── todos_state.yaml             # 任务状态（自动生成）
+│       ├── plans_state.yaml             # Ideas 状态跟踪（含 plan_tasks 断点续传数据）
+│       ├── .ideas_tasks_temp.yaml      # AI 生成的临时 YAML（会话期间使用，完成后清理）
+│       ├── previous_subtask_summary.txt # 上一个子任务的摘要（断点续传用）
+│       ├── lr_tasks/                    # long_running 任务文件目录        │   ├── lr_<task_id>_signal.json # long_running 信号文件
         │   └── lr_<task_id>_output.log  # long_running 命令输出日志
         └── conversations/               # 对话日志目录
             ├── ideas.md                 # Ideas 拆解日志
@@ -183,6 +184,7 @@ autoagent/
   - `backoff_max_wait`: AI CLI 连续失败时的最大退避等待时间（指数退避：5s→10s→20s→...→上限）
   - `max_review_rounds`: Ideas 拆解时 AI 审查的最大轮数（代码兜底值 3，shipped config.yaml 中设为 5）
   - `max_validation_retries`: Ideas 拆解时 schema 校验的最大重试次数（默认 2）
+  - `max_marker_nudges`: 当 AI 忘记输出完成状态标记时的最大 nudge 次数（默认 2）。在同一 session 中发送轻量级追问，耗尽后回退到正常 retry 循环
   - `truncation_limits`: 控制各类提示词字段的最大字符数，防止上下文过长
   - `preset`: 定义常用参数预设，通过 `--preset <name>` 快速切换配置
 - **变量替换**：Preset 中支持 `${workspace}` 变量，会被替换为当前工作目录
@@ -304,6 +306,13 @@ autoagent/
 #### prompts/main_evaluation.py
 - **作用**：主任务完成评估 prompt 构造器
 - **用途**：在所有子任务完成后，构造主任务完成度评估 prompt
+
+#### prompts/marker_nudge.py
+- **作用**：Marker nudge 机制的 prompt 常量和配置加载
+- **内容**：当 AI 完成工作但忘记输出完成状态标记（✅/❌/⏳）时，发送轻量级追问 prompt 要求 AI 自我评估
+- **核心常量**：
+  - `MARKER_NUDGE_PROMPT`: nudge 追问的 prompt 文本
+  - `MAX_MARKER_NUDGES`: 从 `config.yaml` 加载的最大 nudge 次数（默认 2）
 
 #### prompts/ideas_decompose.py
 - **作用**：Idea 拆解 prompt 构造器

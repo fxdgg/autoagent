@@ -24,6 +24,7 @@ def build_long_running_prompt(
     parent_context: dict = None,
     timeout_feedback: str = None,
     timeout_type: str = None,
+    project_description: str = "",
 ) -> str:
     """Build the prompt that tells AI to use autoagent-exec for long-running tasks.
 
@@ -44,6 +45,8 @@ def build_long_running_prompt(
         parent_context: Optional context from the parent task.
         timeout_feedback: If set, the previous AI call timed out.
         timeout_type: Either ``"bash"`` or ``"session"``.
+        project_description: Optional root-level description from
+            ``todos.yaml`` providing project-wide context.
     """
     parts = []
 
@@ -59,8 +62,11 @@ def build_long_running_prompt(
 
     # ── Section 2: Context ───────────────────────────────────────────
     context_lines = []
+    if project_description:
+        context_lines.append(f"Project Description: {project_description}")
+
     if parent_context and parent_context.get('main_task_criteria'):
-        context_lines.append(f"Main Task Goal: {parent_context['main_task_criteria']}")
+        context_lines.append(f"Subtask Goal: {parent_context['main_task_criteria']}")
 
     sibling = build_sibling_context(subtask, parent_context)
     if sibling:

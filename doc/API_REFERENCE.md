@@ -399,7 +399,7 @@ class AIClient:
 |------|------|------|
 | 主任务 | 独立 context | 每个主任务创建独立的 AIClient，互不干扰 |
 | 子任务 | 独立 session | 每个子任务重置 session，通过 previous_subtask_summary 传递上下文 |
-| 重试 | 共享 session | 同一子任务的重试共享 session，保持对话历史 |
+| 重试 | 重置 session | 每次 retry 前重置 session，防止上下文累积导致输出截断。完整任务描述和历史摘要包含在每次 prompt 中 |
 
 ```python
 from ai_providers import get_provider
@@ -1013,7 +1013,7 @@ class IdeasWatcher:
 |------|------|--------|------|
 | `ideas_file` | str | "ideas.md" | Ideas 文件路径 |
 | `todos_file` | str | "todos.yaml" | 任务配置文件路径 |
-| `plans_state_file` | str | None | 已处理 ideas 状态文件路径（默认为会话目录下的 `plans_state.yaml`） |
+| `plans_state_file` | str | None | Ideas 状态文件路径（默认为会话目录下的 `plans_state.yaml`）。存储 idea 处理状态及 plan 阶段的断点续传数据（`plan_tasks`） |
 
 ### 方法
 
@@ -1053,7 +1053,9 @@ def process_new_ideas(
 ) -> int
 ```
 
-处理所有新 ideas：解析 → 调用 AI 分解 → AI 审查 → 可选人工审核 → 追加到 todos.yaml → 归档并从 ideas.md 删除。返回处理的 idea 数量。
+处理所有新 ideas：解析 → 调用 AI 分解（或从断点续传恢复） → AI 审查 → 可选人工审核 → 追加到 todos.yaml → 归档并从 ideas.md 删除。返回处理的 idea 数量。
+
+Plan 阶段内置重试机制（`max_plan_retries`，默认 3）：如果 AI 调用失败、YAML 解析失败或结果为空，会使用全新 AI session 重试。超过重试上限则跳过该 idea。处理失败的 idea 保持 `in_progress` 状态，下次运行时自动重试。如果 plan 阶段已完成（`plan_tasks` 已保存），重试时会跳过 plan 直接进入 review 阶段。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -1429,6 +1431,18 @@ limits.reload()                                    # 重新从 config.yaml 加�
 | `max_validation_retries` | 2 | Schema 校验最大重试次数。如果生成的任务未通过 schema 校验，将错误反馈给 AI 修正，达到此次数后按原样接受 |
 
 所有字段都有内置默认值，`config.yaml` 中只需配置想调整的项。
+
+---
+
+## Marker Nudge 配置（config.yaml）
+
+控制当 AI 忘记输出完成状态标记时的轻量级追问机制。通过 `prompts/marker_nudge.py` 加载。
+
+### 配置字段
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `max_marker_nudges` | 2 | 最大 nudge 次数。当 AI 完成工作但未输出状态标记（✅/❌/⏳）时，在同一 session 中发送轻量级追问。耗尽后回退到正常 retry 循环 |
 
 ---
 
