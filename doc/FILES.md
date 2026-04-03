@@ -140,6 +140,9 @@ autoagent/
   # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
   backoff_max_wait: 300
 
+  # Maximum retries for the ideas plan phase (each retry uses a fresh AI session).
+  max_plan_retries: 3
+
   # Maximum number of AI review rounds when processing ideas into TODO tasks.
   max_review_rounds: 5
 
@@ -185,6 +188,7 @@ autoagent/
   - `bash_timeout`: 无新输出超时配置值（检测 AI 卡住）
   - `fast_fail_timeout`: autoagent-exec 快速失败超时时间，命令在此时间内退出则立即报告结果，否则转为后台运行（代码兜底值 10 秒，shipped config.yaml 中设为 30 秒）
   - `backoff_max_wait`: AI CLI 连续失败时的最大退避等待时间（指数退避：5s→10s→20s→...→上限）
+  - `max_plan_retries`: Ideas plan 阶段的最大重试次数（默认 3）。每次重试使用全新 AI session。超过上限则跳过该 idea（保持 `in_progress` 状态，下次运行时重试）
   - `max_review_rounds`: Ideas 拆解时 AI 审查的最大轮数（代码兜底值 3，shipped config.yaml 中设为 5）
   - `max_validation_retries`: Ideas 拆解时 schema 校验的最大重试次数（默认 2）
   - `max_marker_nudges`: 当 AI 未输出完成状态标记时的最大 nudge 次数（默认 2）。在同一 session 中发送轻量级追问（允许 AI 继续工作），耗尽后回退到正常 retry 循环。发送 nudge 前会先检查信号文件，若已有后台任务在运行则跳过 nudge 直接走 long_running 流程

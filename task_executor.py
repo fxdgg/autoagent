@@ -979,6 +979,8 @@ class NestedTaskExecutor:
             parent_state = state_manager.get_task_state(task_id)
             ai_decisions = parent_state.get('ai_decisions', [])
             latest_fix = ai_decisions[-1].get('suggested_fix', '') if ai_decisions else ''
+            # Track which subtask the fix is targeted at (only that one gets it)
+            fix_target_id = ai_decisions[-1].get('retry_from', '') if ai_decisions else ''
             # Also check main_task_evaluations for suggested improvements
             evaluations = parent_state.get('main_task_evaluations', [])
             if evaluations:
@@ -996,7 +998,9 @@ class NestedTaskExecutor:
 
             parent_context = {
                 'subtasks': subtasks,
-                'suggested_fix': latest_fix,
+                'suggested_fix': '',  # Will be set per-subtask below
+                '_suggested_fix_full': latest_fix,  # Stored for the target subtask
+                '_fix_target_id': fix_target_id,
                 'ai_decisions': ai_decisions,
                 'main_task_criteria': task.get('completion_criteria', ''),
                 'round_label': f"{_main_round}.{_failure_sub_round}",
@@ -1013,6 +1017,12 @@ class NestedTaskExecutor:
                 round_label = parent_context['round_label']
                 sk = _state_key(subtask, round_label)
                 subtask_state = state_manager.get_task_state(sk)
+
+                # Only pass suggested_fix to the retry target subtask
+                if subtask_id == parent_context.get('_fix_target_id'):
+                    parent_context['suggested_fix'] = parent_context.get('_suggested_fix_full', '')
+                else:
+                    parent_context['suggested_fix'] = ''
 
                 # Skip already completed subtasks (in this round)
                 if subtask_state.get('status') == 'completed':
@@ -1542,13 +1552,16 @@ class LoopingTaskExecutor:
             parent_state = state_manager.get_task_state(task_id)
             ai_decisions = parent_state.get('ai_decisions', [])
             latest_fix = ai_decisions[-1].get('suggested_fix', '') if ai_decisions else ''
+            fix_target_id = ai_decisions[-1].get('retry_from', '') if ai_decisions else ''
             # Cap fix context to avoid oversized prompts
             if latest_fix and len(latest_fix) > limits.get('max'):
                 latest_fix = "(truncated)\n..." + latest_fix[-limits.get('max'):]
 
             parent_context = {
                 'subtasks': subtasks,
-                'suggested_fix': latest_fix,
+                'suggested_fix': '',  # Will be set per-subtask below
+                '_suggested_fix_full': latest_fix,
+                '_fix_target_id': fix_target_id,
                 'ai_decisions': ai_decisions,
                 'main_task_criteria': task.get('completion_criteria', ''),
                 'round_label': f"{loop_idx}.{_failure_sub_round}",
@@ -1565,6 +1578,12 @@ class LoopingTaskExecutor:
                 round_label = parent_context['round_label']
                 sk = _state_key(subtask, round_label)
                 subtask_state = state_manager.get_task_state(sk)
+
+                # Only pass suggested_fix to the retry target subtask
+                if subtask_id == parent_context.get('_fix_target_id'):
+                    parent_context['suggested_fix'] = parent_context.get('_suggested_fix_full', '')
+                else:
+                    parent_context['suggested_fix'] = ''
 
                 # Skip already completed subtasks (in this round)
                 if subtask_state.get('status') == 'completed':

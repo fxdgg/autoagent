@@ -1076,11 +1076,11 @@ pending → in_progress → completed/failed
 
 ```python
 class TodoOrchestrator:
-    def __init__(self, todos_file="todos.yaml", log_dir=None):
+    def __init__(self, todos_file="todos.yaml", session_dir=None, log_dir=None):
         self.todos_file = todos_file
-        # log_dir defaults to ".autoagent" (relative to CWD)
-        # Session directory resolved via .autoagent_log in workspace
-        self.session_dir = self._resolve_log_session_dir(log_dir, workspace)
+        # session_dir: pre-resolved by resolve_session_dir() in main()
+        # log_dir: fallback for tests (resolve via .autoagent_log marker)
+        self.session_dir = session_dir or self._resolve_from_marker(log_dir, workspace)
         self.state = StateManager(os.path.join(self.session_dir, "todos_state.yaml"))
         self.todos = self.load_todos()
     
@@ -1813,7 +1813,8 @@ prompts/  task_executor.py  ideas_watcher.py
 
 2. **重试决策**（决策点1）：
    - 决定从哪个子任务开始重试（`retry_from`字段）
-   - 提出具体的修复方案（`suggested_fix`字段）
+   - 提出具体的修复方案（`suggested_fix`字段）——**仅传递给 `retry_from` 指定的子任务**，
+     后续子任务不会看到此修复建议（因为修复建议针对的是特定子任务的问题）
    - 给出分析（`analysis`字段）
 
 3. **完成判断**（决策点2）：
