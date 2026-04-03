@@ -1085,6 +1085,7 @@ class NestedTaskExecutor:
             ai_evaluation = self._ai_evaluate_main_task(
                 client, task, subtasks, state_manager,
                 conv_logger=conv_logger, round_num=_main_round,
+                round_label=f"{_main_round}.{_failure_sub_round}",
             )
             
             if ai_evaluation.get('main_task_completed', False):
@@ -1241,21 +1242,28 @@ class NestedTaskExecutor:
 
     def _ai_evaluate_main_task(
         self, client, task, subtasks, state_manager,
-        conv_logger=None, round_num=1,
+        conv_logger=None, round_num=1, round_label=None,
     ) -> dict:
         """
         AI Decision Point 2: Evaluate main task completion.
-        
+
         Returns:
             dict with keys: main_task_completed, analysis, retry_from, next_strategy
         """
         task_id = str(task['id'])
-        
+
         # Collect all subtask results
         execution_results = []
         for st in subtasks:
             st_id = str(st['id'])
-            st_state = state_manager.get_task_state(st_id)
+            # Use round-scoped key to get the correct state for this round
+            st_key = StateManager.round_key(st_id, round_label)
+            st_state = state_manager.get_task_state(st_key)
+            # For *_once types, also check the plain key (shared across rounds)
+            if st_state.get('status', 'pending') == 'pending' and st.get('type', '').endswith('_once'):
+                plain_state = state_manager.get_task_state(st_id)
+                if plain_state.get('status') == 'completed':
+                    st_state = plain_state
             execution_results.append({
                 "subtask_id": st_id,
                 "name": st['name'],
