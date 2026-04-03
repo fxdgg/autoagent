@@ -23,7 +23,7 @@ import logging
 import yaml
 from typing import Optional, List
 
-from codebuddy_client import AIClient, AIClientSDK, AIClientTest, CodeBuddyClient, AICallError
+from codebuddy_client import AIClient, AIClientSDK, AIClientTest, AICallError
 from ai_providers import get_provider, list_providers, AIProvider, TestProvider, parse_model_spec
 from task_executor import (
     SimpleTaskExecutor,
@@ -48,7 +48,7 @@ class TodoOrchestrator:
     - Schedule task execution in order
     - Delegate to appropriate executors (SimpleTaskExecutor, NestedTaskExecutor)
     - Manage state persistence via StateManager
-    - Create CodeBuddyClient instances per main task for context isolation
+    - Create AIClient instances per main task for context isolation
     """
 
     @staticmethod
@@ -111,18 +111,15 @@ class TodoOrchestrator:
         use_cli: bool = False,
         backoff_max_wait: int = 300,
         model_roles: dict = None,
-        # Legacy parameters for backward compatibility
-        codebuddy_path: str = None,
-        model: str = None,
     ):
         """
         Initialize the TodoOrchestrator.
-        
+
         Args:
             todos_file: Path to the task configuration YAML
             state_file: (Deprecated, ignored) State file path is now derived
                         from log_dir automatically.
-            provider: AI provider instance (takes precedence over legacy params)
+            provider: AI provider instance
             workspace: Working directory for AI tool
             timeout: Default session timeout for AI calls (hard cap on
                 total session time).
@@ -140,8 +137,6 @@ class TodoOrchestrator:
                      when AI CLI calls fail repeatedly (default: 300)
             model_roles: Model role dict ({"plan": ..., "default": ..., "lite": ...}),
                      parsed by parse_model_spec(). None uses provider's default model.
-            codebuddy_path: (Legacy) Path to CodeBuddy executable
-            model: (Legacy) AI model to use
         """
         self.todos_file = todos_file
         self.workspace = os.path.abspath(workspace)
@@ -151,23 +146,12 @@ class TodoOrchestrator:
         self.use_cli = use_cli
         self.backoff_max_wait = backoff_max_wait
 
-        # Store provider (or create from legacy params)
-        if provider is not None:
-            self.provider = provider
-        elif codebuddy_path or model:
-            from ai_providers import CodeBuddyProvider
-            self.provider = CodeBuddyProvider(
-                executable=codebuddy_path or "codebuddy",
-                model=model,  # Use provider's default_model if not specified
-            )
-        else:
-            from ai_providers import CodeBuddyProvider
-            self.provider = CodeBuddyProvider()
+        self.provider = provider
 
         self.model_roles = model_roles or {
-            "plan": self.provider.model if provider else "",
-            "default": self.provider.model if provider else "",
-            "lite": self.provider.model if provider else "",
+            "plan": self.provider.model,
+            "default": self.provider.model,
+            "lite": self.provider.model,
         }
         
         # ── Resolve session log directory ──────────────────────────
@@ -445,7 +429,7 @@ class TodoOrchestrator:
         """
         Execute a single task, dispatching to the appropriate executor.
         
-        Each main task gets its own CodeBuddyClient for context isolation.
+        Each main task gets its own AIClient for context isolation.
         
         Args:
             task: Task configuration dict
@@ -465,7 +449,7 @@ class TodoOrchestrator:
             task_model = task_model_role
         self.provider.set_model(task_model)
         
-        # Create a new CodeBuddyClient for this main task (context isolation)
+        # Create a new AIClient for this main task (context isolation)
         context_id = f"task_{task_id}"
         
         # Check if this task was interrupted and has a saved session_id
@@ -1046,20 +1030,8 @@ def main():
 
     # Load config.yaml defaults
     config = _load_config()
-    # session_timeout: hard cap on total AI session time (default 3600)
-    # For backward compatibility, also check the old 'bash_timeout' key
-    default_session_timeout = config.get('session_timeout',
-                                         config.get('bash_timeout', 3600))
-    # bash_timeout: no-new-output timeout (default 300)
+    default_session_timeout = config.get('session_timeout', 3600)
     default_bash_timeout = config.get('bash_timeout', 300)
-    # If config has the new session_timeout key, bash_timeout is independent;
-    # if only the old bash_timeout key exists, use it as session_timeout
-    # and fall back to 300 for the new bash_timeout.
-    if 'session_timeout' in config:
-        default_bash_timeout = config.get('bash_timeout', 300)
-    else:
-        # Old config: bash_timeout was actually session_timeout
-        default_bash_timeout = 300
 
     parser = argparse.ArgumentParser(
         description="AI-driven task execution system (supports CodeBuddy, Claude Code, Gemini CLI)",
@@ -1113,11 +1085,6 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         '--list-providers',
         action='store_true',
         help='List available AI providers and exit',
-    )
-    parser.add_argument(
-        '--codebuddy-path',
-        default=None,
-        help='(Legacy) Path to CodeBuddy executable. Prefer --provider + --executable.',
     )
     parser.add_argument(
         '--model', '-m',
@@ -1317,17 +1284,7 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
             sys.exit(1)
         
         # Create AI provider
-        # Legacy support: --codebuddy-path overrides executable for codebuddy provider
         executable = args.executable
-        if args.codebuddy_path and not executable:
-            executable = args.codebuddy_path
-            if args.provider == 'codebuddy':
-                pass  # Use codebuddy_path as executable
-            else:
-                logger.warning(
-                    "--codebuddy-path is deprecated when using --provider. "
-                    "Use --executable instead."
-                )
 
         # Parse model spec into role→model dict
         model_roles = parse_model_spec(args.model or "")

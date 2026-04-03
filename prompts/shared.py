@@ -338,31 +338,6 @@ def build_suggested_fix_section(parent_context: dict, fallback_msg: str = None) 
     return fallback_msg
 
 
-# Keep build_autoagent_exec_note as a thin wrapper for backward compatibility.
-# The canonical long-running note now lives inside build_system_prompt_coding_agent.
-def build_autoagent_exec_note(exec_script_path: str) -> str:
-    """Build a brief first-attempt note about autoagent-exec.
-
-    .. deprecated::
-        The autoagent-exec note is now included in the system prompt
-        returned by :func:`build_system_prompt_coding_agent`.  This
-        function is kept only for backward compatibility.
-    """
-    return (
-        "**Note on long-running commands:** If a Bash command may take more "
-        "than a few minutes (e.g. compilation, benchmarking, profiling), do "
-        "NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:\n"
-        f'  "{exec_script_path}" "<your entire command>"\n'
-        "Always wrap your command in double quotes so that shell operators "
-        "(&&, |, ;, etc.) are passed correctly.\n"
-        "The launcher will auto-detach after the fast-run window and print \"TASK SUBMITTED\". "
-        "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS\n\n"
-        "**\u26a0\ufe0f IMPORTANT: You MUST always use autoagent-exec for long-running "
-        "commands. Running them directly in Bash will cause the session to hang "
-        "and be killed. Even if autoagent-exec fails, fix the command arguments "
-        "and retry with autoagent-exec \u2014 NEVER fall back to running directly in Bash.**"
-    )
-
 def build_previous_subtask_section(parent_context: dict) -> str:
     """Build the previous-subtask summary section for context-isolated prompts.
 

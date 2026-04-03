@@ -30,9 +30,6 @@ Examples:
 Internal invocation (by the wrapper script, not by the AI directly):
     python autoagent_exec.py --log-dir <dir> --task-id <id> [--fast-fail-timeout <s>] --cmd "<command>"
 
-Legacy invocation (backward compatible):
-    python autoagent_exec.py --log-dir <dir> --task-id <id> [--fast-fail-timeout <s>] -- <command...>
-
 Signal file: <log-dir>/lr_tasks/lr_<task_id>_signal.json
 Output log:  <log-dir>/lr_tasks/lr_<task_id>_output.log
 """
@@ -40,7 +37,6 @@ Output log:  <log-dir>/lr_tasks/lr_<task_id>_output.log
 import argparse
 import json
 import os
-import shlex
 import subprocess
 import sys
 import time
@@ -110,27 +106,11 @@ def parse_args():
         default=None,
         help=argparse.SUPPRESS,
     )
-    # Everything after '--' is the command (legacy mode)
-    args, remaining = parser.parse_known_args()
+    args = parser.parse_args()
 
-    # Remove leading '--' if present
-    if remaining and remaining[0] == "--":
-        remaining = remaining[1:]
-
-    if args.cmd:
-        # --cmd mode: the wrapper script passes the entire command line
-        # as a single pre-joined string.  Use it verbatim so that shell
-        # operators (&&, |, ;, etc.) are preserved.
-        args.command_str = args.cmd
-    elif remaining:
-        # Legacy mode: command tokens passed after '--'.
-        # Re-join them into a shell string.
-        if os.name == "nt":
-            args.command_str = subprocess.list2cmdline(remaining)
-        else:
-            args.command_str = shlex.join(remaining)
-    else:
-        parser.error("No command specified. Append the command after the script path.")
+    if not args.cmd:
+        parser.error("No command specified. Use --cmd '<command>'.")
+    args.command_str = args.cmd
 
     return args
 

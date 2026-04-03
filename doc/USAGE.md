@@ -295,7 +295,7 @@ tasks:
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `initial_hint` | string | 否 | 初始提示（给 AI 的参考信息，如要运行的命令） |
-| `command` | string | 否 | （已废弃）旧版配置字段，现在 AI 自主决定命令 |
+| `command` | string | 否 | 可选的命令提示，AI 可根据任务描述自主决定 |
 | `completion_criteria` | string | 是 | 完成标准 |
 
 ## 任务类型

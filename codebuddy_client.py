@@ -7,7 +7,7 @@ This module provides the AIClient class that handles:
 - Parsing JSON responses from AI
 - Timeout handling
 
-Backward compatible: CodeBuddyClient is an alias for AIClient.
+Provides AIClient (CLI mode), AIClientSDK (SDK mode), and AIClientTest (test mode).
 """
 
 import subprocess
@@ -67,39 +67,26 @@ class AIClient:
 
     def __init__(
         self,
-        provider: AIProvider = None,
+        provider: AIProvider,
         workspace: str = ".",
         timeout: int = 3600,
         bash_timeout: int = 300,
         context_id: str = None,
-        # Legacy parameters for backward compatibility
-        codebuddy_path: str = None,
-        model: str = None,
     ):
         """
         Initialize AIClient.
-        
+
         Args:
-            provider: AI provider instance (takes precedence over legacy params)
+            provider: AI provider instance
             workspace: Working directory
             timeout: Session timeout in seconds (hard cap on total session time)
             bash_timeout: No-new-output timeout in seconds.  If the AI
                 produces no new output for this many seconds, the session
                 is killed.
             context_id: Context identifier for logging/tracking
-            codebuddy_path: (Legacy) Path to CodeBuddy executable
-            model: (Legacy) AI model to use
         """
-        # Support both new provider-based and legacy initialization
-        if provider is not None:
-            self.provider = provider
-        else:
-            # Legacy: create a CodeBuddyProvider from old-style params
-            self.provider = CodeBuddyProvider(
-                executable=codebuddy_path or "codebuddy",
-                model=model,  # Use provider's default_model if not specified
-            )
-        
+        self.provider = provider
+
         self.workspace = workspace
         self.timeout = timeout
         self.bash_timeout = bash_timeout
@@ -114,15 +101,6 @@ class AIClient:
         self._backoff_base = 5  # seconds
         self._backoff_max = 300  # default max wait, overridden by config
     
-    # Legacy property accessors for backward compatibility
-    @property
-    def codebuddy_path(self):
-        return self.provider.executable
-    
-    @property
-    def model(self):
-        return self.provider.model
-
     @property
     def session_id(self) -> str:
         """Get the current session ID (for context persistence)."""
@@ -829,8 +807,6 @@ class AIClient:
         logger.info(f"[{self.context_id}] Session reset")
 
 
-# Backward compatibility alias
-CodeBuddyClient = AIClient
 
 
 class AIClientSDK:
@@ -849,36 +825,25 @@ class AIClientSDK:
 
     def __init__(
         self,
-        provider: AIProvider = None,
+        provider: AIProvider,
         workspace: str = ".",
         timeout: int = 3600,
         bash_timeout: int = 300,
         context_id: str = None,
-        # Legacy parameters for backward compatibility
-        codebuddy_path: str = None,
-        model: str = None,
     ):
         """
-        Initialize AIClient.
-        
+        Initialize AIClientSDK.
+
         Args:
-            provider: AI provider instance (takes precedence over legacy params)
+            provider: AI provider instance
             workspace: Working directory
             timeout: Session timeout in seconds (hard cap on total session time)
             bash_timeout: No-new-output timeout in seconds.  If the AI
                 produces no new output for this many seconds, the session
                 is killed.
             context_id: Context identifier for logging/tracking
-            codebuddy_path: (Legacy) Path to CodeBuddy executable
-            model: (Legacy) AI model to use        """
-        # Support both new provider-based and legacy initialization
-        if provider is not None:
-            self.provider = provider
-        else:
-            self.provider = CodeBuddyProvider(
-                executable=codebuddy_path or "codebuddy",
-                model=model,  # Use provider's default_model if not specified
-            )
+        """
+        self.provider = provider
 
         self.workspace = workspace
         self.timeout = timeout
@@ -892,15 +857,6 @@ class AIClientSDK:
         self._consecutive_failures = 0
         self._backoff_base = 5  # seconds
         self._backoff_max = 300  # default max wait, overridden by config
-
-    # Legacy property accessors for backward compatibility
-    @property
-    def codebuddy_path(self):
-        return self.provider.executable
-
-    @property
-    def model(self):
-        return self.provider.model
 
     @property
     def session_id(self) -> str:
@@ -1321,14 +1277,11 @@ class AIClientTest:
 
     def __init__(
         self,
-        provider: AIProvider = None,
+        provider: AIProvider,
         workspace: str = ".",
         timeout: int = 3600,
         bash_timeout: int = 300,
         context_id: str = None,
-        # Legacy parameters (ignored for test client)
-        codebuddy_path: str = None,
-        model: str = None,
     ):
         from ai_providers import TestProvider
         if not isinstance(provider, TestProvider):
@@ -1349,14 +1302,6 @@ class AIClientTest:
         self._fallback_log_dir = None
         # Callback to notify session_id changes (for state persistence)
         self._on_session_id_changed = None
-
-    @property
-    def codebuddy_path(self):
-        return self.provider.executable
-
-    @property
-    def model(self):
-        return self.provider.model
 
     @property
     def session_id(self) -> str:
@@ -1508,16 +1453,6 @@ class AIClientTest:
                     f"[{self.context_id}] Failed to read autoagent-exec script "
                     f"{script_path}: {e}"
                 )
-
-        if not exec_path or not log_dir:
-            # Legacy format: python "<exec_path>" --log-dir "<log_dir>" --task-id <id> -- <command>
-            legacy_match = re.search(
-                r'python\s+["\'](.+?autoagent_exec\.py)["\']\s+--log-dir\s+["\'](.+?)["\']',
-                prompt,
-            )
-            if legacy_match:
-                exec_path = legacy_match.group(1)
-                log_dir = legacy_match.group(2)
 
         if not exec_path or not log_dir:
             if self._fallback_exec_path and self._fallback_log_dir:

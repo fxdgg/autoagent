@@ -295,7 +295,6 @@ autoagent/
   - `build_sibling_context(task, parent_context)`: 构建兄弟任务上下文信息
   - `build_history_section(history, extract_summary_fn)`: 构建历史尝试记录
   - `build_suggested_fix_section(parent_context, fallback_msg)`: 构建修复建议
-  - `build_autoagent_exec_note(exec_script_path)`: 构建 autoagent-exec 使用说明（已废弃，保留向后兼容）
   - `build_previous_subtask_section(parent_context)`: 构建前一子任务摘要（用于上下文隔离的子任务间传递信息）
   - `build_long_running_reminder(exec_script_path)`: 构建长时间任务简短提醒
 
@@ -432,7 +431,7 @@ tasks:
 | 额外字段 | 类型 | 必填 | 说明 |
 |---------|------|------|------|
 | `initial_hint` | string | 否 | 初始提示（给 AI 的参考信息，如要运行的命令） |
-| `command` | string | 否 | （已废弃）旧版配置字段。现在 AI 会根据任务描述自主决定要运行的命令，并通过 `autoagent-exec` 启动 |
+| `command` | string | 否 | 可选的命令提示。AI 会根据任务描述自主决定要运行的命令，并通过 `autoagent-exec` 启动 |
 
 ## 📊 状态值说明
 

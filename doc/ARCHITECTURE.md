@@ -200,7 +200,6 @@ PROVIDER_ALIASES = {
 
 **职责**：统一的 AI CLI 客户端，封装 AI 调用、Context 管理和 stream-json 解析。
 
-> **注意**：`AIClient` 是主类名，`CodeBuddyClient` 是为向后兼容保留的别名。
 
 **核心功能**：
 
@@ -446,9 +445,9 @@ execution_results:
 ```python
 class TodoOrchestrator:
     def execute_main_task(self, task: dict):
-        # 每个主任务创建独立的 CodeBuddyClient
+        # 每个主任务创建独立的 AIClient
         context_id = f"task_{task['id']}"
-        client = CodeBuddyClient(context_id=context_id)
+        client = AIClient(context_id=context_id)
         
         # 子任务之间会重置 session，通过 previous_subtask_summary 传递上下文
         previous_subtask_summary = ""
@@ -473,7 +472,7 @@ class TodoOrchestrator:
 #### 2. 子任务级别的 Context 隔离
 
 ```python
-def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
+def _execute_subtask(self, client: AIClient, subtask: dict):
     """执行子任务，每个子任务使用独立 session"""
     
     # 在执行新子任务前重置 session（除第一个子任务外）
@@ -545,7 +544,7 @@ SimpleTaskExecutor 根据失败类型决定是否重置 session：
 ```
 主任务开始
     ↓
-创建新的 CodeBuddyClient (context_id="task_x")
+创建新的 AIClient (context_id="task_x")
     ↓
 执行子任务 1：创建新 session
     ↓
@@ -1151,7 +1150,7 @@ bash autoagent-exec.sh <command...>
 | `--log-dir` | 日志会话目录的绝对路径（由 AutoAgent 传递给 wrapper 脚本） |
 | `--task-id` | 子任务 ID（如 `1.2`） |
 | `--fast-fail-timeout` | 快速失败超时时间（秒），由 `config.yaml` 的 `fast_fail_timeout` 配置 |
-| `--cmd <command>` | 要执行的命令（由 wrapper 脚本拼接用户参数后传入）。也支持 legacy 格式 `-- <command>` |
+| `--cmd <command>` | 要执行的命令（由 wrapper 脚本拼接用户参数后传入） |
 
 **快速失败检测机制**（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置，默认 10 秒）：
 
@@ -1307,7 +1306,7 @@ autoagent/
 │   └── <project>_<random>/   # 项目专属会话目录（由 .autoagent_log 指定）
 │       ├── orchestrator.log           # Orchestrator 运行日志
 │       ├── todos_state.yaml           # 任务状态（自动生成）
-│       ├── plans_state.yaml            # Ideas 状态跟踪（替代旧的 .ideas_processed.md）
+│       ├── plans_state.yaml            # Ideas 状态跟踪
 │       ├── previous_subtask_summary.txt  # 上一个子任务的摘要（断点续传用）
 │       ├── lr_tasks/                  # long_running 任务文件目录
 │       │   ├── lr_<task_id>_signal.json   # long_running 信号文件（自动生成）
@@ -2060,8 +2059,9 @@ AI 再次审查...
 | 日志类型 | 文件位置 | 触发场景 |
 |----------|----------|----------|
 | 任务对话 | `task_<id>.md` | 简单任务的每次 attempt |
-| 子任务对话 | `subtask_<parent_id>/task_<id>.md` | 子任务的每次 attempt |
-| AI 决策 | `subtask_<parent_id>/_decisions.md` | 失败分析、主任务评估 |
+| 子任务对话 | `subtask_<parent_id>/task_<id>_round_<N>.md` | 子任务的每次 attempt |
+| AI 决策 | `subtask_<parent_id>/failure_analysis_<id>_round_<N>.md` | 失败分析 |
+| AI 决策 | `subtask_<parent_id>/main_task_evaluation_round_<N>.md` | 主任务评估 |
 | Ideas 拆解 | `ideas.md` | Ideas 分解为 TODO 时的 AI 调用 |
 | Ideas 审查 | `ideas.md` | AI 审查生成的任务（Review Prompt/Response） |
 | Ideas 修订 | `ideas.md` | AI 根据审查反馈修订任务（Revision Prompt/Response） |
@@ -2091,7 +2091,7 @@ python orchestrator.py --log-dir logs
 2. **AI 返回后**：调用 `log_response()` 追加 response 到同一文件
 
 这样即使进程在等待 AI 响应时被中断，prompt 部分也已持久化到磁盘。
-旧的 `log_conversation()` 方法仍然保留作为便捷包装器（内部调用两步方法）。
+`log_conversation()` 方法作为便捷包装器保留（内部调用两步方法）。
 
 日志在 Orchestrator 执行结束时（或 Ctrl+C 中断时）会调用 `finalize()` 生成最终的索引文件。
 
@@ -2113,8 +2113,8 @@ class IdeasWatcher:
     def has_new_ideas(self) -> bool
     def parse_ideas(self) -> List[dict]
     def process_new_ideas(
-        self, client: CodeBuddyClient,
-        review_client: CodeBuddyClient = None,
+        self, client: AIClient,
+        review_client: AIClient = None,
         conv_logger: ConversationLogger = None,
         human_review: bool = False,
     ) -> int

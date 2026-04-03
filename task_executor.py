@@ -17,7 +17,7 @@ from typing import Optional, Tuple
 
 import yaml
 
-from codebuddy_client import AIClient, CodeBuddyClient, AICallError, BashTimeoutError, SessionTimeoutError
+from codebuddy_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError
 from state_manager import StateManager
 from prompts.shared import build_system_prompt_coding_agent, prepend_system_prompt_prefix
 from prompts.simple_task import build_simple_task_prompt
@@ -25,10 +25,7 @@ from prompts.long_running_task import (
     build_long_running_prompt as _build_lr_prompt,
     build_long_running_analysis_prompt as _build_lr_analysis_prompt,
 )
-from prompts.failure_analysis import (
-    build_nested_failure_analysis_prompt,
-    build_looping_failure_analysis_prompt,
-)
+from prompts.failure_analysis import build_failure_analysis_prompt
 from prompts.main_evaluation import build_main_evaluation_prompt
 from prompts.marker_nudge import MAX_MARKER_NUDGES, MARKER_NUDGE_PROMPT
 from truncation_limits import limits
@@ -250,13 +247,13 @@ class SimpleTaskExecutor:
         self.session_dir = session_dir
         self.last_response_text = ""
 
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, project_description: str = "", **kwargs) -> bool:
+    def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, project_description: str = "", **kwargs) -> bool:
         """
         Execute a simple task.
 
         Args:
             task: Task configuration dict
-            client: CodeBuddyClient instance
+            client: AIClient instance
             state_manager: State manager for persistence
             conv_logger: Optional ConversationLogger instance
             parent_task_id: Parent task ID if this is a subtask (for log organization)
@@ -923,13 +920,13 @@ class NestedTaskExecutor:
         self.session_dir = session_dir
         self.model_roles = model_roles or {}
 
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None, project_description: str = "", **kwargs) -> bool:
+    def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None, project_description: str = "", **kwargs) -> bool:
         """
         Execute a nested task.
 
         Args:
             task: Task configuration with subtasks
-            client: CodeBuddyClient instance
+            client: AIClient instance
             state_manager: State manager for persistence
             conv_logger: Optional ConversationLogger instance
             project_description: Optional project-level description from todos.yaml
@@ -1182,7 +1179,7 @@ class NestedTaskExecutor:
                 )
             prev_decisions_text = "\n".join(decision_lines)
         
-        prompt = build_nested_failure_analysis_prompt(
+        prompt = build_failure_analysis_prompt(
             task=task,
             failed_subtask=failed_subtask,
             all_subtasks=all_subtasks,
@@ -1190,6 +1187,7 @@ class NestedTaskExecutor:
             error_type=result.error_type or 'unknown',
             task_history_text=self._format_task_history(task_history),
             prev_decisions_text=prev_decisions_text,
+            loop_info=None,
         )
         print(f"\n   🤖 [AI Decision Point 1: Failure Analysis]")
         
@@ -1452,13 +1450,13 @@ class LoopingTaskExecutor:
         self.session_dir = session_dir
         self.model_roles = model_roles or {}
 
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None, project_description: str = "", **kwargs) -> bool:
+    def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None, project_description: str = "", **kwargs) -> bool:
         """
         Execute a looping task.
 
         Args:
             task: Task configuration with subtasks and repeat_count
-            client: CodeBuddyClient instance
+            client: AIClient instance
             state_manager: State manager for persistence
             conv_logger: Optional ConversationLogger instance
             project_description: Optional project-level description from todos.yaml
@@ -1710,15 +1708,15 @@ class LoopingTaskExecutor:
                 )
             prev_decisions_text = "\n".join(decision_lines)
 
-        prompt = build_looping_failure_analysis_prompt(
+        prompt = build_failure_analysis_prompt(
             task=task,
             failed_subtask=failed_subtask,
             all_subtasks=all_subtasks,
             error_text=self._truncate_error(result.logs or result.output),
             error_type=result.error_type or 'unknown',
-            loop_idx=loop_idx,
-            history_text=history_text,
+            task_history_text=history_text,
             prev_decisions_text=prev_decisions_text,
+            loop_info=(loop_idx, task.get('repeat_count', 1)),
         )
 
         print(f"\n   🤖 [AI: Failure Analysis (loop {loop_idx})]")
@@ -1848,13 +1846,13 @@ class SubtaskExecutor:
         self.session_dir = session_dir
         self.model_roles = model_roles or {}
 
-    def execute(self, subtask: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None) -> SubtaskResult:
+    def execute(self, subtask: dict, client: AIClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None) -> SubtaskResult:
         """
         Execute a single subtask.
         
         Args:
             subtask: Subtask configuration
-            client: CodeBuddyClient instance
+            client: AIClient instance
             state_manager: State manager
             conv_logger: Optional ConversationLogger instance
             parent_task_id: Parent task ID for log organization
@@ -1917,7 +1915,7 @@ class SubtaskExecutor:
             raise ConfigError(f"Unknown subtask type: {subtask_type}")
 
     def _execute_simple_subtask(
-        self, subtask: dict, client: CodeBuddyClient, state_manager,
+        self, subtask: dict, client: AIClient, state_manager,
         conv_logger=None, parent_task_id: str = None, parent_context: dict = None,
     ) -> SubtaskResult:
         """Execute a simple subtask via AI."""
@@ -1943,7 +1941,7 @@ class SubtaskExecutor:
         )
 
     def _execute_nested_subtask(
-        self, subtask: dict, client: CodeBuddyClient, state_manager,
+        self, subtask: dict, client: AIClient, state_manager,
         conv_logger=None, parent_context: dict = None,
     ) -> SubtaskResult:
         """Execute a nested subtask by delegating to NestedTaskExecutor."""
@@ -1965,7 +1963,7 @@ class SubtaskExecutor:
         )
 
     def _execute_looping_subtask(
-        self, subtask: dict, client: CodeBuddyClient, state_manager,
+        self, subtask: dict, client: AIClient, state_manager,
         conv_logger=None, parent_context: dict = None,
     ) -> SubtaskResult:
         """Execute a looping subtask by delegating to LoopingTaskExecutor."""
@@ -1987,7 +1985,7 @@ class SubtaskExecutor:
         )
 
     def _execute_long_running_subtask(
-        self, subtask: dict, client: CodeBuddyClient, state_manager,
+        self, subtask: dict, client: AIClient, state_manager,
         conv_logger=None, parent_task_id: str = None, parent_context: dict = None,
     ) -> SubtaskResult:
         """
@@ -2481,12 +2479,8 @@ class SubtaskExecutor:
                 pass
         
         prompt = _build_lr_analysis_prompt(
-            subtask=subtask,
-            status=status,
             output_log=output_log,
             command_info=command_info,
-            exit_code_info=exit_code_info,
-            parent_context=parent_context,
         )
         try:
             # No system_prompt or system_prompt_prefix needed here —

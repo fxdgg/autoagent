@@ -122,12 +122,8 @@ def build_long_running_prompt(
 
 
 def build_long_running_analysis_prompt(
-    subtask: dict,
-    status: str,
     output_log: str,
     command_info: str = "",
-    exit_code_info: str = "",
-    parent_context: dict = None,
 ) -> str:
     """Build the prompt for AI to analyse a completed long-running task.
 
@@ -135,12 +131,8 @@ def build_long_running_analysis_prompt(
     is preserved — it already knows the task name, criteria, workflow, etc.
 
     Args:
-        subtask: Subtask configuration dict (unused, kept for API compat).
-        status: Task status string (unused, kept for API compat).
         output_log: Path to the output log file (raw, will be normalised).
         command_info: Optional formatted string like ``"\\nCommand: ..."``
-        exit_code_info: Optional formatted string (unused, kept for API compat).
-        parent_context: Optional context (unused, kept for API compat).
     """
     output_log_display = output_log.replace("\\", "/")
 

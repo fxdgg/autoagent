@@ -33,7 +33,7 @@ def _str_representer(dumper, data):
 
 _BlockStyleDumper.add_representer(str, _str_representer)
 
-from codebuddy_client import AIClient, CodeBuddyClient, AICallError
+from codebuddy_client import AIClient, AICallError
 from conversation_logger import ConversationLogger
 from truncation_limits import limits
 from prompts.ideas_decompose import build_ideas_decompose_prompt
@@ -530,8 +530,8 @@ class IdeasWatcher:
 
     def process_new_ideas(
         self,
-        client: CodeBuddyClient,
-        review_client: CodeBuddyClient = None,
+        client: AIClient,
+        review_client: AIClient = None,
         conv_logger: ConversationLogger = None,
         human_review: bool = False,
     ) -> int:
@@ -539,8 +539,8 @@ class IdeasWatcher:
         Process all new ideas: parse, convert to TODOs via AI, and append to todos.yaml.
         
         Args:
-            client: CodeBuddyClient instance to call AI for task decomposition
-            review_client: Optional CodeBuddyClient with fresh context for reviewing
+            client: AIClient instance to call AI for task decomposition
+            review_client: Optional AIClient with fresh context for reviewing
                            generated tasks. If None, review step is skipped.
             conv_logger: Optional ConversationLogger to record prompts/responses
             human_review: If True, after AI review passes, pause for human approval.
@@ -599,9 +599,9 @@ class IdeasWatcher:
 
     def _decompose_idea_to_tasks(
         self,
-        client: CodeBuddyClient,
+        client: AIClient,
         idea: dict,
-        review_client: CodeBuddyClient = None,
+        review_client: AIClient = None,
         conv_logger: ConversationLogger = None,
         idea_index: int = 1,
         human_review: bool = False,
@@ -619,9 +619,9 @@ class IdeasWatcher:
         which triggers another AI revision + review cycle.
         
         Args:
-            client: CodeBuddyClient instance
+            client: AIClient instance
             idea: Idea dict with 'title', 'content', 'hash' fields
-            review_client: Optional CodeBuddyClient with fresh context for review
+            review_client: Optional AIClient with fresh context for review
             conv_logger: Optional ConversationLogger to record prompts/responses
             idea_index: 1-based index of the idea (for logging)
             human_review: If True, pause for human approval after AI review passes
@@ -733,8 +733,8 @@ class IdeasWatcher:
 
     def _review_and_validate_loop(
         self,
-        client: CodeBuddyClient,
-        review_client: CodeBuddyClient,
+        client: AIClient,
+        review_client: AIClient,
         idea: dict,
         tasks: List[dict],
         raw_yaml_response: str,
@@ -748,8 +748,8 @@ class IdeasWatcher:
         them.  This repeats up to ``MAX_VALIDATION_RETRIES`` times.
 
         Args:
-            client: Original CodeBuddyClient (with existing context)
-            review_client: Optional CodeBuddyClient for AI review
+            client: Original AIClient (with existing context)
+            review_client: Optional AIClient for AI review
             idea: Original idea dict
             tasks: Current parsed task list
             raw_yaml_response: Raw response from the last AI call
@@ -849,7 +849,7 @@ class IdeasWatcher:
 
     def _review_tasks(
         self,
-        review_client: CodeBuddyClient,
+        review_client: AIClient,
         idea: dict,
         tasks: List[dict],
         raw_yaml_response: str,
@@ -866,7 +866,7 @@ class IdeasWatcher:
         revision round.
         
         Args:
-            review_client: CodeBuddyClient with fresh context
+            review_client: AIClient with fresh context
             idea: Original idea dict
             tasks: Parsed task list
             raw_yaml_response: Raw YAML response from the decomposition AI
@@ -967,8 +967,8 @@ class IdeasWatcher:
 
     def _human_review_loop(
         self,
-        client: CodeBuddyClient,
-        review_client: CodeBuddyClient,
+        client: AIClient,
+        review_client: AIClient,
         idea: dict,
         tasks: List[dict],
         raw_yaml_response: str,
@@ -985,8 +985,8 @@ class IdeasWatcher:
         5. Human reviews again
         
         Args:
-            client: Original CodeBuddyClient (with existing context)
-            review_client: CodeBuddyClient for AI review
+            client: Original AIClient (with existing context)
+            review_client: AIClient for AI review
             idea: Original idea dict
             tasks: Current parsed task list
             raw_yaml_response: Raw YAML response from the last AI call

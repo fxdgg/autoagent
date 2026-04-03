@@ -37,9 +37,6 @@ class TodoOrchestrator:
         use_cli: bool = False,
         backoff_max_wait: int = 300,
         model_roles: dict = None,
-        # Legacy parameters for backward compatibility
-        codebuddy_path: str = None,
-        model: str = None,
     )
 ```
 
@@ -59,8 +56,8 @@ class TodoOrchestrator:
 | `backoff_max_wait` | int | 300 | AI CLI 连续失败时的最大退避等待时间（秒），来自 `config.yaml` 的 `backoff_max_wait` |
 | `model_roles` | dict | None | 模型角色字典（`{"plan": ..., "default": ..., "lite": ...}`），由 `parse_model_spec()` 解析生成 |
 
-> **注意**：`state_file` 参数已废弃。`todos_state.yaml`、`orchestrator.log`、`plans_state.yaml` 等运行时文件
-> 现在统一放置在由 `log_dir` + `.autoagent_log` 推导出的会话目录下，不再出现在项目目录中。
+> `todos_state.yaml`、`orchestrator.log`、`plans_state.yaml` 等运行时文件
+> 统一放置在由 `log_dir` + `.autoagent_log` 推导出的会话目录下，不出现在项目目录中。
 
 ### 方法
 
@@ -350,22 +347,17 @@ def list_providers() -> dict
 
 统一 AI CLI 客户端，封装 AI 调用、Context 管理和 stream-json 解析。
 
-> **注意**：`AIClient` 是主类名，`CodeBuddyClient` 是为向后兼容保留的别名。
-
 ### 类定义
 
 ```python
 class AIClient:
     def __init__(
         self,
-        provider: AIProvider = None,
+        provider: AIProvider,
         workspace: str = ".",
         timeout: int = 3600,
         bash_timeout: int = 300,
         context_id: str = None,
-        # Legacy parameters
-        codebuddy_path: str = None,
-        model: str = None,
     )
 ```
 
@@ -373,15 +365,11 @@ class AIClient:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `provider` | AIProvider | None | AI provider 实例（优先于 legacy 参数） |
+| `provider` | AIProvider | - | AI provider 实例 |
 | `workspace` | str | "." | 工作目录 |
 | `timeout` | int | 3600 | 超时时间（秒）。实际使用中由 TodoOrchestrator 传入（来自 config.yaml 或 CLI `--timeout`） |
 | `bash_timeout` | int | 300 | 无新输出超时时间（秒）。如果 AI 在此时间内无新输出，会话将被终止 |
 | `context_id` | str | None | Context 标识符，用于状态记录和日志追踪 |
-| `codebuddy_path` | str | None | （Legacy）CodeBuddy 可执行文件路径 |
-| `model` | str | None | （Legacy）AI 模型名 |
-
-> 如果不提供 `provider`，会根据 legacy 参数或默认值创建 `CodeBuddyProvider(model=None)`，此时使用 `config.yaml` 中的 `default_model` 作为默认模型。
 
 ### 属性
 
@@ -531,7 +519,7 @@ AI CLI 工具的 `--output-format stream-json` 模式输出逐行 JSON 对象。
 ```python
 class SimpleTaskExecutor:
     def __init__(self, session_dir: str = None)
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, **kwargs) -> bool
+    def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, **kwargs) -> bool
 ```
 
 **执行逻辑**：
@@ -566,7 +554,7 @@ return False
 ```python
 class LoopingTaskExecutor:
     def __init__(self, session_dir: str = None, model_roles: dict = None)
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None) -> bool
+    def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None) -> bool
 ```
 
 **构造函数参数**：
@@ -605,7 +593,7 @@ for loop in range(task['repeat_count']):
 ```python
 class NestedTaskExecutor:
     def __init__(self, session_dir: str = None, model_roles: dict = None)
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None) -> bool
+    def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None) -> bool
 ```
 
 **构造函数参数**：
@@ -672,7 +660,7 @@ class SubtaskResult:
 ```python
 class SubtaskExecutor:
     def __init__(self, session_dir: str = None, model_roles: dict = None)
-    def execute(self, subtask: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None) -> SubtaskResult
+    def execute(self, subtask: dict, client: AIClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None) -> SubtaskResult
 ```
 
 **构造函数参数**：
@@ -716,7 +704,7 @@ bash autoagent-exec.sh <command...>
 | `--log-dir` | str | 日志会话目录绝对路径（由 SubtaskExecutor 的 `session_dir` 提供） |
 | `--task-id` | str | 子任务 ID（如 `1.2`） |
 | `--fast-fail-timeout` | int | 快速失败超时时间（秒），由 `config.yaml` 的 `fast_fail_timeout` 配置 |
-| `--cmd <command>` | str | 要执行的命令（由 wrapper 脚本拼接用户参数后传入）。也支持 legacy 格式 `-- <command>` |
+| `--cmd <command>` | str | 要执行的命令（由 wrapper 脚本拼接用户参数后传入） |
 
 **行为**（以下 `N` 秒由 `--fast-fail-timeout` 控制）：
 
@@ -1061,8 +1049,8 @@ def parse_ideas(self) -> List[dict]
 ```python
 def process_new_ideas(
     self,
-    client: CodeBuddyClient,
-    review_client: CodeBuddyClient = None,
+    client: AIClient,
+    review_client: AIClient = None,
     conv_logger: ConversationLogger = None,
     human_review: bool = False,
 ) -> int
@@ -1074,8 +1062,8 @@ Plan 阶段内置重试机制（`max_plan_retries`，默认 3）：如果 AI 调
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `client` | CodeBuddyClient | - | AI 客户端实例（用于任务分解） |
-| `review_client` | CodeBuddyClient | None | 可选的独立 AI 客户端（全新上下文，用于审查）。如果为 None 则跳过审查步骤 |
+| `client` | AIClient | - | AI 客户端实例（用于任务分解） |
+| `review_client` | AIClient | None | 可选的独立 AI 客户端（全新上下文，用于审查）。如果为 None 则跳过审查步骤 |
 | `conv_logger` | ConversationLogger | None | 可选的对话日志记录器 |
 | `human_review` | bool | False | 如果为 True，AI 审查通过后挂起等待人工确认 |
 
@@ -1330,7 +1318,6 @@ class SessionTimeoutError(AICallError):
 | `--test-rules` | - | None | 测试规则文件路径（使用 `test` provider 时必须指定） |
 | `--include-directories` | - | None | 逗号分隔的额外目录列表，允许 AI 工具访问工作区外的目录（仅 Gemini） |
 | `--list-providers` | - | - | 列出所有可用 AI provider 并退出 |
-| `--codebuddy-path` | - | None | （Legacy）CodeBuddy 可执行文件路径，建议用 `--provider` + `--executable` |
 | `--model` | `-m` | 取决于 provider | AI 模型。支持单模型（如 `glm-5`）和多角色格式（如 `"plan:X;default:Y;lite:Z"`）。codebuddy 默认从 config.yaml 的 `default_model` 加载 |
 | `--workspace` | `-w` | `.` | 工作目录 |
 | `--timeout` | - | 3600 | AI 会话超时时间（秒），默认值来自 `config.yaml` 的 `session_timeout`（如果 config.yaml 不存在则为 3600） |
@@ -1551,7 +1538,7 @@ orchestrator.run_with_idle()  # 不会退出，直到 Ctrl+C
 | **TodoOrchestrator** | 任务调度、状态管理、配置解析、ideas 处理、idle 模式 |
 | **AIProvider** | AI CLI 工具抽象基类、命令构造 |
 | **CodeBuddyProvider / ClaudeCodeProvider / GeminiCLIProvider / OpenCodeProvider** | 具体 AI 工具的命令构造 |
-| **AIClient** (别名 CodeBuddyClient) | AI 调用、Context 管理、stream-json 解析 |
+| **AIClient** | AI 调用、Context 管理、stream-json 解析 |
 | **SimpleTaskExecutor** | 简单任务执行（自循环完成检测，按失败类型决定是否 reset session） |
 | **NestedTaskExecutor** | 嵌套任务执行、AI 决策调度 |
 | **LoopingTaskExecutor** | 循环任务执行（固定 N 次迭代） |
