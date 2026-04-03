@@ -1628,9 +1628,11 @@ class LoopingTaskExecutor:
                 # Skip already completed subtasks (in this round)
                 if subtask_state.get('status') == 'completed':
                     print(f"\n   📌 Subtask {subtask_id}: {subtask['name']} (already completed, skipping)")
-                    # Keep the summary up-to-date so the next non-skipped
-                    # subtask receives context from its predecessor.
-                    previous_subtask_summary = subtask_state.get('ai_reasoning', '') or previous_subtask_summary
+                    # On resume, previous_subtask_summary is loaded from disk
+                    # (the full AI output).  Only fall back to ai_reasoning
+                    # (a short extract) when nothing better is available.
+                    if not previous_subtask_summary:
+                        previous_subtask_summary = subtask_state.get('ai_reasoning', '')
                     continue
 
                 # Reset session before each subtask (except the first) to
