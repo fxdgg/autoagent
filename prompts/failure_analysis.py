@@ -24,6 +24,7 @@ def build_failure_analysis_prompt(
     prev_decisions_text: str,
     loop_info: Optional[Tuple[int, int]] = None,
     previous_context: str = "",
+    failed_task_summary: str = "",
 ) -> str:
     """Build the failure-analysis prompt for both *nested* and *looping* tasks.
 
@@ -40,6 +41,9 @@ def build_failure_analysis_prompt(
         previous_context: Summary from the previous (successful) subtask,
             providing context about the state of the project before the
             failure occurred.  May be empty.
+        failed_task_summary: A concise summary / reasoning of the failed
+            subtask itself (e.g. ``state['ai_reasoning']``).  Complements
+            *error_text* which contains the raw AI output.  May be empty.
     """
     failed_id = str(failed_subtask['id'])
     available_ids = [str(s['id']) for s in all_subtasks]
@@ -69,6 +73,10 @@ Failed Subtask:
     # -- ## Previous Step Context (conditional) --
     if previous_context:
         parts.append(f"## Previous Step Context\n\n{previous_context}")
+
+    # -- ## Failed Subtask Summary (conditional) --
+    if failed_task_summary:
+        parts.append(f"## Failed Subtask Summary\n\n{failed_task_summary}")
 
     # -- ## Failed Subtask Output --
     if error_text and error_text != "(no error output)":

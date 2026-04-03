@@ -1219,6 +1219,11 @@ class NestedTaskExecutor:
         error_text = result.logs or result.response_text or result.output
         error_text = self._truncate_error(error_text)
 
+        # Build failed task summary from result.output (ai_reasoning)
+        failed_task_summary = result.output or ""
+        if failed_task_summary:
+            failed_task_summary = self._truncate_error(failed_task_summary)
+
         prompt = build_failure_analysis_prompt(
             task=task,
             failed_subtask=failed_subtask,
@@ -1228,6 +1233,7 @@ class NestedTaskExecutor:
             prev_decisions_text=prev_decisions_text,
             loop_info=None,
             previous_context=self._truncate_error(previous_context) if previous_context else "",
+            failed_task_summary=failed_task_summary,
         )
         print(f"\n   🤖 [AI Decision Point 1: Failure Analysis]")
         
@@ -1760,6 +1766,11 @@ class LoopingTaskExecutor:
         error_text = result.logs or result.response_text or result.output
         error_text = self._truncate_error(error_text)
 
+        # Build failed task summary from result.output (ai_reasoning)
+        failed_task_summary = result.output or ""
+        if failed_task_summary:
+            failed_task_summary = self._truncate_error(failed_task_summary)
+
         prompt = build_failure_analysis_prompt(
             task=task,
             failed_subtask=failed_subtask,
@@ -1769,6 +1780,7 @@ class LoopingTaskExecutor:
             prev_decisions_text=prev_decisions_text,
             loop_info=(loop_idx, task.get('repeat_count', 1)),
             previous_context=self._truncate_error(previous_context) if previous_context else "",
+            failed_task_summary=failed_task_summary,
         )
 
         print(f"\n   🤖 [AI: Failure Analysis (loop {loop_idx})]")
