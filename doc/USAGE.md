@@ -272,7 +272,7 @@ tasks:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `initial_hint` | string | 否 | 初始提示（给 AI 的参考信息） |
+| `initial_hint` | string | 否 | 静态上下文提示（每次尝试都会传入，给 AI 的参考信息） |
 
 #### 嵌套任务 (type: nested)
 
@@ -294,7 +294,7 @@ tasks:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `initial_hint` | string | 否 | 初始提示（给 AI 的参考信息，如要运行的命令） |
+| `initial_hint` | string | 否 | 静态上下文提示（每次尝试都会传入，给 AI 的参考信息，如要运行的命令） |
 | `command` | string | 否 | 可选的命令提示，AI 可根据任务描述自主决定 |
 | `completion_criteria` | string | 是 | 完成标准 |
 

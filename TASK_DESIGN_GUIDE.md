@@ -63,7 +63,7 @@ This means:
 
 **What happens at runtime:**
 1. AutoAgent sends a prompt containing the task name, completion_criteria,
-   initial_hint (if first attempt), and any retry context.
+   initial_hint, and any retry context.
 2. The AI agent works autonomously — reading files, running commands, making
    code changes — until it believes the task is done.
 3. The AI agent ends its response with a status marker:
@@ -244,7 +244,7 @@ tasks:
 
 | Field          | Type   | Required | Description                              |
 |----------------|--------|----------|------------------------------------------|
-| `initial_hint` | string | No       | Context/guidance for the AI on first attempt |
+| `initial_hint` | string | No       | Static context/guidance included in every attempt |
 
 **nested:**
 
@@ -266,7 +266,7 @@ tasks:
 | Field          | Type   | Required | Description                              |
 |----------------|--------|----------|------------------------------------------|
 | `command`      | string | No       | Command to run (AI can decide if omitted) |
-| `initial_hint` | string | No       | Context/guidance for the AI on first attempt |
+| `initial_hint` | string | No       | Static context/guidance included in every attempt |
 
 ### 3.3 Hierarchy Rules
 
@@ -296,20 +296,20 @@ The `model` field controls which AI model executes the task:
 - Use `"default"` for: "Analyze profiling results and optimize kernel code",
   "Debug failing test and fix root cause", "Refactor module architecture".
 
-### 3.5 `max_attempts: 1` for Execution-Only Subtasks
+### 3.5 Choosing `max_attempts`
+
+The `max_attempts` field (default: 5) controls how many times a task or
+subtask is retried before being marked as failed. Choosing the right value
+depends on the task's nature:
+
+**`max_attempts: 1` — Execution-only subtasks:**
 
 Subtasks whose sole purpose is to **run code written by a previous subtask**
 (build, benchmark, test, train, profile, etc.) should set `max_attempts: 1`.
-
-**Rationale:** If the command fails, the cause is almost always a bug in the
-code produced by a sibling subtask — retrying the same command will fail the
-same way.  With `max_attempts: 1`, the failure propagates immediately to the
-parent task's failure analysis, which can decide to `retry_from` the code-
-writing subtask with a `suggested_fix`.  This is far more efficient than
-wasting attempts re-running a broken command.
-
-**Applies to any type** — `simple`, `long_running`, `simple_once`, etc. —
-as long as the subtask is purely executing (not writing code):
+If the command fails, the cause is almost always a bug in the code produced
+by a sibling subtask — retrying the same command will fail the same way.
+With `max_attempts: 1`, the failure propagates immediately to the parent's
+failure analysis, which can `retry_from` the code-writing subtask.
 
 ```yaml
 # ✅ Good: execution subtask with max_attempts: 1
@@ -320,15 +320,27 @@ as long as the subtask is purely executing (not writing code):
   model: lite
   completion_criteria: |
     Benchmark exits with code 0 and prints "Score: 100/100".
-
-# ❌ Bad: execution subtask with default max_attempts (5)
-- id: 2.3
-  name: "Run benchmark"
-  type: simple
-  # max_attempts defaults to 5 → wastes 4 retries on the same broken code
-  completion_criteria: |
-    Benchmark exits with code 0 and prints "Score: 100/100".
 ```
+
+**`max_attempts: 2–3` — Moderately uncertain tasks:**
+
+Use for tasks where the AI may need a second chance but the problem space
+is constrained: fixing a specific bug, adapting code to pass a known test,
+or making a targeted optimization. The AI usually gets it right within 2–3
+tries if the criteria are clear.
+
+**`max_attempts: 5` (default) — Complex code-writing tasks:**
+
+Good for tasks involving open-ended code changes, multi-file refactoring,
+or optimization where the AI may need several different strategies. Most
+code-writing subtasks work well with the default.
+
+**`max_attempts: > 5` — Rarely needed:**
+
+Only increase beyond 5 for tasks with high inherent uncertainty (e.g.,
+achieving a specific performance threshold where each attempt explores a
+fundamentally different approach). If a task consistently needs > 5
+attempts, consider breaking it into smaller subtasks instead.
 
 **Do NOT use `max_attempts: 1`** on subtasks where the AI actively writes or
 modifies code — those benefit from multiple attempts with different strategies.
@@ -394,6 +406,58 @@ analyzes the failure and decides which subtask to retry from, passing a
 - Make subtask boundaries align with logical checkpoints — if step 3 fails,
   it should be meaningful to retry from step 2 or step 3.
 - Avoid subtasks that silently fail — ensure errors are visible in output.
+
+### 5.3 Designing for Retry Resilience
+
+When a subtask fails and is retried, the previous attempt may have already
+modified files, created partial artifacts, or left the codebase in a
+half-changed state. The AI on the retry attempt has no memory of these
+changes (session is reset), but the **filesystem changes persist**.
+
+**Guidelines for task designers:**
+
+- **Mention cleanup in `initial_hint`** when a task modifies shared state:
+  ```yaml
+  initial_hint: |
+    NOTE: If a previous attempt left partial changes, check the state of
+    build/ and src/generated/ before starting. Remove stale artifacts if
+    needed (rm -rf build/).
+  ```
+- **Prefer append/overwrite patterns** over incremental mutations. A task
+  that writes a complete output file is naturally idempotent; a task that
+  appends lines to a config file is not.
+- **Use git as a safety net** in `initial_hint` when appropriate: "Run
+  `git diff` first to check for unexpected changes from a previous attempt.
+  Use `git checkout -- <file>` to reset if needed."
+- **Don't over-engineer for idempotency** — full idempotency is often
+  impractical. It's enough to make the AI *aware* that residual state may
+  exist, so it can inspect and adapt.
+
+### 5.4 Defensive Task Design
+
+When tasks depend on external tools, services, or environmental
+configurations, design them to handle common failure modes gracefully.
+
+**In `completion_criteria` — handle partial success explicitly:**
+```yaml
+# ✅ Good: acknowledges that partial results are possible
+completion_criteria: |
+  1. At least 8 out of 10 test suites pass.
+  2. Any failing suites are documented in test_failures.txt with root cause.
+  3. No regressions in previously passing tests.
+
+# ❌ Bad: all-or-nothing with no fallback
+completion_criteria: "All 10 test suites pass."
+```
+
+**In `initial_hint` — include prerequisite checks:**
+```yaml
+initial_hint: |
+  Before starting optimization:
+  1. Verify the project builds: cmake --build build --config Release
+  2. Verify correctness: run ./benchmark and confirm "Score: 100/100"
+  3. If either fails, fix the build/correctness issue FIRST.
+```
 
 ---
 
@@ -471,8 +535,10 @@ completion_criteria: "The function works correctly"
 
 ## 7. Writing Effective initial_hint
 
-The `initial_hint` field is shown to the AI ONLY on the first attempt. It
-provides context that helps the AI get started efficiently.
+The `initial_hint` field is included in the AI's prompt on **every fresh
+session start** — including the first attempt and every retry (since
+retries reset the session). It provides static context that helps the AI
+work effectively regardless of which attempt it is on.
 
 ### 7.1 What to Include
 
@@ -480,12 +546,18 @@ provides context that helps the AI get started efficiently.
 - **Specific commands** to run (especially if non-obvious).
 - **Architecture context** — how the codebase is structured.
 - **Constraints** — things the AI should NOT change.
+- **Common failure modes** — known issues the AI may encounter and how
+  to work around them (see §7.4).
 
 ### 7.2 What NOT to Include
 
 - **Completion criteria** — that's a separate field.
 - **Obvious instructions** — the AI knows how to read files and run commands.
 - **Overly detailed step-by-step** — let the AI figure out the approach.
+- **Attempt-specific strategies** — since `initial_hint` is shown on every
+  attempt, avoid instructions like "start by trying X" that could cause the
+  AI to repeat the same failed approach. Strategy-specific guidance is
+  provided automatically via retry context and `suggested_fix`.
 
 ### 7.3 Example
 
@@ -496,12 +568,28 @@ initial_hint: |
     - CMakeLists.txt: Main build config
     - cufftdx_dct3d.cuh: Kernel header (DCT/IDCT implementations)
     - main.cpp: Benchmark program (100 iterations)
-  
+
   Build commands:
     cmake -B build -DCMAKE_BUILD_TYPE=Release
     cmake --build build --config Release
-  
+
   IMPORTANT: Do NOT modify the correctness test (Score calculation) logic.
+```
+
+### 7.4 Including Troubleshooting Guidance
+
+When a task interacts with external tools, services, or environments that
+may behave unexpectedly, include troubleshooting hints so the AI can
+self-recover:
+
+```yaml
+initial_hint: |
+  Key files: src/training/train.py, configs/model.yaml
+
+  Troubleshooting:
+  - If CUDA OOM occurs, reduce batch_size in configs/model.yaml (try 16 → 8).
+  - If pip install fails on torch, use: pip install torch --index-url https://...
+  - The database may take ~10s to start; if connection refused, retry after wait.
 ```
 
 ---

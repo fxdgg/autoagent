@@ -1254,7 +1254,7 @@ class TaskConfig(TypedDict, total=False):
     name: str                                          # 必填，任务名称
     type: Literal["simple", "nested", "looping"]  # 必填，任务类型（顶层）
     completion_criteria: str                            # 必填，完成标准
-    initial_hint: str                                  # simple 可选
+    initial_hint: str                                  # simple 可选，每次尝试都传入
     max_attempts: int                                  # 可选，默认 5
     subtasks: List['SubtaskConfig']                    # nested/looping 必填
     repeat_count: int                                  # looping 必填，循环次数
@@ -1269,7 +1269,7 @@ class SubtaskConfig(TypedDict, total=False):
     name: str                                          # 必填
     type: Literal["simple", "long_running", "simple_once", "long_running_once", "nested", "looping"]  # 必填
     completion_criteria: str                            # 必填
-    initial_hint: str                                  # simple 可选
+    initial_hint: str                                  # simple 可选，每次尝试都传入
     max_attempts: int                                  # 可选，默认 5
 ```
 

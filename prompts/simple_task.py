@@ -30,7 +30,7 @@ def build_simple_task_prompt(
 
     The prompt is organised into clearly separated sections:
 
-    1. **Task** — core instructions (name, criteria, hint)
+    1. **Task** — core instructions (name, criteria, hint on every attempt)
     2. **Context** — background information (main goal, workflow, prev step)
     3. **Previous Attempts** — retry information (only when attempt > 1)
     4. **Constraints** — operational constraints (timeout warnings)
@@ -67,7 +67,7 @@ def build_simple_task_prompt(
         f"Task: {task['name']}",
         f"Completion Criteria: {task['completion_criteria']}",
     ]
-    if task.get('initial_hint') and attempt == 1:
+    if task.get('initial_hint'):
         task_lines.append(f"Initial Hint: {task['initial_hint']}")
     parts.append("\n".join(task_lines))
 

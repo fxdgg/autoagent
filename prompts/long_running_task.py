@@ -30,7 +30,7 @@ def build_long_running_prompt(
 
     The prompt is organised into clearly separated sections:
 
-    1. **Task** — core instructions (name, criteria, hint)
+    1. **Task** — core instructions (name, criteria, hint on every attempt)
     2. **Context** — background information (main goal, workflow, prev step)
     3. **Previous Attempts** — retry information (only when attempt > 1)
     4. **Constraints** — long-running reminder + timeout warnings
@@ -56,7 +56,7 @@ def build_long_running_prompt(
         f"Task: {subtask['name']}",
         f"Completion Criteria: {subtask['completion_criteria']}",
     ]
-    if subtask.get('initial_hint') and attempt == 1:
+    if subtask.get('initial_hint'):
         task_lines.append(f"Initial Hint: {subtask['initial_hint']}")
     parts.append("\n".join(task_lines))
 
