@@ -35,19 +35,11 @@ Key implications for task design:
   previous-attempt context are included in every prompt, so the AI loses
   nothing important. This prevents unbounded context accumulation across
   retries (which can cause output truncation and a vicious retry cycle).
-- When the AI does not output a completion status marker (✅/❌/⏳) —
-  whether because it forgot, or because the CLI/SDK crashed mid-response —
-  AutoAgent uses a **marker-nudge** mechanism: instead of resetting the
-  session and replaying the entire task, a lightweight follow-up prompt is
-  sent in the same session. The AI may continue unfinished work and read
-  files to verify, but is told not to re-run commands it already executed.
-  If the AI previously called `autoagent-exec`, the system checks for a
-  signal file before nudging — if one exists, the nudge is skipped and a
-  synthetic `LONG_RUNNING_IN_PROGRESS` is returned automatically. The
-  number of nudge attempts is configurable via `max_marker_nudges` in
-  `config.yaml` (default: 2). If all nudges are exhausted without a
-  marker, the system falls back to the normal retry loop (which resets
-  the session).
+- When the AI does not output a completion status marker (✅/❌/⏳),
+  AutoAgent automatically retries — first with lightweight follow-ups in
+  the same session, then with a full session reset. You do not need to
+  design around this; just ensure your `completion_criteria` are clear
+  enough that the AI can self-evaluate.
 - The AI's persona/role can be customized per-task via the
   `system_prompt_prefix` field in `todos.yaml` (see §12 below).
 
@@ -96,11 +88,6 @@ changes, running tests, file analysis, data processing, simple builds, etc.
   the AI will use `autoagent-exec` automatically if needed. Use `long_running`
   only when you KNOW the command will take a long time and want to specify
   the command upfront.
-- **Auto-upgrade behavior:** If the AI uses `autoagent-exec` within a simple
-  task and outputs `LONG_RUNNING_IN_PROGRESS`, AutoAgent automatically
-  detects this and switches to the long-running poll + callback flow
-  (waiting for the background process to finish, then asking the AI to
-  analyze results). You do NOT need to anticipate this in your task design.
 
 ### 2.2 `nested`
 
@@ -157,20 +144,9 @@ same workflow N times (e.g., profile → optimize → benchmark → commit).
 **What happens at runtime:**
 1. AutoAgent sends a prompt telling the AI to use `autoagent-exec` wrapper
    script to launch the command in the background.
-2. The AI runs: `autoagent-exec.bat <command>` (internal parameters like
-   `--log-dir` and `--task-id` are pre-filled by the wrapper script).
-3. `autoagent-exec` implements a **fast-fail** mechanism (configurable via `fast_fail_timeout` in `config.yaml`):
-   - If the command exits within the timeout with an error → smart output
-     (short output printed inline, long output shows only the log path),
-     AI can fix and retry.
-   - If the command exits within the timeout with success → smart output
-     (short output printed inline with "not truncated" notice, long output
-     shows only the log path), treated as completed.
-   - If still running after the timeout → detached to background, AI outputs
-     `⏳ LONG_RUNNING_IN_PROGRESS` and the session ends.
-4. AutoAgent monitors the background process via a signal file.
-5. When the process finishes, AutoAgent calls the AI back with the output
-   log path, exit code, and asks it to evaluate the results.
+2. If the command fails quickly, the AI sees the error and can fix & retry.
+   If the command takes a long time, it runs in the background — AutoAgent
+   waits for it to finish, then calls the AI back to analyze the results.
 
 **Scope:** Subtask only (inside nested or looping).
 
@@ -399,21 +375,13 @@ retries it with additional context:
   provided a fix, it's included in the prompt.
 
 **Session reset on retry:** The AI session is reset before each retry
-attempt. This prevents context from accumulating across retries (which
-can cause the AI's output to be truncated before it emits the completion
-marker). The full task description and previous-attempt summaries are
+attempt. The full task description and previous-attempt summaries are
 included in every prompt, so no important context is lost.
 
-**Marker-nudge mechanism:** If the AI does not output a status marker
-(e.g. it forgot, or the CLI/SDK crashed mid-response), AutoAgent sends a
-short follow-up prompt in the same session (without resetting). The AI
-may continue unfinished work and read files, but is told not to re-run
-commands it already executed. Before sending the nudge, the system checks
-for an `autoagent-exec` signal file — if one exists, the nudge is
-skipped entirely and a synthetic `LONG_RUNNING_IN_PROGRESS` is returned.
-The number of nudge attempts is configurable via `max_marker_nudges` in
-`config.yaml` (default: 2). After all nudges are exhausted, the system
-falls back to the normal retry loop.
+**Missing markers:** If the AI does not output a status marker, AutoAgent
+automatically retries — first with a lightweight follow-up in the same
+session, then with a full session reset. You do not need to design
+around this.
 
 ### 5.2 Nested/Looping Failure Analysis
 
@@ -843,20 +811,10 @@ subtask's output** to the next subtask via the prompt. This means:
   iteration starts fresh, with only the previous subtask summary carried
   forward within the same iteration.
 
-**Resume behavior:** The previous subtask summary is **persisted to disk**
-(`previous_subtask_summary.txt` in the session directory). If execution is
-interrupted and resumed, the summary is restored from disk so that the
-next subtask still receives context from its predecessor — even though the
-completed subtasks are skipped on resume.
-
-For **looping** tasks, the current loop index is also persisted. If a
-looping task is interrupted mid-iteration, it resumes from the last saved
-loop index rather than restarting from iteration 1.
-
 **Best practice:** Persist important intermediate results to files (e.g.,
 analysis reports, configuration changes, benchmark results) rather than
 relying on AI memory across subtasks. This ensures information survives
-session resets.
+session resets and is available on resume after interruptions.
 
 ---
 
