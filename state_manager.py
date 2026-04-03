@@ -21,16 +21,37 @@ logger = logging.getLogger(__name__)
 class StateManager:
     """
     Manages task execution state with YAML persistence.
-    
+
     State structure:
     {
         "tasks": {
             "1": {"status": "pending", "attempts": 0, ...},
             "2": {"status": "in_progress", ...},
+            "1.1@2.1": {"status": "completed", ...},  # round-scoped subtask
             ...
         }
     }
+
+    Round-scoped keys use the format ``task_id@round_label`` (e.g.,
+    ``"1.2@3.1"``).  These are internal bookkeeping entries for subtask
+    state within a specific round and are excluded from summary counts
+    and in-progress queries.
     """
+
+    # Separator used in round-scoped state keys.
+    ROUND_SEP = "@"
+
+    @staticmethod
+    def round_key(task_id: str, round_label: str | None) -> str:
+        """Build a round-scoped state key.
+
+        Returns ``"task_id@round_label"`` when *round_label* is given,
+        or the plain ``task_id`` string otherwise.
+        """
+        task_id = str(task_id)
+        if round_label:
+            return f"{task_id}{StateManager.ROUND_SEP}{round_label}"
+        return task_id
 
     def __init__(self, state_file: str = "todos_state.yaml"):
         """
@@ -182,7 +203,9 @@ class StateManager:
     def get_summary(self) -> dict:
         """
         Get a summary of all task states.
-        
+
+        Round-scoped keys (containing ``@``) are excluded from counts.
+
         Returns:
             dict: Summary with counts by status
         """
@@ -193,24 +216,30 @@ class StateManager:
             "completed": 0,
             "failed": 0,
         }
-        
+
         for task_id, task_state in self.state["tasks"].items():
+            if self.ROUND_SEP in task_id:
+                continue
             summary["total"] += 1
             status = task_state.get("status", "pending")
             if status in summary:
                 summary[status] += 1
-        
+
         return summary
 
     def get_in_progress_tasks(self) -> list:
         """
         Get list of task IDs that are currently in_progress.
-        
+
+        Round-scoped keys (containing ``@``) are excluded.
+
         Returns:
             list: List of task_id strings with status 'in_progress'
         """
         in_progress = []
         for task_id, task_state in self.state["tasks"].items():
+            if self.ROUND_SEP in task_id:
+                continue
             if task_state.get("status") == "in_progress":
                 in_progress.append(task_id)
         return in_progress

@@ -1084,10 +1084,13 @@ def reset(self)
 
 任务状态持久化管理器，负责加载、保存和更新任务执行状态。写入操作通过 `threading.Lock` 保证线程安全。
 
+子任务状态使用 **round-scoped key**（`task_id@round_label`，如 `"1.2@3.1"`），每个轮次/retry 有独立状态，实现精确断点续传。`*_once` 类型的子任务使用 plain key 跨轮次共享。
+
 ### 类定义
 
 ```python
 class StateManager:
+    ROUND_SEP = "@"  # round-scoped key 分隔符
     def __init__(self, state_file: str = "todos_state.yaml")
 ```
 
@@ -1096,6 +1099,17 @@ class StateManager:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `state_file` | str | "todos_state.yaml" | 状态持久化文件路径（位于会话目录下） |
+
+### 静态方法
+
+#### round_key
+
+```python
+@staticmethod
+def round_key(task_id: str, round_label: str | None) -> str
+```
+
+构造 round-scoped state key。返回 `"task_id@round_label"`（如 `"1.2@3.1"`），或在 `round_label` 为 `None` 时返回 plain `task_id`。
 
 ### 方法
 
@@ -1533,7 +1547,7 @@ orchestrator.run_with_idle()  # 不会退出，直到 Ctrl+C
 | **LoopingTaskExecutor** | 循环任务执行（固定 N 次迭代） |
 | **SubtaskExecutor** | 子任务分发执行（接收 session_dir） |
 | **autoagent_exec.py** | long_running 任务启动器（快速失败检测 + 信号文件，超时可通过 `config.yaml` 的 `fast_fail_timeout` 配置） |
-| **StateManager** | 任务状态持久化（todos_state.yaml） |
+| **StateManager** | 任务状态持久化（todos_state.yaml），round-scoped key 实现精确断点续传 |
 | **ConversationLogger** | 对话日志记录、索引生成、Ideas 拆解/审查/修订日志 |
 | **IdeasWatcher** | ideas.md 监控、AI 分解、AI 审查、人工审核、任务追加（支持日志记录） |
 | **setup_logging()** | 日志配置（控制台 + orchestrator.log） |

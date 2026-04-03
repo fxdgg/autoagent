@@ -538,9 +538,11 @@ python orchestrator.py
 状态保存在 `todos_state.yaml` 中，程序会自动读取并继续执行。
 
 **断点续传的具体行为**：
-- 已完成的子任务会被跳过
+- 子任务状态使用 round-scoped key（`subtask_id@round_label`，如 `1.2@3.1`），每轮循环/每次 failure retry 有独立状态
+- 中断后 resume 时只检查当前轮次的 key，已完成的子任务被精确跳过，未完成的继续执行
 - `previous_subtask_summary` 会持久化到磁盘（`previous_subtask_summary.txt`），恢复后下一个子任务仍能获得前一个子任务的上下文
-- **looping 任务**的当前循环索引也会持久化，中断后从上次的 loop 继续（而非从第 1 轮重新开始）
+- **looping 任务**的当前循环索引（`current_loop`）也会持久化，中断后从上次的 loop 继续
+- `*_once` 类型的子任务使用 plain key，跨所有轮次共享（完成一次后不再重复执行）
 
 ### 6. 查看状态
 

@@ -236,13 +236,26 @@ def verify_test(test_case, session_dir, actual_exit_code):
 
     tasks = state["tasks"]
 
+    def _find_task_state(task_key):
+        """Find a task's state, checking plain key first, then @-suffixed keys."""
+        if task_key in tasks:
+            return tasks[task_key]
+        # Search for round-scoped keys (e.g., "1.1@2.1")
+        prefix = task_key + "@"
+        round_keys = sorted(
+            [k for k in tasks if k.startswith(prefix)],
+            key=lambda k: k,  # lexicographic sort puts latest round last
+        )
+        if round_keys:
+            return tasks[round_keys[-1]]
+        return None
+
     for task_id, expected in test_case["expected_tasks"].items():
         task_key = str(task_id)
-        if task_key not in tasks:
+        task_state = _find_task_state(task_key)
+        if task_state is None:
             errors.append(f"Task '{task_id}': not found in todos_state.yaml")
             continue
-
-        task_state = tasks[task_key]
 
         # Check status
         if "status" in expected:
@@ -263,10 +276,15 @@ def verify_test(test_case, session_dir, actual_exit_code):
                 )
 
         # Check has_not_completed (history should contain a not_completed entry)
+        # Check across ALL round keys for this task (history may be spread)
         if expected.get("has_not_completed"):
-            history = task_state.get("history", [])
+            all_history = list(task_state.get("history", []))
+            prefix = str(task_id) + "@"
+            for k, v in tasks.items():
+                if k.startswith(prefix):
+                    all_history.extend(v.get("history", []))
             has_nc = any(
-                h.get("result") == "not_completed" for h in history
+                h.get("result") == "not_completed" for h in all_history
             )
             if not has_nc:
                 errors.append(

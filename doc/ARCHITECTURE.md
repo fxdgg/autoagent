@@ -306,8 +306,8 @@ def execute_nested_task(task: dict):
                     }
                 )
                 
-                # 4. 根据AI决策重置状态
-                reset_subtasks_from(task_id, ai_decision.retry_from)
+                # 4. 将 retry_from 之前已完成的状态复制到新 round
+                carry_forward_completed(retry_from, old_round, new_round)
                 
                 # 5. 记录AI的决策
                 record_ai_decision(task_id, subtask.id, ai_decision)
@@ -336,7 +336,7 @@ def execute_nested_task(task: dict):
             # 主任务未完成，AI决定从哪里开始重试
             increase_task_attempts(task_id)
             retry_from = ai_evaluation.retry_from  # AI决定重试起点
-            reset_subtasks_from(task_id, retry_from)
+            carry_forward_completed(retry_from, old_round, new_round)
             record_ai_evaluation(task_id, ai_evaluation)
     
     return False
@@ -551,6 +551,8 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
 - previous_subtask_summary 会持久化到磁盘（`previous_subtask_summary.txt`），
   中断恢复后能正确加载
 - looping 任务的 current_loop 索引也会持久化，中断后从上次的 loop 继续
+- 子任务状态使用 round-scoped key（如 `1.2@3.1`），确保每轮/每次 retry
+  有独立状态，中断后精确恢复到当前轮次的进度
 ```
 
 ### 状态文件中的 Context 信息
@@ -562,17 +564,28 @@ tasks:
   "2":
     status: "in_progress"
     session_id: "abc123"  # AI 会话 ID，用于 --resume 续接
+    current_loop: 3       # looping 任务当前循环索引
     max_attempts: 5
     attempts: 1
-  "2.1":
-    status: "completed"
+  # Round-scoped subtask states (subtask_id@round_label)
+  # round_label = "X.Y" where X = main round / loop index, Y = failure sub-round
+  "2.1@1.1":
+    status: "completed"   # loop 1, initial round
     attempts: 1
-  "2.2":
-    status: "in_progress"
-    attempts: 2
+  "2.2@1.1":
+    status: "completed"
+  "2.1@2.1":
+    status: "completed"   # loop 2, initial round
+  "2.2@2.1":
+    status: "completed"
+  "2.1@3.1":
+    status: "completed"   # loop 3 — interrupted after 2.1 completed
+  # "2.2@3.1" does not exist → defaults to pending on resume
 ```
 
-> **注意**：状态文件中的任务和子任务使用扁平结构存储，每个任务/子任务 ID 是顶层 key。
+> **注意**：状态文件使用扁平结构。父任务/顶层任务使用 plain key（如 `"2"`），
+> 子任务使用 `task_id@round_label` 格式的 round-scoped key（如 `"2.1@3.1"`）。
+> `*_once` 类型的子任务使用 plain key，跨所有轮次共享。
 
 ### CodeBuddy 命令构造
 

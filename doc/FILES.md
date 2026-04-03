@@ -258,6 +258,7 @@ autoagent/
 #### state_manager.py
 - **作用**：状态持久化管理
 - **核心类**：`StateManager` — 管理任务状态的加载、保存、更新，写入操作通过 `threading.Lock` 保证线程安全
+- **Round-scoped keys**：子任务状态使用 `task_id@round_label` 格式的 key（如 `"1.2@3.1"`），实现精确的断点续传。`*_once` 类型使用 plain key 跨轮次共享。`round_key()` 静态方法构造 key，`get_summary()`/`get_in_progress_tasks()` 自动跳过 `@` key
 
 #### conversation_logger.py
 - **作用**：对话日志记录
