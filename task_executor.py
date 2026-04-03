@@ -1152,7 +1152,14 @@ class NestedTaskExecutor:
         task_history = []
         for st in all_subtasks:
             st_id = str(st['id'])
-            st_state = state_manager.get_task_state(st_id)
+            # Use round-scoped key to get the correct state for this round
+            st_key = StateManager.round_key(st_id, round_label)
+            st_state = state_manager.get_task_state(st_key)
+            # For *_once types, also check the plain key (shared across rounds)
+            if st_state.get('status', 'pending') == 'pending' and st.get('type', '').endswith('_once'):
+                plain_state = state_manager.get_task_state(st_id)
+                if plain_state.get('status') == 'completed':
+                    st_state = plain_state
             task_history.append({
                 "subtask_id": st_id,
                 "name": st['name'],
@@ -1632,7 +1639,14 @@ class LoopingTaskExecutor:
         task_history = []
         for st in all_subtasks:
             st_id = str(st['id'])
-            st_state = state_manager.get_task_state(st_id)
+            # Use round-scoped key to get the correct state for this round
+            st_key = StateManager.round_key(st_id, round_label)
+            st_state = state_manager.get_task_state(st_key)
+            # For *_once types, also check the plain key (shared across rounds)
+            if st_state.get('status', 'pending') == 'pending' and st.get('type', '').endswith('_once'):
+                plain_state = state_manager.get_task_state(st_id)
+                if plain_state.get('status') == 'completed':
+                    st_state = plain_state
             task_history.append({
                 "subtask_id": st_id,
                 "name": st['name'],
