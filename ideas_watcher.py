@@ -379,7 +379,7 @@ class IdeasWatcher:
                                 )
                 except Exception:
                     pass  # file may be mid-write; ignore transient errors
-                self._watcher_stop.wait(0.5)
+                self._watcher_stop.wait(0.2)
 
         self._watcher_thread = threading.Thread(target=_poll, daemon=True)
         self._watcher_thread.start()
@@ -418,15 +418,26 @@ class IdeasWatcher:
                     content = f.read()
                 if not content.strip():
                     content = None
+                else:
+                    logger.info(f"Read {len(content)} chars from temp file on disk")
             except Exception as e:
                 logger.warning(f"Failed to read temp tasks file {temp_path}: {e}")
+        else:
+            logger.info(f"Temp file not found on disk: {temp_path}")
 
         # Fall back to watcher cache
-        if content is None and getattr(self, '_temp_file_cache', None):
-            logger.info(
-                "Temp file missing on disk, using cached content from watcher"
-            )
-            content = self._temp_file_cache
+        if content is None:
+            cache = getattr(self, '_temp_file_cache', None)
+            if cache:
+                logger.info(
+                    f"Using cached content from watcher ({len(cache)} chars)"
+                )
+                content = cache
+            else:
+                logger.warning(
+                    "Temp file missing on disk AND watcher cache is empty — "
+                    "AI may have deleted the file before watcher could cache it"
+                )
 
         if content is None:
             return None
@@ -436,8 +447,37 @@ class IdeasWatcher:
             if isinstance(parsed, list) and len(parsed) > 0:
                 logger.info(f"Successfully read {len(parsed)} task(s) from temp file {temp_path}")
                 return parsed
+            # AI might have written a dict with a "tasks" key
+            if isinstance(parsed, dict) and isinstance(parsed.get('tasks'), list):
+                tasks_list = parsed['tasks']
+                if tasks_list:
+                    logger.info(f"Extracted {len(tasks_list)} task(s) from dict wrapper in temp file")
+                    return tasks_list
+            logger.warning(
+                f"Temp file YAML parsed but not a valid task list: "
+                f"type={type(parsed).__name__}, "
+                f"preview={str(parsed)[:200]}"
+            )
         except Exception as e:
             logger.warning(f"Failed to parse temp tasks YAML: {e}")
+
+        # Last resort: try stripping markdown code fences and re-parse
+        stripped = content.strip()
+        if stripped.startswith("```"):
+            # Remove leading ```yaml / ``` and trailing ```
+            lines = stripped.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            stripped = "\n".join(lines)
+            try:
+                parsed = yaml.safe_load(stripped)
+                if isinstance(parsed, list) and len(parsed) > 0:
+                    logger.info(f"Successfully read {len(parsed)} task(s) after stripping code fences")
+                    return parsed
+            except Exception:
+                pass
         return None
 
     def _cleanup_temp_file(self):
@@ -448,6 +488,7 @@ class IdeasWatcher:
         try:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
+                logger.debug(f"Cleaned up temp file: {temp_path}")
         except OSError as e:
             logger.warning(f"Failed to remove temp file {temp_path}: {e}")
 
@@ -684,7 +725,7 @@ class IdeasWatcher:
                     # Parse the YAML: prefer temp file, fall back to response text
                     tasks = self._read_tasks_from_temp_file()
                     if tasks is None:
-                        logger.info("Temp file not found or empty, falling back to response text parsing")
+                        logger.info("Temp file yielded no valid tasks, falling back to response text parsing")
                         tasks = self._extract_yaml_tasks(result)
                     self._cleanup_temp_file()
 
