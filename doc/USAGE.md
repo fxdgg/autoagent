@@ -529,16 +529,75 @@ python orchestrator.py --list-providers
 nohup python orchestrator.py > orchestrator.log 2>&1 &
 ```
 
-### 5. 断点续传
+### 5. 会话管理
 
-如果执行中断，可以从断点继续：
+AutoAgent 使用**会话（session）**来隔离不同运行的状态和日志。每次运行默认创建新会话，你也可以继续或恢复历史会话。
 
-```bash
-# 会自动检测未完成的任务
-python orchestrator.py
+#### 会话存储结构
+
+```
+<log_dir>/                              # 默认 .autoagent
+├── sessions.csv                        # 会话注册表（Tab 分隔）
+├── <workspace>_<random8>/              # 会话目录（如 my_project_2xrsx0i7）
+│   ├── todos_state.yaml
+│   ├── orchestrator.log
+│   └── conversations/
+├── <workspace>_<random8>/              # 另一个会话
+│   └── ...
+└── ...
+
+<workspace>/
+├── .autoagent_log                      # 当前活跃会话标记（内容为会话目录名）
+└── ...
 ```
 
-状态保存在 `todos_state.yaml` 中，程序会自动读取并继续执行。
+#### 查看所有会话
+
+```bash
+python orchestrator.py --list-sessions
+```
+
+输出示例：
+```
+Workspace                  Session ID                          Created             Status
+/path/to/project           my_project_2xrsx0i7 (active)        2026-04-03 17:58    3 completed, 1 failed
+/path/to/project           my_project_po0ydek6                  2026-04-03 17:53    2 completed
+```
+
+#### 继续当前会话
+
+```bash
+# 继续 .autoagent_log 指向的会话（恢复已有状态和进度）
+python orchestrator.py --continue
+```
+
+#### 恢复特定会话
+
+```bash
+# 用完整会话名
+python orchestrator.py --resume my_project_2xrsx0i7
+
+# 用短 ID（随机后缀即可，只要不歧义）
+python orchestrator.py --resume 2xrsx0i7
+```
+
+恢复时会自动更新 `.autoagent_log` 指向被恢复的会话。
+
+#### 默认行为
+
+不指定 `--continue` 或 `--resume` 时，每次运行都会**创建新会话**，不影响历史会话的状态。
+
+> **注意**：`--continue` 和 `--resume` 不能同时使用。
+
+### 6. 断点续传
+
+如果执行中断（如 Ctrl+C），可以使用 `--continue` 从断点继续：
+
+```bash
+python orchestrator.py --continue
+```
+
+断点续传会加载上次会话的 `todos_state.yaml`，自动跳过已完成的任务，继续未完成的部分。
 
 **断点续传的具体行为**：
 - 子任务状态使用 round-scoped key（`subtask_id@round_label`，如 `1.2@3.1`），每轮循环/每次 failure retry 有独立状态
@@ -547,14 +606,14 @@ python orchestrator.py
 - **looping 任务**的当前循环索引（`current_loop`）也会持久化，中断后从上次的 loop 继续
 - `*_once` 类型的子任务使用 plain key，跨所有轮次共享（完成一次后不再重复执行）
 
-### 6. 查看状态
+### 7. 查看状态
 
 ```bash
 # 查看任务状态
 python orchestrator.py --status
 ```
 
-### 7. 其他常用命令
+### 8. 其他常用命令
 
 ```bash
 # 验证配置文件是否合法
@@ -563,7 +622,7 @@ python orchestrator.py --validate
 # 不跳过已完成的任务，全部重新执行
 python orchestrator.py --no-skip
 
-# 重置所有状态
+# 重置当前会话状态
 python orchestrator.py --reset
 
 # 启用详细日志
@@ -574,6 +633,15 @@ python orchestrator.py --preset test
 
 # 列出所有可用 provider
 python orchestrator.py --list-providers
+
+# 列出所有历史会话
+python orchestrator.py --list-sessions
+
+# 继续当前会话
+python orchestrator.py --continue
+
+# 恢复指定会话
+python orchestrator.py --resume <session_id>
 ```
 
 ## 最佳实践

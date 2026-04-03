@@ -1300,10 +1300,11 @@ autoagent/
 │
 ├── todos.yaml                # 任务定义
 ├── ideas.md                  # 用户的想法记录（可选）
-├── .autoagent_log            # 项目对应的日志子文件夹名（自动生成）
+├── .autoagent_log            # 当前活跃会话标记（自动生成）
 │
 ├── <log_dir>/                # 日志根目录（默认 .autoagent，相对 CWD）
-│   └── <project>_<random>/   # 项目专属会话目录（由 .autoagent_log 指定）
+│   ├── sessions.csv              # 会话注册表（Tab 分隔）
+│   └── <project>_<random8>/  # 项目专属会话目录
 │       ├── orchestrator.log           # Orchestrator 运行日志
 │       ├── todos_state.yaml           # 任务状态（自动生成）
 │       ├── plans_state.yaml            # Ideas 状态跟踪
@@ -1324,14 +1325,29 @@ autoagent/
 └── README.md
 ```
 
-### 日志目录管理（.autoagent_log）
+### 会话管理
 
-为了支持多个项目共用同一个日志根目录，系统在**项目目录**中维护一个 `.autoagent_log` 文件，
-内容为该项目对应的日志子文件夹名称，例如 `cufftdx_optimization_ko53bi1b`。
+AutoAgent 使用**会话（session）**隔离不同运行的状态和日志。每个会话对应一个独立的目录，
+命名格式为 `<workspace_basename>_<random8>`（如 `cufftdx_optimization_2xrsx0i7`）。
 
-- 首次运行时自动生成：`<项目目录名>_<随机8位字符>`
-- 后续运行读取该文件，确保同一个项目始终写入同一个日志子文件夹
-- 最终日志路径为 `<log_dir>/<.autoagent_log中的内容>/`
+**核心文件**：
+- **`.autoagent_log`**（项目目录）：纯文本文件，内容为当前活跃会话的目录名
+- **`sessions.csv`**（日志根目录）：Tab 分隔的会话注册表，记录 `session_id`、`workspace`、`created_at`
+
+**三种运行模式**：
+
+| CLI 参数 | 模式 | 行为 |
+|----------|------|------|
+| （默认） | `new` | 创建新会话目录，写入 `.autoagent_log`，追加到 `sessions.csv` |
+| `--continue` | `continue` | 从 `.autoagent_log` 读取当前会话，加载已有状态继续执行 |
+| `--resume <id>` | `resume` | 在 `sessions.csv` 中搜索匹配会话（支持短 ID 后缀匹配），更新 `.autoagent_log` 后恢复 |
+
+`--list-sessions` 列出所有历史会话及其状态（从 `sessions.csv` 和 `todos_state.yaml` 读取）。
+
+**会话解析流程**（`resolve_session_dir()`）：
+```
+CLI 参数 → 确定模式(new/continue/resume) → 解析会话目录路径 → 传入 TodoOrchestrator(session_dir=...)
+```
 - 所有运行时状态文件（`todos_state.yaml`、`orchestrator.log`、`plans_state.yaml`、`conversations/`）
   均位于该目录下，**不会出现在项目目录中**
 

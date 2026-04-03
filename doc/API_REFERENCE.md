@@ -23,6 +23,8 @@
 
 ```python
 class TodoOrchestrator:
+    SESSIONS_FILE = "sessions.csv"
+
     def __init__(
         self,
         todos_file: str = "todos.yaml",
@@ -30,6 +32,7 @@ class TodoOrchestrator:
         workspace: str = ".",
         timeout: int = 3600,
         bash_timeout: int = 300,
+        session_dir: str = None,
         log_dir: str = None,
         ideas_file: str = None,
         idle_interval: int = 30,
@@ -48,17 +51,50 @@ class TodoOrchestrator:
 | `workspace` | str | "." | 工作目录（项目根目录） |
 | `timeout` | int | 3600 | AI 会话超时时间（秒，总时间硬上限）。来自 `config.yaml` 中的 `session_timeout`，CLI 参数 `--timeout` 可覆盖 |
 | `bash_timeout` | int | 300 | 无新输出超时时间（秒）。如果 AI 在此时间内无新输出，会话将被终止，下次 prompt 会包含长时间任务引导 |
-| `log_dir` | str | None | 日志根目录（相对于 CWD，默认 `.autoagent`）|
+| `session_dir` | str | None | 预解析的会话目录（绝对路径）。如果提供，`log_dir` 将被忽略。通常由 `resolve_session_dir()` 计算 |
+| `log_dir` | str | None | 日志根目录（相对于 CWD，默认 `.autoagent`）。仅在 `session_dir` 为 None 时使用 |
 | `ideas_file` | str | None | ideas.md 文件路径（None 则禁用 ideas 监控） |
 | `idle_interval` | int | 30 | idle 模式检查间隔（秒） |
 | `use_cli` | bool | False | 强制使用 CLI 子进程模式（而非 CodeBuddy Agent SDK）。非 codebuddy provider 自动启用 |
 | `backoff_max_wait` | int | 300 | AI CLI 连续失败时的最大退避等待时间（秒），来自 `config.yaml` 的 `backoff_max_wait` |
 | `model_roles` | dict | None | 模型角色字典（`{"plan": ..., "default": ..., "lite": ...}`），由 `parse_model_spec()` 解析生成 |
 
-> `todos_state.yaml`、`orchestrator.log`、`plans_state.yaml` 等运行时文件
-> 统一放置在由 `log_dir` + `.autoagent_log` 推导出的会话目录下，不出现在项目目录中。
+> 当 `session_dir` 未提供时，构造函数会从 `.autoagent_log` 标记文件读取当前会话，
+> 或创建新会话并写入标记。
 
 ### 方法
+
+#### 会话管理（静态方法）
+
+##### resolve_session_dir
+
+```python
+@staticmethod
+def resolve_session_dir(
+    log_dir: str,
+    workspace: str,
+    mode: str = "new",
+    resume_id: str = None,
+) -> str
+```
+
+解析会话目录路径。这是会话管理的核心方法，支持三种模式：
+
+| 模式 | 说明 |
+|------|------|
+| `"new"` | 创建新会话目录，生成 `<workspace_basename>_<random8>` 格式名称，写入 `.autoagent_log` 标记文件并追加到 `sessions.csv` |
+| `"continue"` | 从 `.autoagent_log` 读取当前会话。如果标记文件不存在或会话目录丢失，抛出 `SystemExit` |
+| `"resume"` | 在 `sessions.csv` 中搜索匹配的会话（支持完整名称或后缀短 ID 匹配）。匹配后更新 `.autoagent_log`。如无匹配或存在歧义，抛出 `SystemExit` |
+
+**返回值**：会话目录的绝对路径。
+
+##### _list_sessions（模块级函数）
+
+```python
+def _list_sessions(log_dir: str, workspace: str) -> None
+```
+
+列出所有历史会话并格式化输出到控制台。从 `sessions.csv` 加载会话注册信息，同时扫描日志目录中的会话文件夹（向后兼容），读取 `.autoagent_log` 标识当前活跃会话。
 
 #### load_todos / reload_todos
 
@@ -1330,6 +1366,9 @@ class SessionTimeoutError(AICallError):
 | `--status` | - | - | 显示当前任务状态并退出 |
 | `--reset` | - | - | 重置所有状态并退出 |
 | `--validate` | - | - | 验证配置文件并退出 |
+| `--continue` | - | - | 继续当前会话（从 `.autoagent_log` 读取） |
+| `--resume` | - | None | 恢复指定会话（支持完整名称或短 ID 后缀匹配） |
+| `--list-sessions` | - | - | 列出所有历史会话并退出 |
 | `--no-skip` | - | - | 不跳过已完成的任务 |
 | `--verbose` | `-v` | - | 启用 debug 级别日志 |
 

@@ -57,7 +57,8 @@ autoagent/
 │   └── simulation_test/         # 模拟测试（使用 TestProvider）
 │
 └── <log_dir>/                   # 日志根目录（默认 .autoagent，相对 CWD）
-    └── <project>_<random>/      # 项目专属会话目录（由 .autoagent_log 指定）
+    ├── sessions.csv                    # 会话注册表（Tab 分隔：session_id, workspace, created_at）
+    └── <project>_<random8>/     # 项目专属会话目录（由 .autoagent_log 指定）
 │       ├── orchestrator.log             # Orchestrator 运行日志
 │       ├── todos_state.yaml             # 任务状态（自动生成）
 │       ├── plans_state.yaml             # Ideas 状态跟踪（含 plan_tasks 断点续传数据）
@@ -336,9 +337,15 @@ autoagent/
 - **创建方式**：用户复制 `todos.example.yaml` 并修改
 
 #### .autoagent_log（自动生成）
-- **作用**：记录项目对应的日志子文件夹名称
-- **内容**：如 `cufftdx_optimization_ko53bi1b`
-- **用途**：确保同一项目始终写入同一个日志子文件夹
+- **作用**：记录当前活跃会话的目录名称
+- **内容**：如 `cufftdx_optimization_2xrsx0i7`
+- **用途**：`--continue` 时读取此文件定位会话目录；`--resume` 时自动更新此文件
+
+#### sessions.csv（自动生成）
+- **位置**：`<log_dir>/sessions.csv`
+- **作用**：会话注册表，记录所有历史会话
+- **格式**：Tab 分隔，包含 `session_id`、`workspace`、`created_at` 三列
+- **用途**：`--list-sessions` 列出所有会话；`--resume` 搜索匹配会话（支持完整名称或短 ID 后缀匹配）
 
 ## 📝 配置文件详解
 
