@@ -8,7 +8,7 @@ will help you design tasks that are effective, robust, and easy to evaluate.
 
 ## 1. Execution Model Overview
 
-AutoAgent is an orchestrator that drives an AI coding agent (e.g., CodeBuddy)
+AutoAgent is an orchestrator that drives an AI coding agent (e.g., Claude Code, Gemini CLI)
 through a sequence of tasks defined in `todos.yaml`. The orchestrator does NOT
 execute tasks itself — it sends prompts to the AI agent, which reads/writes
 files, runs shell commands, and reports results.
@@ -31,23 +31,12 @@ Key implications for task design:
   asking for clarification.
 - The AI agent has a **context window limit** — avoid tasks that require
   reading extremely large files or outputs in a single step.
-- Each subtask within a nested or looping task runs in its own independent
-  AI session (session is reset between subtasks to prevent unbounded
-  context growth). A summary of the previous subtask's output is passed
-  to the next subtask via the prompt.
-- Each top-level `simple` task runs in its own independent AI session.
-- The AI session is **reset before each retry attempt** (for both
-  top-level simple tasks and subtasks). The full task description and
-  previous-attempt context are included in every prompt, so the AI loses
-  nothing important. This prevents unbounded context accumulation across
-  retries (which can cause output truncation and a vicious retry cycle).
-- When the AI does not output a completion status marker (✅/❌/⏳),
-  AutoAgent automatically retries — first with lightweight follow-ups in
-  the same session, then with a full session reset. You do not need to
-  design around this; just ensure your `completion_criteria` are clear
-  enough that the AI can self-evaluate.
+- Each task and subtask runs in its own **independent AI session**.
+  Sessions are reset between subtasks and before each retry attempt.
+  A summary of the previous subtask's (or retry's) output is passed to 
+  the next subtask via the prompt (see §10 for details).
 - The AI's persona/role can be customized per-task via the
-  `system_prompt_prefix` field in `todos.yaml` (see §12 below).
+  `system_prompt_prefix` field (see §12).
 
 ### Top-Level Task Execution Order
 
@@ -281,53 +270,31 @@ tasks:
 
 ### 3.3 Hierarchy Rules
 
-```
-Top-level tasks:     simple  |  nested            |  looping
-                        │    |     │               |     │
-                   (no subtasks)  subtasks:          subtasks:
-                             |   simple             |   simple
-                             |   simple_once        |   simple_once
-                             |   long_running       |   long_running
-                             |   long_running_once  |   long_running_once
-                             |   nested             |   nested
-                             |   looping            |   looping
-```
-
-- `nested` and `looping` can be top-level OR subtasks (multi-level nesting
-  is supported).
-- `long_running`, `long_running_once` can ONLY be subtasks.
-- `simple_once` can ONLY be a subtask.
-- `simple` can be either top-level or subtask.
-- When `nested` or `looping` is used as a subtask, it behaves identically
-  to the top-level version — it has its own `subtasks`, `max_attempts` /
-  `repeat_count`, and independent retry/evaluation logic.
+- **Top-level tasks**: `simple`, `nested`, or `looping`.
+- **Subtasks** (inside nested/looping): all six types are allowed —
+  `simple`, `simple_once`, `long_running`, `long_running_once`, `nested`,
+  `looping`.
+- `long_running`, `long_running_once`, and `simple_once` can ONLY be subtasks.
+- `nested`/`looping` as subtasks behave identically to their top-level
+  versions (own `subtasks`, `max_attempts`/`repeat_count`, independent
+  retry logic).
 
 ### 3.4 The `model` Field
 
 The `model` field controls which AI model executes the task:
 
-- `"default"` (or omitted): Uses the default model role, typically a more
-  capable model suited for complex reasoning, multi-step code changes, and
-  analysis.
-- `"lite"`: Uses the lite model role, a lighter/faster model suitable for
-  straightforward tasks like running a single command, simple file edits,
-  or formatting.
+- `"default"` (or omitted): More capable model for complex reasoning and
+  multi-step code changes.
+- `"lite"`: Lighter/faster model for straightforward tasks (running commands,
+  simple file edits, formatting).
 - **Direct model name** (e.g., `"claude-sonnet-4-20250514"`): Uses the
-  specified model directly, bypassing the role mapping.
-
-> **⚠️ Note:** `model: "lite"` selects a lighter AI model. It is completely
-> independent of `type: simple` (which defines the task execution behavior).
-> A task can be `type: simple` with `model: "default"`, or `type: nested`
-> with `model: "lite"` on its subtasks — the two fields are orthogonal.
+  specified model directly.
 
 **Guidelines:**
-- Use `"lite"` for tasks like: "Run `make test`", "Format code with black",
+- Use `"lite"` for: "Run `make test`", "Format code with black",
   "Copy file X to Y", "Run benchmark and save output".
-- Use `"default"` for tasks like: "Analyze profiling results and optimize
-  kernel code", "Debug failing test and fix root cause", "Refactor module
-  architecture".
-- Use a direct model name when you need a specific model for a particular
-  task, regardless of the role configuration.
+- Use `"default"` for: "Analyze profiling results and optimize kernel code",
+  "Debug failing test and fix root cause", "Refactor module architecture".
 
 ### 3.5 `max_attempts: 1` for Execution-Only Subtasks
 
@@ -384,14 +351,9 @@ whether the completion_criteria are met and outputs a status marker. This means:
 
 ### 4.2 Nested Tasks — AI Holistic Evaluation
 
-After all subtasks complete, a separate AI call evaluates the main task.
-The evaluator sees:
-- The main task's completion_criteria
-- Execution results from all subtasks (success/failure + summaries)
-- Relevant log file contents
-
-The evaluator responds with a JSON object including `main_task_completed`,
-`analysis`, `retry_from`, and `next_strategy`.
+After all subtasks complete, a separate AI call evaluates whether the
+main task's completion_criteria are met. If not, the evaluator decides
+which subtask to retry from and provides a suggested fix.
 
 This means:
 - **The nested task's criteria should describe the END STATE**, not the
@@ -411,30 +373,20 @@ Individual subtask failures within an iteration are handled by retry logic.
 
 ### 5.1 Simple Task Retries
 
-If a simple task fails (AI outputs `❌ not completed`), the orchestrator
-retries it with additional context:
+If a simple task fails, the orchestrator retries it with:
 - **Previous Attempts**: Summary of what was tried and what happened.
 - **Suggested Fix**: If this is a subtask and the parent's failure analyzer
   provided a fix, it's included in the prompt.
 
-**Session reset on retry:** The AI session is reset before each retry
-attempt. The full task description and previous-attempt summaries are
-included in every prompt, so no important context is lost.
-
-**Missing markers:** If the AI does not output a status marker, AutoAgent
-automatically retries — first with a lightweight follow-up in the same
-session, then with a full session reset. You do not need to design
-around this.
+The AI session is reset before each retry. The full task description and
+previous-attempt summaries are included in every prompt, so no important
+context is lost.
 
 ### 5.2 Nested/Looping Failure Analysis
 
-When a subtask fails within a nested or looping task:
-1. AutoAgent calls an AI to analyze the failure.
-2. The AI sees: the failed subtask info, error output, all subtask statuses,
-   and previous retry decisions.
-3. The AI decides `retry_from` (which subtask to restart from) and provides
-   a `suggested_fix`.
-4. The `suggested_fix` is passed to the retried subtask's prompt.
+When a subtask fails within a nested or looping task, the orchestrator
+analyzes the failure and decides which subtask to retry from, passing a
+`suggested_fix` to the retried subtask's prompt.
 
 **Implications for task design:**
 - Design subtasks so that the failure of one can be diagnosed from its
@@ -599,18 +551,13 @@ and retry logic.
 
 ### 8.5 Comprehensive YAML Example
 
-The following example demonstrates all task types (`simple`, `nested`,
-`looping`, `long_running`, `simple_once`, `long_running_once`) and nested
-subtask structures in a single `todos.yaml` file:
+The following example demonstrates all task types and nested structures:
 
 ```yaml
-# ============================================================
 # Task 1: A standalone simple task (top-level)
-# ============================================================
 - id: 1
   name: "Fix API input validation"
   type: simple
-  model: "default"
   completion_criteria: |
     1. All API endpoints validate input parameters (type, range, required).
     2. Invalid requests return 400 with descriptive error messages.
@@ -621,9 +568,7 @@ subtask structures in a single `todos.yaml` file:
       - src/api/validators.py: Validation utilities (create if needed)
     IMPORTANT: Do NOT change the response format of successful requests.
 
-# ============================================================
 # Task 2: A nested task with mixed subtask types
-# ============================================================
 - id: 2
   name: "Optimize database query performance"
   type: nested
@@ -633,27 +578,22 @@ subtask structures in a single `todos.yaml` file:
     2. All existing tests pass with 0 failures.
     3. Benchmark results saved to benchmark_results.txt.
   subtasks:
-    # simple_once: one-time setup, never re-executed on retry
     - id: 2.1
       name: "Install profiling tools and establish baseline"
-      type: simple_once
+      type: simple_once          # one-time setup, never re-executed on retry
       model: "lite"
       completion_criteria: |
         1. pg_stat_statements extension is enabled.
         2. Baseline benchmark completed, results saved to baseline.txt.
-
-    # simple: profile and analyze (re-runs on retry)
     - id: 2.2
       name: "Profile slow queries and design optimizations"
-      type: simple
+      type: simple               # re-runs on retry
       completion_criteria: |
         1. Top 5 slowest queries identified with execution plans.
         2. Analysis and optimization plan saved to query_analysis.txt.
       initial_hint: |
         Use EXPLAIN ANALYZE on the slow queries.
         Check for missing indexes, N+1 queries, and full table scans.
-
-    # simple: apply optimizations
     - id: 2.3
       name: "Apply database optimizations"
       type: simple
@@ -661,20 +601,17 @@ subtask structures in a single `todos.yaml` file:
         1. Indexes created via migration file (migrations/add_indexes.sql).
         2. Query rewrites applied where needed.
         3. Application compiles and starts without errors.
-
-    # simple: final benchmark
     - id: 2.4
       name: "Run benchmark and validate"
       type: simple
+      max_attempts: 1            # execution-only → fail fast
       model: "lite"
       completion_criteria: |
         1. Benchmark completed, results saved to benchmark_results.txt.
         2. Average response time < 100ms.
         3. All tests pass (pytest returns exit code 0).
 
-# ============================================================
 # Task 3: A looping task for iterative optimization
-# ============================================================
 - id: 3
   name: "Iterative CUDA kernel optimization"
   type: looping
@@ -683,30 +620,22 @@ subtask structures in a single `todos.yaml` file:
   completion_criteria: |
     3 rounds of profile-optimize-benchmark completed.
   subtasks:
-    # long_running: GPU profiling takes a long time
     - id: 3.1
       name: "Profile kernel with Nsight Compute"
-      type: long_running
+      type: long_running         # GPU profiling takes a long time
       system_prompt_prefix: |
         You are a GPU performance engineer. Focus on memory throughput,
         occupancy, and warp efficiency metrics.
       completion_criteria: |
         ncu profiling completed with exit code 0.
         Output log contains "PROF" section with kernel metrics.
-
-    # simple: analyze profile and optimize code
     - id: 3.2
       name: "Optimize kernel based on profile results"
       type: simple
-      system_prompt_prefix: |
-        You are a senior C++/CUDA engineer. Prefer modern C++17 features.
-        Always check CUDA error codes with a macro.
       completion_criteria: |
         1. Code changes applied based on profiling bottlenecks.
         2. Project builds: cmake --build build --config Release succeeds.
         3. Correctness test passes: output contains "Score: 100/100".
-
-    # simple: benchmark and decide commit/rollback
     - id: 3.3
       name: "Benchmark and commit or rollback"
       type: simple
@@ -716,9 +645,7 @@ subtask structures in a single `todos.yaml` file:
         2. If faster than previous best → changes committed with git.
         3. If slower or equal → changes rolled back with git checkout.
 
-# ============================================================
 # Task 4: Deeply nested structure (nested containing looping)
-# ============================================================
 - id: 4
   name: "Build, optimize, and deploy service"
   type: nested
@@ -727,13 +654,11 @@ subtask structures in a single `todos.yaml` file:
     Service deployed to staging, health check returns HTTP 200.
     Response time p99 < 200ms (measured by load test).
   subtasks:
-    # nested subtask: build pipeline with its own retry logic
     - id: 4.1
       name: "Build and test"
-      type: nested
+      type: nested               # nested subtask with its own retry logic
       max_attempts: 3
-      completion_criteria: |
-        All tests pass and Docker image is built successfully.
+      completion_criteria: "All tests pass and Docker image built."
       subtasks:
         - id: 4.1.1
           name: "Fix lint and type errors"
@@ -747,12 +672,10 @@ subtask structures in a single `todos.yaml` file:
           name: "Build Docker image"
           type: simple
           model: "lite"
-          completion_criteria: "Docker image built: docker build -t myservice:latest ."
-
-    # looping subtask: optimize response time iteratively
+          completion_criteria: "docker build -t myservice:latest . succeeds."
     - id: 4.2
       name: "Optimize response time"
-      type: looping
+      type: looping              # looping subtask for iterative optimization
       repeat_count: 2
       completion_criteria: "2 optimization rounds completed."
       subtasks:
@@ -764,17 +687,13 @@ subtask structures in a single `todos.yaml` file:
         - id: 4.2.2
           name: "Apply optimization"
           type: simple
-          completion_criteria: |
-            Optimization applied based on profile. Builds without errors.
-
-    # simple: final deploy
+          completion_criteria: "Optimization applied. Builds without errors."
     - id: 4.3
       name: "Deploy to staging"
       type: simple
       completion_criteria: |
         1. Deployed to staging environment.
         2. Health check endpoint returns HTTP 200.
-        3. Smoke test passes (curl returns expected response).
 ```
 
 ### 8.6 Decomposition Anti-Patterns
@@ -861,70 +780,32 @@ session resets and is available on resume after interruptions.
 
 ---
 
-## 11. Quick Reference Checklist
+## 11. Quick Reference — Key Reminders
 
-Before finalizing your task decomposition, verify:
-
-- [ ] Every task has `id`, `name`, `type`, and `completion_criteria`
-- [ ] Top-level tasks use `simple`, `nested`, or `looping` (never `long_running`)
-- [ ] Subtasks use `simple`, `long_running`, `simple_once`, `long_running_once`, `nested`, or `looping`
-- [ ] `*_once` subtasks are used only for genuinely one-time operations
-- [ ] `looping` tasks have `repeat_count` (positive integer)
-- [ ] `nested`/`looping` tasks have non-empty `subtasks` list
-- [ ] All `completion_criteria` are specific, measurable, and verifiable
-- [ ] Task IDs are unique and follow the correct notation
-- [ ] The decomposition matches the complexity of the idea (not over/under-decomposed)
-- [ ] `model` field is appropriate (`"lite"` for easy tasks, `"default"` for complex, or direct model name)
-- [ ] `initial_hint` provides useful context without duplicating criteria
-- [ ] `system_prompt_prefix` is set on tasks that need a specific AI persona or constraints
+- Every task needs `id`, `name`, `type`, and `completion_criteria`.
+- `long_running`, `long_running_once`, `simple_once` can ONLY be subtasks.
+- All `completion_criteria` must be specific, measurable, and verifiable.
+- Use `model: "lite"` for simple execution tasks, `"default"` for complex
+  reasoning tasks.
+- Use `*_once` sparingly — only for genuinely one-time operations.
 
 ---
 
 ## 12. Customizing the AI Persona — `system_prompt_prefix`
 
-You can set a `system_prompt_prefix` field on any task (top-level or
-subtask) in `todos.yaml` to customize the AI's persona, role, or add
-global instructions for that specific task.
+Set `system_prompt_prefix` on any task or subtask to customize the AI's
+persona, role, or add task-specific instructions. The prefix is appended
+to the system prompt for that task's AI calls.
 
-```yaml
-- id: 1
-  name: "Optimize CUDA kernel"
-  type: simple
-  system_prompt_prefix: "You are a senior CUDA engineer specializing in GPU optimization."
-  completion_criteria: |
-    Kernel performance improved by at least 10%.
-```
+**When to use:**
+- **Domain expertise:** "You are a GPU performance engineer."
+- **Task-specific constraints:** "Never modify files in the vendor/ directory."
+- **Coding style:** "Follow Google C++ style guide."
 
-### How It Works
+> **Note:** Setting `system_prompt_prefix` on a top-level `nested` or
+> `looping` task is not supported — set it on individual subtasks instead.
 
-- The prefix text is **appended to the system prompt** for that task's AI
-  calls (task execution and failure analysis).
-- If the prefix is empty or omitted, no extra persona text is added.
-- Each task can have its own prefix — different tasks can have different
-  AI personas.
-
-### Where to Set It
-
-- **On a top-level `simple` task:** The prefix applies to that task's
-  execution.
-- **On subtasks inside `nested` or `looping`:** Each subtask can have its
-  own prefix. This is useful when different steps require different
-  expertise (e.g., a profiling step vs. an optimization step).
-- **On a top-level `nested` or `looping` task:** Not directly supported —
-  set the prefix on individual subtasks instead.
-
-### When to Use
-
-- **Domain expertise:** Set the AI's persona to match the task's domain
-  (e.g., "You are a machine learning engineer" or "You are a backend
-  developer specializing in distributed systems").
-- **Task-specific constraints:** Add instructions that should apply to a
-  particular task (e.g., "Always write code in Python 3.12+" or "Never
-  modify files in the vendor/ directory").
-- **Coding style:** Enforce conventions (e.g., "Follow Google C++ style
-  guide" or "Use type hints in all Python functions").
-
-### Example
+**Example:**
 
 ```yaml
 subtasks:
@@ -944,7 +825,6 @@ subtasks:
       You are a senior C++/CUDA engineer. Follow these rules:
       - Prefer modern C++17 features.
       - Always check CUDA error codes with a macro.
-      - Write concise comments for non-obvious logic.
     completion_criteria: |
       Optimization applied, builds without errors, correctness preserved.
 ```
