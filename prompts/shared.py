@@ -153,7 +153,6 @@ ROLE_CODING_AGENT = (
 def build_system_prompt_coding_agent(
     exec_script_path: str = "",
     supports_system_prompt: bool = True,
-    task: dict = None,
 ) -> str:
     """Build the system prompt for coding-agent tasks.
 
@@ -182,8 +181,6 @@ def build_system_prompt_coding_agent(
             dedicated ``--append-system-prompt`` CLI parameter.  When
             *False*, the returned text is appended (not prepended) to
             the user prompt, with section headings for clarity.
-        task: Optional task configuration dict.  Currently unused but
-            kept for API compatibility.
     """
     parts = []
 

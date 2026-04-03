@@ -350,7 +350,6 @@ class SimpleTaskExecutor:
                 system_prompt = build_system_prompt_coding_agent(
                     exec_script_path,
                     supports_system_prompt=client.provider.supports_system_prompt,
-                    task=task,
                 )
                 # Always prepend system_prompt_prefix to user prompt
                 effective_prompt = prepend_system_prompt_prefix(prompt, task)
@@ -1345,44 +1344,6 @@ class NestedTaskExecutor:
                 state_manager.state["tasks"][new_key] = dict(old_state)
         state_manager.save_state()
 
-    def _reset_subtasks_from(self, retry_from: str, subtasks: list, state_manager):
-        """
-        Reset subtask states starting from retry_from.
-
-        All subtasks from retry_from onwards are reset to 'pending',
-        except *_once subtasks (simple_once / long_running_once) which
-        are never reset once completed.
-        Falls back to first subtask if retry_from ID is not found.
-        If a subtask being reset is itself nested/looping, its inner
-        subtasks are also recursively reset.
-        """
-        retry_from = str(retry_from)
-
-        # Validate retry_from exists
-        valid_ids = {str(s['id']) for s in subtasks}
-        if retry_from not in valid_ids:
-            logger.warning(f"retry_from '{retry_from}' not found in subtasks {valid_ids}, falling back to first subtask")
-            retry_from = str(subtasks[0]['id']) if subtasks else retry_from
-
-        should_reset = False
-        for subtask in subtasks:
-            st_id = str(subtask['id'])
-            if st_id == retry_from:
-                should_reset = True
-            if should_reset:
-                # Never reset *_once subtasks that have already completed
-                if subtask.get('type', '').endswith('_once'):
-                    st_state = state_manager.get_task_state(st_id)
-                    if st_state.get('status') == 'completed':
-                        logger.info(f"Skipping reset of once-subtask {st_id} (already completed)")
-                        continue
-                state_manager.mark_task_status(st_id, "pending", attempts=0)
-                logger.info(f"Reset subtask {st_id} to pending")
-                # Recursively reset inner subtasks of nested/looping subtasks
-                inner_subtasks = subtask.get('subtasks', [])
-                if inner_subtasks:
-                    self._reset_subtasks_from(str(inner_subtasks[0]['id']), inner_subtasks, state_manager)
-
     def _format_task_history(self, history: list) -> str:
         """Format task history for prompt, including completion criteria."""
         lines = []
@@ -1785,41 +1746,6 @@ class LoopingTaskExecutor:
                 state_manager.state["tasks"][new_key] = dict(old_state)
         state_manager.save_state()
 
-    def _reset_subtasks_from(self, retry_from: str, subtasks: list, state_manager):
-        """Reset subtask states starting from retry_from onwards.
-
-        *_once subtasks (simple_once / long_running_once) are never reset
-        once completed.
-        Falls back to first subtask if retry_from ID is not found.
-        If a subtask being reset is itself nested/looping, its inner
-        subtasks are also recursively reset."""
-        retry_from = str(retry_from)
-
-        # Validate retry_from exists
-        valid_ids = {str(s['id']) for s in subtasks}
-        if retry_from not in valid_ids:
-            logger.warning(f"retry_from '{retry_from}' not found in subtasks {valid_ids}, falling back to first subtask")
-            retry_from = str(subtasks[0]['id']) if subtasks else retry_from
-
-        should_reset = False
-        for subtask in subtasks:
-            st_id = str(subtask['id'])
-            if st_id == retry_from:
-                should_reset = True
-            if should_reset:
-                # Never reset *_once subtasks that have already completed
-                if subtask.get('type', '').endswith('_once'):
-                    st_state = state_manager.get_task_state(st_id)
-                    if st_state.get('status') == 'completed':
-                        logger.info(f"Skipping reset of once-subtask {st_id} (already completed)")
-                        continue
-                state_manager.mark_task_status(st_id, "pending", attempts=0)
-                logger.info(f"Reset subtask {st_id} to pending")
-                # Recursively reset inner subtasks of nested/looping subtasks
-                inner_subtasks = subtask.get('subtasks', [])
-                if inner_subtasks:
-                    self._reset_subtasks_from(str(inner_subtasks[0]['id']), inner_subtasks, state_manager)
-
     @staticmethod
     def _truncate_error(error_text: str, max_chars: int = None) -> str:
         """Truncate error text to avoid wasting tokens on overly long errors."""
@@ -2055,7 +1981,6 @@ class SubtaskExecutor:
                 system_prompt = build_system_prompt_coding_agent(
                     exec_script_path,
                     supports_system_prompt=client.provider.supports_system_prompt,
-                    task=subtask,
                 )
                 # Always prepend system_prompt_prefix to user prompt
                 effective_prompt = prepend_system_prompt_prefix(prompt, subtask)

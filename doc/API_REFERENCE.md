@@ -26,7 +26,6 @@ class TodoOrchestrator:
     def __init__(
         self,
         todos_file: str = "todos.yaml",
-        state_file: str = None,
         provider: AIProvider = None,
         workspace: str = ".",
         timeout: int = 3600,
@@ -583,7 +582,7 @@ for loop in range(task['repeat_count']):
 **与 NestedTaskExecutor 的区别**：
 - 不做主任务完成度评估
 - 固定循环 N 次，不会提前结束
-- 每轮重置所有子任务状态重新执行
+- 每轮使用独立的 round-scoped state keys，无需重置
 - 使用 `max_attempts_per_loop` 控制每轮内的重试次数
 
 ### NestedTaskExecutor

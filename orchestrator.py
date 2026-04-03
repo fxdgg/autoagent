@@ -100,7 +100,6 @@ class TodoOrchestrator:
     def __init__(
         self,
         todos_file: str = "todos.yaml",
-        state_file: str = None,
         provider: AIProvider = None,
         workspace: str = ".",
         timeout: int = 3600,
@@ -117,8 +116,6 @@ class TodoOrchestrator:
 
         Args:
             todos_file: Path to the task configuration YAML
-            state_file: (Deprecated, ignored) State file path is now derived
-                        from log_dir automatically.
             provider: AI provider instance
             workspace: Working directory for AI tool
             timeout: Default session timeout for AI calls (hard cap on

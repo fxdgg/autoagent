@@ -285,7 +285,7 @@ autoagent/
 - **作用**：共享常量和工具函数
 - **内容**：角色定义（coding agent、task planner、task reviewer）、状态标记指令（✅/❌ completed/not completed）、通用辅助函数（构建历史记录、兄弟任务上下文、autoagent-exec 说明等）
 - **核心函数**：
-  - `build_system_prompt_coding_agent(exec_script_path, supports_system_prompt, task)`: 构建编码代理的系统提示词（含状态标记指令和 autoagent-exec 使用说明）
+  - `build_system_prompt_coding_agent(exec_script_path, supports_system_prompt)`: 构建编码代理的系统提示词（含状态标记指令、自主行动指令和 autoagent-exec 使用说明）
   - `load_system_prompt_prefix()`: 从 config.yaml 加载并缓存 `system_prompt_prefix`
   - `get_system_prompt_prefix(task)`: 获取有效的系统提示词前缀（任务级覆盖全局）
   - `apply_system_prompt_prefix(parts, task)`: 将前缀插入到 prompt 部件列表的开头

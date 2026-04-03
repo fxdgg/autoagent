@@ -792,13 +792,13 @@ tasks:
 
 **与 nested 的区别**：
 - `nested`：AI 每轮评估是否完成，可能提前结束或继续重试
-- `looping`：固定循环 N 次，不做完成度评估，每轮重置所有子任务状态重新执行
+- `looping`：固定循环 N 次，不做完成度评估，每轮使用独立的 round-scoped state keys
 
 **执行流程**：
 ```
 1. 开始第 1 轮循环
    ↓
-2. 重置所有子任务状态
+2. 使用 round-scoped keys（如 1.1@1.1）执行子任务
    ↓
 3. 按顺序执行所有子任务
    ↓
@@ -1539,7 +1539,7 @@ Claude Code 在 API 请求失败时会在 stream-json 中发出 `system/api_retr
 
 #### retry_from 验证
 
-NestedTaskExecutor 和 LoopingTaskExecutor 的 `_reset_subtasks_from()` 方法会验证 AI 返回的 `retry_from` ID 是否存在于子任务列表中。如果 ID 无效，回退到第一个子任务，避免无限循环。
+NestedTaskExecutor 和 LoopingTaskExecutor 的 `_carry_forward_completed()` 方法接收 AI 返回的 `retry_from` ID，将其之前已完成的子任务状态复制到新 round。如果 `retry_from` 指向第一个子任务，则不复制任何状态（全部重做）。
 
 #### process.wait() 超时
 
