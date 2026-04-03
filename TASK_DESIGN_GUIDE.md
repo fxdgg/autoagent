@@ -323,6 +323,43 @@ The `model` field controls which AI model executes the task:
 - Use a direct model name when you need a specific model for a particular
   task, regardless of the role configuration.
 
+### 3.5 `max_attempts: 1` for Execution-Only Subtasks
+
+Subtasks whose sole purpose is to **run code written by a previous subtask**
+(build, benchmark, test, train, profile, etc.) should set `max_attempts: 1`.
+
+**Rationale:** If the command fails, the cause is almost always a bug in the
+code produced by a sibling subtask — retrying the same command will fail the
+same way.  With `max_attempts: 1`, the failure propagates immediately to the
+parent task's failure analysis, which can decide to `retry_from` the code-
+writing subtask with a `suggested_fix`.  This is far more efficient than
+wasting attempts re-running a broken command.
+
+**Applies to any type** — `simple`, `long_running`, `simple_once`, etc. —
+as long as the subtask is purely executing (not writing code):
+
+```yaml
+# ✅ Good: execution subtask with max_attempts: 1
+- id: 2.3
+  name: "Run benchmark"
+  type: simple
+  max_attempts: 1        # fail fast → parent failure_analysis
+  model: lite
+  completion_criteria: |
+    Benchmark exits with code 0 and prints "Score: 100/100".
+
+# ❌ Bad: execution subtask with default max_attempts (5)
+- id: 2.3
+  name: "Run benchmark"
+  type: simple
+  # max_attempts defaults to 5 → wastes 4 retries on the same broken code
+  completion_criteria: |
+    Benchmark exits with code 0 and prints "Score: 100/100".
+```
+
+**Do NOT use `max_attempts: 1`** on subtasks where the AI actively writes or
+modifies code — those benefit from multiple attempts with different strategies.
+
 ---
 
 ## 4. How Completion Criteria Are Evaluated
