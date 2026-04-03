@@ -23,6 +23,12 @@ files, runs shell commands, and reports results.
 Key implications for task design:
 - The AI agent can do anything a developer can: edit code, run commands,
   read logs, analyze outputs, install packages, use git, etc.
+- **AutoAgent runs fully autonomously** — there is no human in the loop.
+  The AI must make all decisions independently and never ask the user
+  questions (e.g., "What would you like to do?", "Should I proceed?").
+  If a task's requirements are ambiguous, the `completion_criteria` and
+  `initial_hint` must be specific enough that the AI can act without
+  asking for clarification.
 - The AI agent has a **context window limit** — avoid tasks that require
   reading extremely large files or outputs in a single step.
 - Each subtask within a nested or looping task runs in its own independent

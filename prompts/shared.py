@@ -218,13 +218,17 @@ def build_system_prompt_coding_agent(
             "The launcher will auto-detach after the fast-run window and print \"TASK SUBMITTED\". "
             "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS"
         )
-        parts.append(
-            "## ⚠️ IMPORTANT\n"
-            "You MUST always use autoagent-exec for long-running "
-            "commands. Running them directly in Bash will cause the session to hang "
-            "and be killed. Even if autoagent-exec fails, fix the command arguments "
-            "and retry with autoagent-exec — NEVER fall back to running directly in Bash."
-        )
+
+    parts.append(
+        "## ⚠️ IMPORTANT\n"
+        "1. You are fully autonomous — make all decisions independently. "
+        "NEVER ask the user questions or end your response with prompts like "
+        "\"What would you like to do?\" or \"Should I proceed?\" — just do the work.\n"
+        "2. You MUST always use autoagent-exec for long-running "
+        "commands. Running them directly in Bash will cause the session to hang "
+        "and be killed. Even if autoagent-exec fails, fix the command arguments "
+        "and retry with autoagent-exec — NEVER fall back to running directly in Bash."
+    )
 
     return "\n\n".join(parts)
 
