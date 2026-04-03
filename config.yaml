@@ -37,7 +37,7 @@ bash_timeout: 300
 # within this window, the error is shown immediately so the AI can fix it.
 # If the command is still running after this timeout, it is detached to
 # the background. Default: 10
-fast_fail_timeout: 30
+fast_fail_timeout: 60
 
 # Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
 # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
