@@ -19,10 +19,7 @@ from prompts.long_running_task import (
     build_long_running_prompt,
     build_long_running_analysis_prompt,
 )
-from prompts.failure_analysis import (
-    build_nested_failure_analysis_prompt,
-    build_looping_failure_analysis_prompt,
-)
+from prompts.failure_analysis import build_failure_analysis_prompt
 from prompts.main_evaluation import build_main_evaluation_prompt
 from prompts.ideas_decompose import build_ideas_decompose_prompt
 from prompts.ideas_review import (

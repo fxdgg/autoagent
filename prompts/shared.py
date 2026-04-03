@@ -153,7 +153,6 @@ ROLE_CODING_AGENT = (
 def build_system_prompt_coding_agent(
     exec_script_path: str = "",
     supports_system_prompt: bool = True,
-    task: dict = None,
 ) -> str:
     """Build the system prompt for coding-agent tasks.
 
@@ -182,8 +181,6 @@ def build_system_prompt_coding_agent(
             dedicated ``--append-system-prompt`` CLI parameter.  When
             *False*, the returned text is appended (not prepended) to
             the user prompt, with section headings for clarity.
-        task: Optional task configuration dict.  Currently unused but
-            kept for API compatibility.
     """
     parts = []
 
@@ -218,13 +215,17 @@ def build_system_prompt_coding_agent(
             "The launcher will auto-detach after the fast-run window and print \"TASK SUBMITTED\". "
             "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS"
         )
-        parts.append(
-            "## ⚠️ IMPORTANT\n"
-            "You MUST always use autoagent-exec for long-running "
-            "commands. Running them directly in Bash will cause the session to hang "
-            "and be killed. Even if autoagent-exec fails, fix the command arguments "
-            "and retry with autoagent-exec — NEVER fall back to running directly in Bash."
-        )
+
+    parts.append(
+        "## ⚠️ IMPORTANT\n"
+        "1. You are fully autonomous — make all decisions independently. "
+        "NEVER ask the user questions or end your response with prompts like "
+        "\"What would you like to do?\" or \"Should I proceed?\" — just do the work.\n"
+        "2. You MUST always use autoagent-exec for long-running "
+        "commands. Running them directly in Bash will cause the session to hang "
+        "and be killed. Even if autoagent-exec fails, fix the command arguments "
+        "and retry with autoagent-exec — NEVER fall back to running directly in Bash."
+    )
 
     return "\n\n".join(parts)
 
@@ -295,17 +296,20 @@ def build_history_section(history: list, extract_summary_fn) -> str:
     history_lines = []
     for h in recent:
         result_str = h.get('result', 'unknown')
-        # Include error and not_completed entries; skip completed
-        if result_str not in ('error', 'not_completed'):
+        # Include error, not_completed, and interrupted entries; skip completed
+        if result_str not in ('error', 'not_completed', 'interrupted'):
             continue
         history_lines.append(f"  - Attempt {h.get('attempt', '?')}: {result_str}")
         if result_str == 'error':
             error_msg = h.get('error', '')
             if error_msg:
                 history_lines.append(f"    Error: {error_msg[:limits.get('history_summary')]}")
+        elif result_str == 'interrupted':
+            history_lines.append(f"    Note: {h.get('summary', 'Interrupted by user')[:limits.get('history_summary')]}")
         elif result_str == 'not_completed':
             summary = h.get('summary', '')
-            if summary:
+            # Skip "no marker found" entries — they add noise, not guidance
+            if summary and 'cannot find' not in summary.lower():
                 history_lines.append(f"    Summary: {summary[:limits.get('history_summary')]}")
     if not history_lines:
         return ""
@@ -338,31 +342,6 @@ def build_suggested_fix_section(parent_context: dict, fallback_msg: str = None) 
     return fallback_msg
 
 
-# Keep build_autoagent_exec_note as a thin wrapper for backward compatibility.
-# The canonical long-running note now lives inside build_system_prompt_coding_agent.
-def build_autoagent_exec_note(exec_script_path: str) -> str:
-    """Build a brief first-attempt note about autoagent-exec.
-
-    .. deprecated::
-        The autoagent-exec note is now included in the system prompt
-        returned by :func:`build_system_prompt_coding_agent`.  This
-        function is kept only for backward compatibility.
-    """
-    return (
-        "**Note on long-running commands:** If a Bash command may take more "
-        "than a few minutes (e.g. compilation, benchmarking, profiling), do "
-        "NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:\n"
-        f'  "{exec_script_path}" "<your entire command>"\n'
-        "Always wrap your command in double quotes so that shell operators "
-        "(&&, |, ;, etc.) are passed correctly.\n"
-        "The launcher will auto-detach after the fast-run window and print \"TASK SUBMITTED\". "
-        "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS\n\n"
-        "**\u26a0\ufe0f IMPORTANT: You MUST always use autoagent-exec for long-running "
-        "commands. Running them directly in Bash will cause the session to hang "
-        "and be killed. Even if autoagent-exec fails, fix the command arguments "
-        "and retry with autoagent-exec \u2014 NEVER fall back to running directly in Bash.**"
-    )
-
 def build_previous_subtask_section(parent_context: dict) -> str:
     """Build the previous-subtask summary section for context-isolated prompts.
 
@@ -381,6 +360,28 @@ def build_previous_subtask_section(parent_context: dict) -> str:
     if len(summary) > max_len:
         summary = "...(truncated)\n" + summary[-max_len:]
     return f"=== Previous Step Result ===\n{summary}\n============================"
+
+
+def build_previous_attempt_output_section(output: str) -> str:
+    """Build a section containing the AI's output from the previous attempt.
+
+    When a task is retried with a session reset, the AI loses its
+    conversation history.  This section injects a truncated copy of the
+    previous attempt's full output so the AI can see what it already did
+    and continue from there instead of starting over.
+
+    Returns an empty string when *output* is falsy.
+    """
+    if not output:
+        return ""
+    max_len = limits.get('previous_attempt_output')
+    if len(output) > max_len:
+        output = "...(truncated)\n" + output[-max_len:]
+    return (
+        "=== Previous Attempt Output ===\n"
+        f"{output}\n"
+        "==============================="
+    )
 
 
 def build_timeout_guidance(

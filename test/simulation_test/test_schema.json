@@ -114,5 +114,20 @@
             "1.1": {"status": "completed"},
             "2":   {"status": "completed"}
         }
+    },
+    {
+        "name": "Missing LR marker → signal-file nudge bypass",
+        "project_root": "cufftdx_optimization",
+        "test_rules": "test_rules_9.txt",
+        "extra_args": [],
+        "expected_exit_code": 0,
+        "expected_tasks": {
+            "1":   {"status": "completed"},
+            "1.1": {"status": "completed"},
+            "1.2": {"status": "completed"},
+            "1.3": {"status": "completed"},
+            "1.4": {"status": "completed"},
+            "1.5": {"status": "completed"}
+        }
     }
 ]

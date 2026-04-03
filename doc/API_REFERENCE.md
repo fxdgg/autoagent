@@ -23,23 +23,22 @@
 
 ```python
 class TodoOrchestrator:
+    SESSIONS_FILE = "sessions.csv"
+
     def __init__(
         self,
         todos_file: str = "todos.yaml",
-        state_file: str = None,
         provider: AIProvider = None,
         workspace: str = ".",
         timeout: int = 3600,
         bash_timeout: int = 300,
+        session_dir: str = None,
         log_dir: str = None,
         ideas_file: str = None,
         idle_interval: int = 30,
         use_cli: bool = False,
         backoff_max_wait: int = 300,
         model_roles: dict = None,
-        # Legacy parameters for backward compatibility
-        codebuddy_path: str = None,
-        model: str = None,
     )
 ```
 
@@ -52,17 +51,50 @@ class TodoOrchestrator:
 | `workspace` | str | "." | 工作目录（项目根目录） |
 | `timeout` | int | 3600 | AI 会话超时时间（秒，总时间硬上限）。来自 `config.yaml` 中的 `session_timeout`，CLI 参数 `--timeout` 可覆盖 |
 | `bash_timeout` | int | 300 | 无新输出超时时间（秒）。如果 AI 在此时间内无新输出，会话将被终止，下次 prompt 会包含长时间任务引导 |
-| `log_dir` | str | None | 日志根目录（相对于 CWD，默认 `.autoagent`）|
+| `session_dir` | str | None | 预解析的会话目录（绝对路径）。如果提供，`log_dir` 将被忽略。通常由 `resolve_session_dir()` 计算 |
+| `log_dir` | str | None | 日志根目录（相对于 CWD，默认 `.autoagent`）。仅在 `session_dir` 为 None 时使用 |
 | `ideas_file` | str | None | ideas.md 文件路径（None 则禁用 ideas 监控） |
 | `idle_interval` | int | 30 | idle 模式检查间隔（秒） |
 | `use_cli` | bool | False | 强制使用 CLI 子进程模式（而非 CodeBuddy Agent SDK）。非 codebuddy provider 自动启用 |
 | `backoff_max_wait` | int | 300 | AI CLI 连续失败时的最大退避等待时间（秒），来自 `config.yaml` 的 `backoff_max_wait` |
 | `model_roles` | dict | None | 模型角色字典（`{"plan": ..., "default": ..., "lite": ...}`），由 `parse_model_spec()` 解析生成 |
 
-> **注意**：`state_file` 参数已废弃。`todos_state.yaml`、`orchestrator.log`、`plans_state.yaml` 等运行时文件
-> 现在统一放置在由 `log_dir` + `.autoagent_log` 推导出的会话目录下，不再出现在项目目录中。
+> 当 `session_dir` 未提供时，构造函数会从 `.autoagent_log` 标记文件读取当前会话，
+> 或创建新会话并写入标记。
 
 ### 方法
+
+#### 会话管理（静态方法）
+
+##### resolve_session_dir
+
+```python
+@staticmethod
+def resolve_session_dir(
+    log_dir: str,
+    workspace: str,
+    mode: str = "new",
+    resume_id: str = None,
+) -> str
+```
+
+解析会话目录路径。这是会话管理的核心方法，支持三种模式：
+
+| 模式 | 说明 |
+|------|------|
+| `"new"` | 创建新会话目录，生成 `<workspace_basename>_<random8>` 格式名称，写入 `.autoagent_log` 标记文件并追加到 `sessions.csv` |
+| `"continue"` | 从 `.autoagent_log` 读取当前会话。如果标记文件不存在或会话目录丢失，抛出 `SystemExit` |
+| `"resume"` | 在 `sessions.csv` 中搜索匹配的会话（支持完整名称或后缀短 ID 匹配）。匹配后更新 `.autoagent_log`。如无匹配或存在歧义，抛出 `SystemExit` |
+
+**返回值**：会话目录的绝对路径。
+
+##### _list_sessions（模块级函数）
+
+```python
+def _list_sessions(log_dir: str, workspace: str) -> None
+```
+
+列出所有历史会话并格式化输出到控制台。从 `sessions.csv` 加载会话注册信息，同时扫描日志目录中的会话文件夹（向后兼容），读取 `.autoagent_log` 标识当前活跃会话。
 
 #### load_todos / reload_todos
 
@@ -350,22 +382,17 @@ def list_providers() -> dict
 
 统一 AI CLI 客户端，封装 AI 调用、Context 管理和 stream-json 解析。
 
-> **注意**：`AIClient` 是主类名，`CodeBuddyClient` 是为向后兼容保留的别名。
-
 ### 类定义
 
 ```python
 class AIClient:
     def __init__(
         self,
-        provider: AIProvider = None,
+        provider: AIProvider,
         workspace: str = ".",
         timeout: int = 3600,
         bash_timeout: int = 300,
         context_id: str = None,
-        # Legacy parameters
-        codebuddy_path: str = None,
-        model: str = None,
     )
 ```
 
@@ -373,15 +400,11 @@ class AIClient:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `provider` | AIProvider | None | AI provider 实例（优先于 legacy 参数） |
+| `provider` | AIProvider | - | AI provider 实例 |
 | `workspace` | str | "." | 工作目录 |
 | `timeout` | int | 3600 | 超时时间（秒）。实际使用中由 TodoOrchestrator 传入（来自 config.yaml 或 CLI `--timeout`） |
 | `bash_timeout` | int | 300 | 无新输出超时时间（秒）。如果 AI 在此时间内无新输出，会话将被终止 |
 | `context_id` | str | None | Context 标识符，用于状态记录和日志追踪 |
-| `codebuddy_path` | str | None | （Legacy）CodeBuddy 可执行文件路径 |
-| `model` | str | None | （Legacy）AI 模型名 |
-
-> 如果不提供 `provider`，会根据 legacy 参数或默认值创建 `CodeBuddyProvider(model=None)`，此时使用 `config.yaml` 中的 `default_model` 作为默认模型。
 
 ### 属性
 
@@ -445,8 +468,11 @@ def ask(
 1. 将 prompt 写入临时文件（避免 shell 转义问题）
 2. 通过 provider 构造 CLI 命令
 3. 启动子进程，实时解析 stream-json 输出
-4. 收集 assistant 文本和完整日志（含工具调用）
-5. 调用完成后保存到 `last_full_log`
+   - 处理 `system/api_retry` 事件：实时显示 API 重试进度（rate_limit、server_error 等）
+   - 处理 `result` 事件的 `is_error`：错误详情附加到 response 避免空响应
+4. 进程退出码非零时，通过 `_parse_cli_error()` 结构化解析错误 JSON
+5. 收集 assistant 文本和完整日志（含工具调用）
+6. 调用完成后保存到 `last_full_log`
 
 **示例**：
 
@@ -528,19 +554,29 @@ AI CLI 工具的 `--output-format stream-json` 模式输出逐行 JSON 对象。
 ```python
 class SimpleTaskExecutor:
     def __init__(self, session_dir: str = None)
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, **kwargs) -> bool
+    def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, **kwargs) -> bool
 ```
 
 **执行逻辑**：
 
 ```python
-attempts = 0
-max_attempts = task.get('max_attempts', 5)
+should_reset = True
+last_ai_output = None
 
 while attempts < max_attempts:
+    # 根据失败类型决定是否重置 session
+    if attempts > 1 and should_reset:
+        client.reset_session()
+        # 将 last_ai_output 注入 prompt 的 "Previous Attempt Output" section
+
     result = client.ask(prompt)
+    last_ai_output = result
+
     if is_completed(result):
         return True
+
+    # BashTimeoutError → should_reset = False（session 存活，in-session follow-up）
+    # SessionTimeoutError / not_completed / 其他 → should_reset = True
     attempts += 1
 
 return False
@@ -553,7 +589,7 @@ return False
 ```python
 class LoopingTaskExecutor:
     def __init__(self, session_dir: str = None, model_roles: dict = None)
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None) -> bool
+    def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None) -> bool
 ```
 
 **构造函数参数**：
@@ -567,9 +603,9 @@ class LoopingTaskExecutor:
 
 ```python
 for loop in range(task['repeat_count']):
-    # 每轮重置所有子任务状态
-    reset_subtask_states(task)
-    
+    # 每轮使用独立的 round-scoped state keys（如 1.1@2.1）
+    # 无需 reset，新 round 的 key 自动为 pending
+
     for subtask in task['subtasks']:
         result = subtask_executor.execute(subtask, client)
         if not result.success:
@@ -582,7 +618,7 @@ for loop in range(task['repeat_count']):
 **与 NestedTaskExecutor 的区别**：
 - 不做主任务完成度评估
 - 固定循环 N 次，不会提前结束
-- 每轮重置所有子任务状态重新执行
+- 每轮使用独立的 round-scoped state keys，无需重置
 - 使用 `max_attempts_per_loop` 控制每轮内的重试次数
 
 ### NestedTaskExecutor
@@ -592,7 +628,7 @@ for loop in range(task['repeat_count']):
 ```python
 class NestedTaskExecutor:
     def __init__(self, session_dir: str = None, model_roles: dict = None)
-    def execute(self, task: dict, client: CodeBuddyClient, state_manager, conv_logger=None) -> bool
+    def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None) -> bool
 ```
 
 **构造函数参数**：
@@ -628,6 +664,8 @@ context = {
 }
 ```
 
+> **注意**：`suggested_fix` 仅传递给 `retry_from` 指定的子任务，后续子任务不会看到此修复建议（因为修复建议针对的是特定子任务的问题）。
+
 **AI 主任务评估响应格式**：
 
 ```json
@@ -659,7 +697,7 @@ class SubtaskResult:
 ```python
 class SubtaskExecutor:
     def __init__(self, session_dir: str = None, model_roles: dict = None)
-    def execute(self, subtask: dict, client: CodeBuddyClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None) -> SubtaskResult
+    def execute(self, subtask: dict, client: AIClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None) -> SubtaskResult
 ```
 
 **构造函数参数**：
@@ -681,7 +719,8 @@ class SubtaskExecutor:
 1. 构造 prompt，告知 AI 使用 `autoagent-exec` wrapper 脚本启动命令（内部参数由 wrapper 预填）
 2. AI 通过 wrapper 脚本调用 `autoagent-exec`
 3. 如果 AI 报告 `LONG_RUNNING_IN_PROGRESS`，轮询信号文件等待完成
-4. 完成后重启 AI 会话，让 AI 读取输出日志并评估结果
+4. 如果 AI 未输出任何标记，`_nudge_for_marker()` 会先检查信号文件：若已有后台任务在运行则跳过 nudge，直接合成 `LONG_RUNNING_IN_PROGRESS` 进入轮询流程
+5. 完成后重启 AI 会话，让 AI 读取输出日志并评估结果
 
 ### autoagent_exec.py
 
@@ -702,12 +741,13 @@ bash autoagent-exec.sh <command...>
 | `--log-dir` | str | 日志会话目录绝对路径（由 SubtaskExecutor 的 `session_dir` 提供） |
 | `--task-id` | str | 子任务 ID（如 `1.2`） |
 | `--fast-fail-timeout` | int | 快速失败超时时间（秒），由 `config.yaml` 的 `fast_fail_timeout` 配置 |
-| `--cmd <command>` | str | 要执行的命令（由 wrapper 脚本拼接用户参数后传入）。也支持 legacy 格式 `-- <command>` |
+| `--cmd <command>` | str | 要执行的命令（由 wrapper 脚本拼接用户参数后传入） |
 
 **行为**（以下 `N` 秒由 `--fast-fail-timeout` 控制）：
 
 | 场景 | 行为 |
 |------|------|
+| 同一 task-id 已有 `running` 状态的信号文件 | 拒绝启动，输出错误信息，返回退出码 1（防止重复启动后台任务） |
 | 命令在 N 秒内失败（退出码≠ 0） | 智能输出（短输出内联打印，长输出只给路径），不写信号文件，返回非零退出码 |
 | 命令在 N 秒内成功（退出码 = 0） | 智能输出（短输出内联打印，长输出只给路径），写入 `finished` 信号文件，返回 0 |
 | 命令 N 秒后仍在运行 | 写入 `running` 信号文件，打印 `TASK SUBMITTED`，启动监控线程 |
@@ -1046,8 +1086,8 @@ def parse_ideas(self) -> List[dict]
 ```python
 def process_new_ideas(
     self,
-    client: CodeBuddyClient,
-    review_client: CodeBuddyClient = None,
+    client: AIClient,
+    review_client: AIClient = None,
     conv_logger: ConversationLogger = None,
     human_review: bool = False,
 ) -> int
@@ -1059,8 +1099,8 @@ Plan 阶段内置重试机制（`max_plan_retries`，默认 3）：如果 AI 调
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `client` | CodeBuddyClient | - | AI 客户端实例（用于任务分解） |
-| `review_client` | CodeBuddyClient | None | 可选的独立 AI 客户端（全新上下文，用于审查）。如果为 None 则跳过审查步骤 |
+| `client` | AIClient | - | AI 客户端实例（用于任务分解） |
+| `review_client` | AIClient | None | 可选的独立 AI 客户端（全新上下文，用于审查）。如果为 None 则跳过审查步骤 |
 | `conv_logger` | ConversationLogger | None | 可选的对话日志记录器 |
 | `human_review` | bool | False | 如果为 True，AI 审查通过后挂起等待人工确认 |
 
@@ -1079,10 +1119,13 @@ def reset(self)
 
 任务状态持久化管理器，负责加载、保存和更新任务执行状态。写入操作通过 `threading.Lock` 保证线程安全。
 
+子任务状态使用 **round-scoped key**（`task_id@round_label`，如 `"1.2@3.1"`），每个轮次/retry 有独立状态，实现精确断点续传。`*_once` 类型的子任务使用 plain key 跨轮次共享。
+
 ### 类定义
 
 ```python
 class StateManager:
+    ROUND_SEP = "@"  # round-scoped key 分隔符
     def __init__(self, state_file: str = "todos_state.yaml")
 ```
 
@@ -1091,6 +1134,17 @@ class StateManager:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `state_file` | str | "todos_state.yaml" | 状态持久化文件路径（位于会话目录下） |
+
+### 静态方法
+
+#### round_key
+
+```python
+@staticmethod
+def round_key(task_id: str, round_label: str | None) -> str
+```
+
+构造 round-scoped state key。返回 `"task_id@round_label"`（如 `"1.2@3.1"`），或在 `round_label` 为 `None` 时返回 plain `task_id`。
 
 ### 方法
 
@@ -1238,7 +1292,7 @@ class TaskConfig(TypedDict, total=False):
     name: str                                          # 必填，任务名称
     type: Literal["simple", "nested", "looping"]  # 必填，任务类型（顶层）
     completion_criteria: str                            # 必填，完成标准
-    initial_hint: str                                  # simple 可选
+    initial_hint: str                                  # simple 可选，每次尝试都传入
     max_attempts: int                                  # 可选，默认 5
     subtasks: List['SubtaskConfig']                    # nested/looping 必填
     repeat_count: int                                  # looping 必填，循环次数
@@ -1253,7 +1307,7 @@ class SubtaskConfig(TypedDict, total=False):
     name: str                                          # 必填
     type: Literal["simple", "long_running", "simple_once", "long_running_once", "nested", "looping"]  # 必填
     completion_criteria: str                            # 必填
-    initial_hint: str                                  # simple 可选
+    initial_hint: str                                  # simple 可选，每次尝试都传入
     max_attempts: int                                  # 可选，默认 5
 ```
 
@@ -1301,7 +1355,6 @@ class SessionTimeoutError(AICallError):
 | `--test-rules` | - | None | 测试规则文件路径（使用 `test` provider 时必须指定） |
 | `--include-directories` | - | None | 逗号分隔的额外目录列表，允许 AI 工具访问工作区外的目录（仅 Gemini） |
 | `--list-providers` | - | - | 列出所有可用 AI provider 并退出 |
-| `--codebuddy-path` | - | None | （Legacy）CodeBuddy 可执行文件路径，建议用 `--provider` + `--executable` |
 | `--model` | `-m` | 取决于 provider | AI 模型。支持单模型（如 `glm-5`）和多角色格式（如 `"plan:X;default:Y;lite:Z"`）。codebuddy 默认从 config.yaml 的 `default_model` 加载 |
 | `--workspace` | `-w` | `.` | 工作目录 |
 | `--timeout` | - | 3600 | AI 会话超时时间（秒），默认值来自 `config.yaml` 的 `session_timeout`（如果 config.yaml 不存在则为 3600） |
@@ -1315,6 +1368,9 @@ class SessionTimeoutError(AICallError):
 | `--status` | - | - | 显示当前任务状态并退出 |
 | `--reset` | - | - | 重置所有状态并退出 |
 | `--validate` | - | - | 验证配置文件并退出 |
+| `--continue` | - | - | 继续当前会话（从 `.autoagent_log` 读取） |
+| `--resume` | - | None | 恢复指定会话（支持完整名称或短 ID 后缀匹配） |
+| `--list-sessions` | - | - | 列出所有历史会话并退出 |
 | `--no-skip` | - | - | 不跳过已完成的任务 |
 | `--verbose` | `-v` | - | 启用 debug 级别日志 |
 
@@ -1436,13 +1492,13 @@ limits.reload()                                    # 重新从 config.yaml 加�
 
 ## Marker Nudge 配置（config.yaml）
 
-控制当 AI 忘记输出完成状态标记时的轻量级追问机制。通过 `prompts/marker_nudge.py` 加载。
+控制当 AI 未输出完成状态标记时的轻量级追问机制（标记缺失可能是 AI 遗漏，也可能是 CLI/SDK 异常中断）。通过 `prompts/marker_nudge.py` 加载。
 
 ### 配置字段
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `max_marker_nudges` | 2 | 最大 nudge 次数。当 AI 完成工作但未输出状态标记（✅/❌/⏳）时，在同一 session 中发送轻量级追问。耗尽后回退到正常 retry 循环 |
+| `max_marker_nudges` | 2 | 最大 nudge 次数。当 AI 未输出状态标记（✅/❌/⏳）时，在同一 session 中发送轻量级追问（允许 AI 继续工作，但禁止重复执行已跑过的命令）。发送前会先检查信号文件，若已有后台任务在运行则跳过 nudge。耗尽后回退到正常 retry 循环 |
 
 ---
 
@@ -1522,13 +1578,13 @@ orchestrator.run_with_idle()  # 不会退出，直到 Ctrl+C
 | **TodoOrchestrator** | 任务调度、状态管理、配置解析、ideas 处理、idle 模式 |
 | **AIProvider** | AI CLI 工具抽象基类、命令构造 |
 | **CodeBuddyProvider / ClaudeCodeProvider / GeminiCLIProvider / OpenCodeProvider** | 具体 AI 工具的命令构造 |
-| **AIClient** (别名 CodeBuddyClient) | AI 调用、Context 管理、stream-json 解析 |
-| **SimpleTaskExecutor** | 简单任务执行（自循环完成检测） |
+| **AIClient** | AI 调用、Context 管理、stream-json 解析 |
+| **SimpleTaskExecutor** | 简单任务执行（自循环完成检测，按失败类型决定是否 reset session） |
 | **NestedTaskExecutor** | 嵌套任务执行、AI 决策调度 |
 | **LoopingTaskExecutor** | 循环任务执行（固定 N 次迭代） |
 | **SubtaskExecutor** | 子任务分发执行（接收 session_dir） |
 | **autoagent_exec.py** | long_running 任务启动器（快速失败检测 + 信号文件，超时可通过 `config.yaml` 的 `fast_fail_timeout` 配置） |
-| **StateManager** | 任务状态持久化（todos_state.yaml） |
+| **StateManager** | 任务状态持久化（todos_state.yaml），round-scoped key 实现精确断点续传 |
 | **ConversationLogger** | 对话日志记录、索引生成、Ideas 拆解/审查/修订日志 |
 | **IdeasWatcher** | ideas.md 监控、AI 分解、AI 审查、人工审核、任务追加（支持日志记录） |
 | **setup_logging()** | 日志配置（控制台 + orchestrator.log） |

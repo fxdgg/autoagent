@@ -58,7 +58,10 @@ opencode --version
 ```yaml
 # config.yaml
 session_timeout: 3600  # Hard cap on total AI session time (seconds)
-bash_timeout: 300      # No-new-output timeout (seconds)
+bash_timeout: 300      # No-new-output timeout (seconds).
+                       # When triggered, the session is NOT reset — the AI
+                       # continues in the same session with a follow-up prompt
+                       # reminding it to use autoagent-exec.
 
 # Fast-fail timeout for autoagent-exec (in seconds, default: 30)
 fast_fail_timeout: 30
@@ -67,9 +70,13 @@ fast_fail_timeout: 30
 # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
 backoff_max_wait: 300
 
-# Maximum number of lightweight "nudge" follow-ups when the AI forgets to
-# emit a completion status marker. Nudges are sent in the same session
-# instead of resetting and replaying the entire task.
+# Maximum number of lightweight "nudge" follow-ups when the AI does not
+# output a completion status marker (e.g. AI forgot, or CLI/SDK crashed).
+# Nudges are sent in the same session instead of resetting and replaying
+# the entire task. The AI may continue unfinished work, but is told not to
+# re-run commands it already executed. Before each nudge, the system checks
+# for an autoagent-exec signal file — if one exists, the nudge is skipped
+# and a synthetic LONG_RUNNING_IN_PROGRESS is returned automatically.
 max_marker_nudges: 2
 
 # System prompt prefix (appended to the system prompt for all tasks)
@@ -265,7 +272,7 @@ tasks:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `initial_hint` | string | 否 | 初始提示（给 AI 的参考信息） |
+| `initial_hint` | string | 否 | 静态上下文提示（每次尝试都会传入，给 AI 的参考信息） |
 
 #### 嵌套任务 (type: nested)
 
@@ -287,8 +294,8 @@ tasks:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `initial_hint` | string | 否 | 初始提示（给 AI 的参考信息，如要运行的命令） |
-| `command` | string | 否 | （已废弃）旧版配置字段，现在 AI 自主决定命令 |
+| `initial_hint` | string | 否 | 静态上下文提示（每次尝试都会传入，给 AI 的参考信息，如要运行的命令） |
+| `command` | string | 否 | 可选的命令提示，AI 可根据任务描述自主决定 |
 | `completion_criteria` | string | 是 | 完成标准 |
 
 ## 任务类型
@@ -400,10 +407,10 @@ tasks:
 
 **与 nested 的区别**：
 - `nested`：AI 每轮评估是否完成，可能提前结束或继续重试
-- `looping`：固定循环 N 次，不做完成度评估，每轮重置所有子任务状态重新执行
+- `looping`：固定循环 N 次，不做完成度评估，每轮使用独立的 round-scoped state keys
 
 **执行流程**：
-1. 每轮循环重置所有子任务状态
+1. 每轮循环使用新的 round-scoped keys（如 `1.1@2.1`），子任务状态自动为 pending
 2. 按顺序执行所有子任务
 3. 子任务失败时 AI 分析原因并决定重试策略（在当前轮内重试）
 4. 循环完指定次数即完成
@@ -430,6 +437,7 @@ tasks:
    - 超时内成功：智能输出（短输出内联打印并标注 not truncated，长输出只给路径）
    - 超时后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
 4. AutoAgent 检测到 `LONG_RUNNING_IN_PROGRESS`，开始轮询信号文件
+   （如果 AI 遗漏了此标记，信号文件预检测会在 nudge 前自动补充）
 5. 任务完成后，重新启动 AI 分析输出日志并判断完成条件
 
 **技术细节**：
@@ -521,30 +529,91 @@ python orchestrator.py --list-providers
 nohup python orchestrator.py > orchestrator.log 2>&1 &
 ```
 
-### 5. 断点续传
+### 5. 会话管理
 
-如果执行中断，可以从断点继续：
+AutoAgent 使用**会话（session）**来隔离不同运行的状态和日志。每次运行默认创建新会话，你也可以继续或恢复历史会话。
 
-```bash
-# 会自动检测未完成的任务
-python orchestrator.py
+#### 会话存储结构
+
+```
+<log_dir>/                              # 默认 .autoagent
+├── sessions.csv                        # 会话注册表（Tab 分隔）
+├── <workspace>_<random8>/              # 会话目录（如 my_project_2xrsx0i7）
+│   ├── todos_state.yaml
+│   ├── orchestrator.log
+│   └── conversations/
+├── <workspace>_<random8>/              # 另一个会话
+│   └── ...
+└── ...
+
+<workspace>/
+├── .autoagent_log                      # 当前活跃会话标记（内容为会话目录名）
+└── ...
 ```
 
-状态保存在 `todos_state.yaml` 中，程序会自动读取并继续执行。
+#### 查看所有会话
+
+```bash
+python orchestrator.py --list-sessions
+```
+
+输出示例：
+```
+Workspace                  Session ID                          Created             Status
+/path/to/project           my_project_2xrsx0i7 (active)        2026-04-03 17:58    3 completed, 1 failed
+/path/to/project           my_project_po0ydek6                  2026-04-03 17:53    2 completed
+```
+
+#### 继续当前会话
+
+```bash
+# 继续 .autoagent_log 指向的会话（恢复已有状态和进度）
+python orchestrator.py --continue
+```
+
+#### 恢复特定会话
+
+```bash
+# 用完整会话名
+python orchestrator.py --resume my_project_2xrsx0i7
+
+# 用短 ID（随机后缀即可，只要不歧义）
+python orchestrator.py --resume 2xrsx0i7
+```
+
+恢复时会自动更新 `.autoagent_log` 指向被恢复的会话。
+
+#### 默认行为
+
+不指定 `--continue` 或 `--resume` 时，每次运行都会**创建新会话**，不影响历史会话的状态。
+
+> **注意**：`--continue` 和 `--resume` 不能同时使用。
+
+### 6. 断点续传
+
+如果执行中断（如 Ctrl+C），可以使用 `--continue` 从断点继续：
+
+```bash
+python orchestrator.py --continue
+```
+
+断点续传会加载上次会话的 `todos_state.yaml`，自动跳过已完成的任务，继续未完成的部分。
 
 **断点续传的具体行为**：
-- 已完成的子任务会被跳过
+- 子任务状态使用 round-scoped key（`subtask_id@round_label`，如 `1.2@3.1`），每轮循环/每次 failure retry 有独立状态
+- 中断后 resume 时只检查当前轮次的 key，已完成的子任务被精确跳过，未完成的继续执行
 - `previous_subtask_summary` 会持久化到磁盘（`previous_subtask_summary.txt`），恢复后下一个子任务仍能获得前一个子任务的上下文
-- **looping 任务**的当前循环索引也会持久化，中断后从上次的 loop 继续（而非从第 1 轮重新开始）
+- **looping 任务**的当前循环索引（`current_loop`）也会持久化，中断后从上次的 loop 继续
+- `*_once` 类型的子任务使用 plain key，跨所有轮次共享（完成一次后不再重复执行）
 
-### 6. 查看状态
+### 7. 查看状态
 
 ```bash
 # 查看任务状态
 python orchestrator.py --status
 ```
 
-### 7. 其他常用命令
+### 8. 其他常用命令
 
 ```bash
 # 验证配置文件是否合法
@@ -553,7 +622,7 @@ python orchestrator.py --validate
 # 不跳过已完成的任务，全部重新执行
 python orchestrator.py --no-skip
 
-# 重置所有状态
+# 重置当前会话状态
 python orchestrator.py --reset
 
 # 启用详细日志
@@ -564,6 +633,15 @@ python orchestrator.py --preset test
 
 # 列出所有可用 provider
 python orchestrator.py --list-providers
+
+# 列出所有历史会话
+python orchestrator.py --list-sessions
+
+# 继续当前会话
+python orchestrator.py --continue
+
+# 恢复指定会话
+python orchestrator.py --resume <session_id>
 ```
 
 ## 最佳实践

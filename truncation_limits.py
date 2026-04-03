@@ -10,6 +10,7 @@ import yaml
 
 _DEFAULTS = {
     'previous_subtask_summary': 4000,
+    'previous_attempt_output': 4000,
     'history_summary': 300,
     'max': 50000,
 }

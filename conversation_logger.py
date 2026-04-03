@@ -110,15 +110,9 @@ class ConversationLogger:
     ) -> str:
         """Resolve the markdown log file path for a given task.
 
-        When *attempt* is provided the filename includes a ``_round_N``
-        suffix so that each attempt gets its own file.  When *attempt*
-        is ``None`` the legacy single-file behaviour is used (all
-        attempts appended to the same file).
+        Each attempt gets its own file with a ``_round_N`` suffix.
         """
-        if attempt is not None:
-            filename = f"task_{task_id}_round_{attempt}.md"
-        else:
-            filename = f"task_{task_id}.md"
+        filename = f"task_{task_id}_round_{attempt}.md"
 
         if parent_task_id and parent_task_id in self._nested_subtasks:
             subtask_dir = os.path.join(self.session_dir, f"subtask_{parent_task_id}")
@@ -197,8 +191,7 @@ class ConversationLogger:
             response: The AI response
             parent_task_id: Parent task ID if this is a subtask
             attempt: Attempt number (must match the value passed to
-                ``log_prompt``).  When ``None``, falls back to the
-                legacy single-file path.
+                ``log_prompt``).
         """
         filepath = self._resolve_filepath(task_id, parent_task_id, attempt=attempt)
 
@@ -240,33 +233,26 @@ class ConversationLogger:
         self,
         task_id: str,
         task_name: str,
-        call_type: Optional[str] = None,
-        round_num: Optional[int] = None,
+        call_type: str,
+        round_num: Union[int, str],
         failed_subtask_id: Optional[str] = None,
     ) -> str:
         """Resolve the decisions markdown log file path.
 
-        When *call_type* and *round_num* are provided, each decision
-        gets its own file:
+        Each decision gets its own file:
 
         - ``failure_analysis_{subtask_id}_round_{N}.md``
         - ``looping_failure_analysis_{subtask_id}_round_{N}.md``
         - ``main_task_evaluation_round_{N}.md``
-
-        When they are ``None`` the legacy ``_decisions.md`` path is used.
         """
         subtask_dir = os.path.join(self.session_dir, f"subtask_{task_id}")
         os.makedirs(subtask_dir, exist_ok=True)
 
-        if call_type is not None and round_num is not None:
-            if "failure_analysis" in call_type and failed_subtask_id:
-                filename = f"{call_type}_{failed_subtask_id}_round_{round_num}.md"
-            else:
-                filename = f"{call_type}_round_{round_num}.md"
-            return os.path.join(subtask_dir, filename)
-
-        # Legacy fallback
-        return os.path.join(subtask_dir, "_decisions.md")
+        if "failure_analysis" in call_type and failed_subtask_id:
+            filename = f"{call_type}_{failed_subtask_id}_round_{round_num}.md"
+        else:
+            filename = f"{call_type}_round_{round_num}.md"
+        return os.path.join(subtask_dir, filename)
 
     def log_nested_prompt(
         self,
@@ -437,14 +423,7 @@ class ConversationLogger:
                     rel = f"subtask_{task_id}/{rf}"
                     content_parts.append(f"- [Task {st_id} — {rf}]({rel})\n")
             else:
-                # Legacy: check for single file
-                legacy_file = f"task_{st_id}.md"
-                legacy_path = os.path.join(subtask_dir, legacy_file)
-                rel = f"subtask_{task_id}/{legacy_file}"
-                if os.path.exists(legacy_path):
-                    content_parts.append(f"- [Task {st_id}]({rel})\n")
-                else:
-                    content_parts.append(f"- Task {st_id} *(no log yet)*\n")
+                content_parts.append(f"- Task {st_id} *(no log yet)*\n")
 
         # --- Decision files (failure_analysis, main_task_evaluation, etc.) ---
         decision_files = self._collect_decision_files(subtask_dir)
@@ -488,10 +467,7 @@ class ConversationLogger:
             f for f in os.listdir(directory)
             if any(f.startswith(p) for p in prefixes) and f.endswith(".md")
         ]
-        # Also include legacy _decisions.md if present
-        if "_decisions.md" in os.listdir(directory):
-            files.append("_decisions.md")
-        # Sort: main_task_evaluation first, then failure_analysis, then by round
+        # Sort: failure_analysis first, then looping, then main_task_evaluation, by round
         def _sort_key(fname):
             order = 0
             if fname.startswith("failure_analysis_"):
@@ -500,8 +476,6 @@ class ConversationLogger:
                 order = 2
             elif fname.startswith("main_task_evaluation_"):
                 order = 3
-            elif fname == "_decisions.md":
-                order = 9  # legacy at the end
             m = re.search(r'_round_(\d+)', fname)
             round_num = int(m.group(1)) if m else 0
             return (order, round_num)

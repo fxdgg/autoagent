@@ -200,7 +200,6 @@ PROVIDER_ALIASES = {
 
 **职责**：统一的 AI CLI 客户端，封装 AI 调用、Context 管理和 stream-json 解析。
 
-> **注意**：`AIClient` 是主类名，`CodeBuddyClient` 是为向后兼容保留的别名。
 
 **核心功能**：
 
@@ -306,8 +305,8 @@ def execute_nested_task(task: dict):
                     }
                 )
                 
-                # 4. 根据AI决策重置状态
-                reset_subtasks_from(task_id, ai_decision.retry_from)
+                # 4. 将 retry_from 之前已完成的状态复制到新 round
+                carry_forward_completed(retry_from, old_round, new_round)
                 
                 # 5. 记录AI的决策
                 record_ai_decision(task_id, subtask.id, ai_decision)
@@ -336,7 +335,7 @@ def execute_nested_task(task: dict):
             # 主任务未完成，AI决定从哪里开始重试
             increase_task_attempts(task_id)
             retry_from = ai_evaluation.retry_from  # AI决定重试起点
-            reset_subtasks_from(task_id, retry_from)
+            carry_forward_completed(retry_from, old_round, new_round)
             record_ai_evaluation(task_id, ai_evaluation)
     
     return False
@@ -446,9 +445,9 @@ execution_results:
 ```python
 class TodoOrchestrator:
     def execute_main_task(self, task: dict):
-        # 每个主任务创建独立的 CodeBuddyClient
+        # 每个主任务创建独立的 AIClient
         context_id = f"task_{task['id']}"
-        client = CodeBuddyClient(context_id=context_id)
+        client = AIClient(context_id=context_id)
         
         # 子任务之间会重置 session，通过 previous_subtask_summary 传递上下文
         previous_subtask_summary = ""
@@ -473,7 +472,7 @@ class TodoOrchestrator:
 #### 2. 子任务级别的 Context 隔离
 
 ```python
-def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
+def _execute_subtask(self, client: AIClient, subtask: dict):
     """执行子任务，每个子任务使用独立 session"""
     
     # 在执行新子任务前重置 session（除第一个子任务外）
@@ -496,7 +495,20 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
 - ✅ 防止上下文无限增长（每个子任务独立 session）
 - ✅ 通过 previous_subtask_summary 保持必要的上下文连续性
 - ✅ 子任务之间可以引用前一个子任务创建的文件（文件在磁盘上）
-- ✅ 同一子任务的重试也会重置 session（防止上下文累积导致输出截断）
+
+**Retry 策略（按失败类型区分）**：
+
+SimpleTaskExecutor 根据失败类型决定是否重置 session：
+
+| 失败类型 | Session Reset | 上一轮输出 | 说明 |
+|----------|:---:|:---:|------|
+| `❌ not completed` | ✅ | 传递到 prompt | AI 明确失败，需要新策略 |
+| Missing marker（nudge 耗尽） | ✅ | 传递到 prompt | AI 未输出标记 |
+| `BashTimeoutError` | ❌ | 不需要（同一 session） | 命令超时但 session 存活，in-session follow-up 告知 AI 命令被 kill |
+| `SessionTimeoutError` | ✅ | 传递到 prompt | session 进程已被 kill |
+| 其他 `AICallError` | ✅ | 传递到 prompt | API 错误 |
+
+当 session 被 reset 时，上一轮 AI 的完整输出（截断到 4000 字符）会注入到下一轮 prompt 的 "Previous Attempt Output" section 中，让 AI 知道上次做到了哪一步。当 session 不 reset 时（BashTimeoutError），AI 的上下文完整保留，只需发送轻量级的 in-session follow-up。
 
 **完成检测三层策略**：
 
@@ -511,21 +523,28 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
 
 **Marker Nudge 机制**：
 
-当 `_check_completion()` 返回 `None`（AI 忘记输出状态标记）时，系统不会立即浪费一次完整的 retry，
-而是在**同一 session** 中发送一个轻量级的 nudge prompt，要求 AI 自我评估并输出标记。
+当 `_check_completion()` 返回 `None`（AI 未输出状态标记——可能是忘记了，也可能是 CLI/SDK 异常中断）时，系统不会立即浪费一次完整的 retry，
+而是在**同一 session** 中发送一个轻量级的 nudge prompt，要求 AI 检查进度并输出标记。
 
-- Nudge prompt 只有几十个 token，远比重置 session 并重放整个任务描述要廉价
+- Nudge prompt 允许 AI 读文件、跑命令验证，也允许继续未完成的工作，但**禁止重复执行已跑过的命令**（特别是 autoagent-exec）
 - 最大 nudge 次数由 `config.yaml` 的 `max_marker_nudges` 配置（默认 2）
 - 所有 nudge 耗尽后仍无标记，才回退到正常的 retry 循环（重置 session）
 - Nudge 机制在 `SimpleTaskExecutor._nudge_for_marker()` 中实现，
   `SubtaskExecutor` 的 simple 和 long_running 子任务执行路径中也会调用
+
+**信号文件预检测（Signal-File Pre-Check）**：
+
+在发送 nudge 之前，`_nudge_for_marker()` 会先调用 `_check_signal_file_for_running_task()` 检查
+`lr_tasks/lr_{task_id}_signal.json` 是否存在且 status 为 `"running"` 或 `"finished"`。如果检测到，
+说明 AI 已通过 autoagent-exec 成功提交了后台任务但遗漏了 `LONG_RUNNING_IN_PROGRESS` 标记。此时
+直接返回合成的 `"⏳ LONG_RUNNING_IN_PROGRESS"` 响应，**完全跳过 nudge**，避免 AI 被追问后重复启动任务。
 
 #### 3. Context 生命周期管理
 
 ```
 主任务开始
     ↓
-创建新的 CodeBuddyClient (context_id="task_x")
+创建新的 AIClient (context_id="task_x")
     ↓
 执行子任务 1：创建新 session
     ↓
@@ -544,6 +563,8 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
 - previous_subtask_summary 会持久化到磁盘（`previous_subtask_summary.txt`），
   中断恢复后能正确加载
 - looping 任务的 current_loop 索引也会持久化，中断后从上次的 loop 继续
+- 子任务状态使用 round-scoped key（如 `1.2@3.1`），确保每轮/每次 retry
+  有独立状态，中断后精确恢复到当前轮次的进度
 ```
 
 ### 状态文件中的 Context 信息
@@ -555,17 +576,28 @@ tasks:
   "2":
     status: "in_progress"
     session_id: "abc123"  # AI 会话 ID，用于 --resume 续接
+    current_loop: 3       # looping 任务当前循环索引
     max_attempts: 5
     attempts: 1
-  "2.1":
-    status: "completed"
+  # Round-scoped subtask states (subtask_id@round_label)
+  # round_label = "X.Y" where X = main round / loop index, Y = failure sub-round
+  "2.1@1.1":
+    status: "completed"   # loop 1, initial round
     attempts: 1
-  "2.2":
-    status: "in_progress"
-    attempts: 2
+  "2.2@1.1":
+    status: "completed"
+  "2.1@2.1":
+    status: "completed"   # loop 2, initial round
+  "2.2@2.1":
+    status: "completed"
+  "2.1@3.1":
+    status: "completed"   # loop 3 — interrupted after 2.1 completed
+  # "2.2@3.1" does not exist → defaults to pending on resume
 ```
 
-> **注意**：状态文件中的任务和子任务使用扁平结构存储，每个任务/子任务 ID 是顶层 key。
+> **注意**：状态文件使用扁平结构。父任务/顶层任务使用 plain key（如 `"2"`），
+> 子任务使用 `task_id@round_label` 格式的 round-scoped key（如 `"2.1@3.1"`）。
+> `*_once` 类型的子任务使用 plain key，跨所有轮次共享。
 
 ### CodeBuddy 命令构造
 
@@ -760,13 +792,13 @@ tasks:
 
 **与 nested 的区别**：
 - `nested`：AI 每轮评估是否完成，可能提前结束或继续重试
-- `looping`：固定循环 N 次，不做完成度评估，每轮重置所有子任务状态重新执行
+- `looping`：固定循环 N 次，不做完成度评估，每轮使用独立的 round-scoped state keys
 
 **执行流程**：
 ```
 1. 开始第 1 轮循环
    ↓
-2. 重置所有子任务状态
+2. 使用 round-scoped keys（如 1.1@1.1）执行子任务
    ↓
 3. 按顺序执行所有子任务
    ↓
@@ -803,6 +835,7 @@ tasks:
    └─ N 秒后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
    ↓
 4. AI 看到 "TASK SUBMITTED" 后输出 LONG_RUNNING_IN_PROGRESS
+   （如果 AI 遗漏此标记，信号文件预检测会自动补充——见 Marker Nudge 章节）
    ↓
 5. AutoAgent 检测到 LONG_RUNNING_IN_PROGRESS，开始轮询信号文件
    ↓
@@ -1043,11 +1076,11 @@ pending → in_progress → completed/failed
 
 ```python
 class TodoOrchestrator:
-    def __init__(self, todos_file="todos.yaml", log_dir=None):
+    def __init__(self, todos_file="todos.yaml", session_dir=None, log_dir=None):
         self.todos_file = todos_file
-        # log_dir defaults to ".autoagent" (relative to CWD)
-        # Session directory resolved via .autoagent_log in workspace
-        self.session_dir = self._resolve_log_session_dir(log_dir, workspace)
+        # session_dir: pre-resolved by resolve_session_dir() in main()
+        # log_dir: fallback for tests (resolve via .autoagent_log marker)
+        self.session_dir = session_dir or self._resolve_from_marker(log_dir, workspace)
         self.state = StateManager(os.path.join(self.session_dir, "todos_state.yaml"))
         self.todos = self.load_todos()
     
@@ -1117,12 +1150,17 @@ bash autoagent-exec.sh <command...>
 | `--log-dir` | 日志会话目录的绝对路径（由 AutoAgent 传递给 wrapper 脚本） |
 | `--task-id` | 子任务 ID（如 `1.2`） |
 | `--fast-fail-timeout` | 快速失败超时时间（秒），由 `config.yaml` 的 `fast_fail_timeout` 配置 |
-| `--cmd <command>` | 要执行的命令（由 wrapper 脚本拼接用户参数后传入）。也支持 legacy 格式 `-- <command>` |
+| `--cmd <command>` | 要执行的命令（由 wrapper 脚本拼接用户参数后传入） |
 
 **快速失败检测机制**（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置，默认 10 秒）：
 
 ```
 启动命令
+  ↓
+检查信号文件是否已有 status="running" 的任务
+  ├─ 有 → ❌ 拒绝启动，输出错误并 exit(1)
+  │   （防止 AI 在同一 session 中重复启动后台任务）
+  └─ 无 → 继续
   ↓
 等待 N 秒（fast_fail_timeout）
   ↓
@@ -1185,12 +1223,19 @@ def _execute_long_running_subtask(self, subtask, client, ...):
         status = self._poll_signal_file(signal_file)
         # 重启 AI 分析结果
         return self._ai_analyze_long_running_result(...)
-    
+
     # 3b. AI 直接完成（快速成功或自行处理）
     if self._check_completion(result):
         return SubtaskResult(success=True)
-    
-    # 3c. 快速失败，AI 已看到错误，下一轮重试
+
+    # 3c. 无标记 → nudge（会先检查信号文件，有则合成 LR 标记跳过 nudge）
+    nudge_result = self._nudge_for_marker(...)
+    if nudge_result and self._check_long_running_in_progress(nudge_result):
+        # 信号文件预检测触发，或 AI 在 nudge 中回忆起已提交任务
+        status = self._poll_signal_file(signal_file)
+        return self._ai_analyze_long_running_result(...)
+
+    # 3d. 快速失败，AI 已看到错误，下一轮重试
 ```
 
 ### session_dir 传递机制
@@ -1255,13 +1300,14 @@ autoagent/
 │
 ├── todos.yaml                # 任务定义
 ├── ideas.md                  # 用户的想法记录（可选）
-├── .autoagent_log            # 项目对应的日志子文件夹名（自动生成）
+├── .autoagent_log            # 当前活跃会话标记（自动生成）
 │
 ├── <log_dir>/                # 日志根目录（默认 .autoagent，相对 CWD）
-│   └── <project>_<random>/   # 项目专属会话目录（由 .autoagent_log 指定）
+│   ├── sessions.csv              # 会话注册表（Tab 分隔）
+│   └── <project>_<random8>/  # 项目专属会话目录
 │       ├── orchestrator.log           # Orchestrator 运行日志
 │       ├── todos_state.yaml           # 任务状态（自动生成）
-│       ├── plans_state.yaml            # Ideas 状态跟踪（替代旧的 .ideas_processed.md）
+│       ├── plans_state.yaml            # Ideas 状态跟踪
 │       ├── previous_subtask_summary.txt  # 上一个子任务的摘要（断点续传用）
 │       ├── lr_tasks/                  # long_running 任务文件目录
 │       │   ├── lr_<task_id>_signal.json   # long_running 信号文件（自动生成）
@@ -1279,14 +1325,29 @@ autoagent/
 └── README.md
 ```
 
-### 日志目录管理（.autoagent_log）
+### 会话管理
 
-为了支持多个项目共用同一个日志根目录，系统在**项目目录**中维护一个 `.autoagent_log` 文件，
-内容为该项目对应的日志子文件夹名称，例如 `cufftdx_optimization_ko53bi1b`。
+AutoAgent 使用**会话（session）**隔离不同运行的状态和日志。每个会话对应一个独立的目录，
+命名格式为 `<workspace_basename>_<random8>`（如 `cufftdx_optimization_2xrsx0i7`）。
 
-- 首次运行时自动生成：`<项目目录名>_<随机8位字符>`
-- 后续运行读取该文件，确保同一个项目始终写入同一个日志子文件夹
-- 最终日志路径为 `<log_dir>/<.autoagent_log中的内容>/`
+**核心文件**：
+- **`.autoagent_log`**（项目目录）：纯文本文件，内容为当前活跃会话的目录名
+- **`sessions.csv`**（日志根目录）：Tab 分隔的会话注册表，记录 `session_id`、`workspace`、`created_at`
+
+**三种运行模式**：
+
+| CLI 参数 | 模式 | 行为 |
+|----------|------|------|
+| （默认） | `new` | 创建新会话目录，写入 `.autoagent_log`，追加到 `sessions.csv` |
+| `--continue` | `continue` | 从 `.autoagent_log` 读取当前会话，加载已有状态继续执行 |
+| `--resume <id>` | `resume` | 在 `sessions.csv` 中搜索匹配会话（支持短 ID 后缀匹配），更新 `.autoagent_log` 后恢复 |
+
+`--list-sessions` 列出所有历史会话及其状态（从 `sessions.csv` 和 `todos_state.yaml` 读取）。
+
+**会话解析流程**（`resolve_session_dir()`）：
+```
+CLI 参数 → 确定模式(new/continue/resume) → 解析会话目录路径 → 传入 TodoOrchestrator(session_dir=...)
+```
 - 所有运行时状态文件（`todos_state.yaml`、`orchestrator.log`、`plans_state.yaml`、`conversations/`）
   均位于该目录下，**不会出现在项目目录中**
 
@@ -1454,11 +1515,47 @@ stateDiagram-v2
 delay = min(5 * 2^(consecutive_failures - 1), backoff_max_wait)
 ```
 
+### 结构化错误解析
+
+AI CLI 工具（Claude Code、CodeBuddy、Gemini CLI 等）在失败时可能返回结构化 JSON 错误，而非纯文本。`AIClient._parse_cli_error()` 支持解析多种错误格式：
+
+**支持的格式**：
+- Anthropic/Claude 嵌套格式：`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`
+- 扁平 JSON 格式：`{"error":"rate_limit","message":"Rate limit exceeded"}`
+- stream-json 多行输出（取最后一行尝试解析 JSON）
+- 纯文本（fallback）
+
+**解析结果**：返回 `(message, error_type)` 元组，`error_type` 为 `None`（纯文本）或字符串如 `"overloaded_error"`、`"rate_limit"`、`"authentication_error"` 等。错误消息格式为：
+```
+claude returned exit code 1: [overloaded_error] Overloaded
+```
+
+### API 重试事件显示
+
+Claude Code 在 API 请求失败时会在 stream-json 中发出 `system/api_retry` 事件（CLI 内部自动重试）。AutoAgent 实时显示这些事件，让用户了解重试进度：
+
+```
+⚠️  API retry 1/3: rate_limit (HTTP 429), waiting 5.0s...
+```
+
+事件字段：
+
+| 字段 | 说明 |
+|------|------|
+| `error` | 错误类别：`rate_limit`、`server_error`、`billing_error`、`authentication_failed` 等 |
+| `error_status` | HTTP 状态码（429、503 等），连接错误时为 `null` |
+| `attempt` / `max_retries` | 当前重试次数 / 最大重试次数 |
+| `retry_delay_ms` | 下次重试前的等待时间（毫秒） |
+
+### stream-json result 错误传播
+
+当 stream-json 的 `result` 事件报告 `is_error=True` 但 AI 未产生任何文本时（如 API 错误导致 session 立即终止），AutoAgent 会将错误详情附加到 response 中（`[ERROR] <detail>`），避免上层只看到 "empty response" 而不知原因。
+
 ### 健壮性增强
 
 #### retry_from 验证
 
-NestedTaskExecutor 和 LoopingTaskExecutor 的 `_reset_subtasks_from()` 方法会验证 AI 返回的 `retry_from` ID 是否存在于子任务列表中。如果 ID 无效，回退到第一个子任务，避免无限循环。
+NestedTaskExecutor 和 LoopingTaskExecutor 的 `_carry_forward_completed()` 方法接收 AI 返回的 `retry_from` ID，将其之前已完成的子任务状态复制到新 round。如果 `retry_from` 指向第一个子任务，则不复制任何状态（全部重做）。
 
 #### process.wait() 超时
 
@@ -1716,7 +1813,8 @@ prompts/  task_executor.py  ideas_watcher.py
 
 2. **重试决策**（决策点1）：
    - 决定从哪个子任务开始重试（`retry_from`字段）
-   - 提出具体的修复方案（`suggested_fix`字段）
+   - 提出具体的修复方案（`suggested_fix`字段）——**仅传递给 `retry_from` 指定的子任务**，
+     后续子任务不会看到此修复建议（因为修复建议针对的是特定子任务的问题）
    - 给出分析（`analysis`字段）
 
 3. **完成判断**（决策点2）：
@@ -1978,8 +2076,9 @@ AI 再次审查...
 | 日志类型 | 文件位置 | 触发场景 |
 |----------|----------|----------|
 | 任务对话 | `task_<id>.md` | 简单任务的每次 attempt |
-| 子任务对话 | `subtask_<parent_id>/task_<id>.md` | 子任务的每次 attempt |
-| AI 决策 | `subtask_<parent_id>/_decisions.md` | 失败分析、主任务评估 |
+| 子任务对话 | `subtask_<parent_id>/task_<id>_round_<N>.md` | 子任务的每次 attempt |
+| AI 决策 | `subtask_<parent_id>/failure_analysis_<id>_round_<N>.md` | 失败分析 |
+| AI 决策 | `subtask_<parent_id>/main_task_evaluation_round_<N>.md` | 主任务评估 |
 | Ideas 拆解 | `ideas.md` | Ideas 分解为 TODO 时的 AI 调用 |
 | Ideas 审查 | `ideas.md` | AI 审查生成的任务（Review Prompt/Response） |
 | Ideas 修订 | `ideas.md` | AI 根据审查反馈修订任务（Revision Prompt/Response） |
@@ -2009,7 +2108,7 @@ python orchestrator.py --log-dir logs
 2. **AI 返回后**：调用 `log_response()` 追加 response 到同一文件
 
 这样即使进程在等待 AI 响应时被中断，prompt 部分也已持久化到磁盘。
-旧的 `log_conversation()` 方法仍然保留作为便捷包装器（内部调用两步方法）。
+`log_conversation()` 方法作为便捷包装器保留（内部调用两步方法）。
 
 日志在 Orchestrator 执行结束时（或 Ctrl+C 中断时）会调用 `finalize()` 生成最终的索引文件。
 
@@ -2031,8 +2130,8 @@ class IdeasWatcher:
     def has_new_ideas(self) -> bool
     def parse_ideas(self) -> List[dict]
     def process_new_ideas(
-        self, client: CodeBuddyClient,
-        review_client: CodeBuddyClient = None,
+        self, client: AIClient,
+        review_client: AIClient = None,
         conv_logger: ConversationLogger = None,
         human_review: bool = False,
     ) -> int

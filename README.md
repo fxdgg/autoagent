@@ -152,6 +152,9 @@ python orchestrator.py --status
 | `--status` | | 显示当前任务状态 |
 | `--reset` | | 重置所有任务状态 |
 | `--validate` | | 验证配置文件并退出 |
+| `--continue` | | 继续当前会话（从 `.autoagent_log` 读取） |
+| `--resume` | | 恢复指定会话（支持完整名称或短 ID） |
+| `--list-sessions` | | 列出所有历史会话 |
 | `--no-skip` | | 不跳过已完成的任务 |
 | `--verbose` | `-v` | 启用详细日志 |
 | `--list-providers` | | 列出所有可用 AI Provider |
@@ -166,6 +169,13 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --workspace ./projec
 python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 # （审核 todos.yaml 后）
 python orchestrator.py --config todos.yaml --workspace ./project
+
+# 继续上次中断的会话
+python orchestrator.py --continue
+
+# 恢复特定历史会话（支持短 ID）
+python orchestrator.py --list-sessions        # 查看所有会话
+python orchestrator.py --resume abc12345      # 恢复指定会话
 
 # 重跑某个任务
 python orchestrator.py --task 2

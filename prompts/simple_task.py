@@ -8,6 +8,7 @@ from prompts.shared import (
     build_sibling_context,
     build_history_section,
     build_previous_subtask_section,
+    build_previous_attempt_output_section,
     build_suggested_fix_section,
     build_timeout_guidance,
 )
@@ -23,12 +24,13 @@ def build_simple_task_prompt(
     timeout_type: str = None,
     exec_script_path: str = "",
     project_description: str = "",
+    previous_attempt_output: str = None,
 ) -> str:
     """Build the prompt sent to AI for a simple task execution.
 
     The prompt is organised into clearly separated sections:
 
-    1. **Task** — core instructions (name, criteria, hint)
+    1. **Task** — core instructions (name, criteria, hint on every attempt)
     2. **Context** — background information (main goal, workflow, prev step)
     3. **Previous Attempts** — retry information (only when attempt > 1)
     4. **Constraints** — operational constraints (timeout warnings)
@@ -53,6 +55,9 @@ def build_simple_task_prompt(
             convenience script (forward-slash normalised).
         project_description: Optional root-level description from
             ``todos.yaml`` providing project-wide context.
+        previous_attempt_output: Full AI output from the previous attempt
+            (truncated).  Injected when the session was reset so the AI
+            can see what it already did.
     """
     parts = []
 
@@ -62,7 +67,7 @@ def build_simple_task_prompt(
         f"Task: {task['name']}",
         f"Completion Criteria: {task['completion_criteria']}",
     ]
-    if task.get('initial_hint') and attempt == 1:
+    if task.get('initial_hint'):
         task_lines.append(f"Initial Hint: {task['initial_hint']}")
     parts.append("\n".join(task_lines))
 
@@ -89,14 +94,30 @@ def build_simple_task_prompt(
     if attempt > 1:
         retry_lines = []
 
+        # Full output from the previous attempt (when session was reset)
+        prev_output = build_previous_attempt_output_section(previous_attempt_output)
+        if prev_output:
+            retry_lines.append(prev_output)
+
         history = state.get('history', [])
         history_section = build_history_section(history, extract_summary_fn)
         if history_section:
             retry_lines.append(history_section)
 
-        retry_lines.append(build_suggested_fix_section(parent_context))
+        retry_lines.append(
+            "Please analyze what went wrong and try a different approach."
+        )
 
         parts.append("## Previous Attempts\n" + "\n\n".join(retry_lines))
+
+    # ── Section 3b: Failure Guidance (always show when available) ──
+    # suggested_fix comes from the parent's failure_analysis or
+    # main_task_evaluation.  It must be shown even on the first attempt
+    # of a new round (attempt == 1) because failure_analysis creates a
+    # new round_label, resetting the attempt counter to 1.
+    fix_section = build_suggested_fix_section(parent_context, fallback_msg="")
+    if fix_section:
+        parts.append("## Guidance from Previous Failure\n" + fix_section)
 
     # ── Section 4: Constraints ───────────────────────────────────────
     constraint_lines = []

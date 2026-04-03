@@ -15,7 +15,9 @@ Usage:
 
 import os
 import sys
+import csv
 import time
+import shutil
 import string
 import random
 import argparse
@@ -23,7 +25,7 @@ import logging
 import yaml
 from typing import Optional, List
 
-from codebuddy_client import AIClient, AIClientSDK, AIClientTest, CodeBuddyClient, AICallError
+from codebuddy_client import AIClient, AIClientSDK, AIClientTest, AICallError
 from ai_providers import get_provider, list_providers, AIProvider, TestProvider, parse_model_spec
 from task_executor import (
     SimpleTaskExecutor,
@@ -48,90 +50,242 @@ class TodoOrchestrator:
     - Schedule task execution in order
     - Delegate to appropriate executors (SimpleTaskExecutor, NestedTaskExecutor)
     - Manage state persistence via StateManager
-    - Create CodeBuddyClient instances per main task for context isolation
+    - Create AIClient instances per main task for context isolation
     """
 
+    # ── Session management helpers ──────────────────────────────────
+
+    SESSIONS_FILE = "sessions.csv"
+
     @staticmethod
-    def _resolve_log_session_dir(log_dir: str, workspace: str) -> str:
-        """
-        Resolve the final log session directory by reading or generating
-        a project-specific subdirectory name stored in .autoagent_log.
-
-        The .autoagent_log file lives in the *workspace* (project) directory
-        and contains a single line like ``cufftdx_optimization_ko53bi1b``.
-        The returned path is ``<log_dir>/<that_line>``.
-
-        If the file does not yet exist it is created with a freshly
-        generated name of the form ``<dirname>_<random8chars>``.
-
-        Args:
-            log_dir: Root log directory (absolute path)
-            workspace: Project / workspace directory (absolute path)
-
-        Returns:
-            str: Absolute path to the project-specific session directory.
-        """
-        marker_file = os.path.join(workspace, ".autoagent_log")
-
-        # Try to read an existing marker
-        if os.path.exists(marker_file):
-            try:
-                with open(marker_file, "r", encoding="utf-8") as f:
-                    subdir_name = f.read().strip()
-                if subdir_name:
-                    return os.path.join(log_dir, subdir_name)
-            except Exception:
-                pass  # Fall through to generate a new one
-
-        # Generate a new subdirectory name: <basename>_<random8>
+    def _generate_session_name(workspace: str) -> str:
+        """Generate a new session directory name: ``<basename>_<random8>``."""
         basename = os.path.basename(os.path.abspath(workspace))
-        rand_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
-        subdir_name = f"{basename}_{rand_suffix}"
+        rand_suffix = "".join(
+            random.choices(string.ascii_lowercase + string.digits, k=8)
+        )
+        return f"{basename}_{rand_suffix}"
 
-        # Persist it so that subsequent runs reuse the same directory
+    @staticmethod
+    def _read_marker(workspace: str) -> str:
+        """Read the session subdir name from ``.autoagent_log``.
+
+        Returns the name (e.g. ``cufftdx_optimization_4jvowsl3``)
+        or empty string if the marker doesn't exist or is empty.
+        """
+        marker = os.path.join(workspace, ".autoagent_log")
+        if os.path.exists(marker):
+            try:
+                with open(marker, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception:
+                pass
+        return ""
+
+    @staticmethod
+    def _write_marker(workspace: str, subdir_name: str):
+        """Write *subdir_name* into ``<workspace>/.autoagent_log``."""
+        marker = os.path.join(workspace, ".autoagent_log")
         try:
-            with open(marker_file, "w", encoding="utf-8") as f:
+            with open(marker, "w", encoding="utf-8") as f:
                 f.write(subdir_name + "\n")
         except Exception as e:
-            logger.warning(f"Failed to write {marker_file}: {e}")
+            logger.warning(f"Failed to write {marker}: {e}")
 
-        return os.path.join(log_dir, subdir_name)
+    @staticmethod
+    def _append_sessions_csv(log_dir: str, subdir_name: str, workspace: str):
+        """Append a row to ``<log_dir>/sessions.csv``."""
+        csv_path = os.path.join(log_dir, TodoOrchestrator.SESSIONS_FILE)
+        write_header = not os.path.exists(csv_path)
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            with open(csv_path, "a", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f, delimiter="\t")
+                if write_header:
+                    writer.writerow(["session_id", "workspace", "created_at"])
+                writer.writerow([
+                    subdir_name,
+                    workspace,
+                    time.strftime("%Y-%m-%dT%H:%M:%S"),
+                ])
+        except Exception as e:
+            logger.warning(f"Failed to append to {csv_path}: {e}")
+
+    @staticmethod
+    def _load_sessions_csv(log_dir: str) -> list:
+        """Load all rows from ``sessions.csv``.
+
+        Returns a list of dicts with keys ``session_id``, ``workspace``,
+        ``created_at``.
+        """
+        csv_path = os.path.join(log_dir, TodoOrchestrator.SESSIONS_FILE)
+        if not os.path.isfile(csv_path):
+            return []
+        rows = []
+        try:
+            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f, delimiter="\t")
+                for row in reader:
+                    rows.append(row)
+        except Exception as e:
+            logger.warning(f"Failed to read {csv_path}: {e}")
+        return rows
+
+    @staticmethod
+    def resolve_session_dir(
+        log_dir: str,
+        workspace: str,
+        mode: str = "new",
+        resume_id: str = None,
+    ) -> str:
+        """Resolve the session directory path.
+
+        Args:
+            log_dir: Absolute path to the log root (e.g. ``.autoagent``).
+            workspace: Absolute path to the workspace.
+            mode: One of ``"new"``, ``"continue"``, ``"resume"``.
+            resume_id: Session suffix or full name (only for ``mode="resume"``).
+
+        Returns:
+            Absolute path to the session directory.
+
+        Raises:
+            SystemExit on error (no marker, session not found, etc.)
+        """
+        cls = TodoOrchestrator
+
+        if mode == "continue":
+            subdir = cls._read_marker(workspace)
+            if not subdir:
+                print("❌ No active session found (.autoagent_log missing or empty).")
+                print("   Use --resume <session_id> or run without --continue to start fresh.")
+                sys.exit(1)
+            session_dir = os.path.join(log_dir, subdir)
+            if not os.path.isdir(session_dir):
+                print(f"❌ Session directory not found: {session_dir}")
+                print(f"   The session '{subdir}' may have been deleted.")
+                sys.exit(1)
+            return session_dir
+
+        if mode == "resume":
+            if not resume_id:
+                print("❌ --resume requires a session ID.")
+                sys.exit(1)
+            # Search sessions.csv
+            rows = cls._load_sessions_csv(log_dir)
+            matches = []
+            for row in rows:
+                sid = row.get("session_id", "")
+                # Match by full name or by suffix (the random part)
+                if sid == resume_id or sid.endswith(f"_{resume_id}"):
+                    matches.append(sid)
+            if not matches:
+                # Also try scanning log_dir directly
+                if os.path.isdir(log_dir):
+                    for d in os.listdir(log_dir):
+                        if d == resume_id or d.endswith(f"_{resume_id}"):
+                            matches.append(d)
+            if not matches:
+                print(f"❌ Session '{resume_id}' not found.")
+                print(f"   Use --list-sessions to see available sessions.")
+                sys.exit(1)
+            if len(matches) > 1:
+                print(f"❌ Ambiguous session ID '{resume_id}', matches: {matches}")
+                print(f"   Please use the full session ID.")
+                sys.exit(1)
+            subdir = matches[0]
+            session_dir = os.path.join(log_dir, subdir)
+            if not os.path.isdir(session_dir):
+                print(f"❌ Session directory not found: {session_dir}")
+                sys.exit(1)
+            # Update .autoagent_log to point to this session
+            cls._write_marker(workspace, subdir)
+            return session_dir
+
+        # mode == "new"
+        subdir = cls._generate_session_name(workspace)
+        cls._write_marker(workspace, subdir)
+        cls._append_sessions_csv(log_dir, subdir, workspace)
+        return os.path.join(log_dir, subdir)
+
+    @staticmethod
+    def _get_session_status(session_dir: str) -> str:
+        """Read todos_state.yaml and return a brief status string.
+
+        Examples: ``"1.2 (round 3/10)"``, ``"completed"``, ``"no state"``.
+        """
+        state_file = os.path.join(session_dir, "todos_state.yaml")
+        if not os.path.isfile(state_file):
+            return "no state"
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                state = yaml.safe_load(f)
+        except Exception:
+            return "error reading state"
+        if not state or "tasks" not in state:
+            return "empty"
+
+        tasks = state["tasks"]
+        # Find the deepest in_progress task
+        in_progress = None
+        for key, val in tasks.items():
+            if val.get("status") == "in_progress":
+                # Prefer the one with the longest key (deepest subtask)
+                if in_progress is None or len(key) > len(in_progress[0]):
+                    in_progress = (key, val)
+
+        if in_progress:
+            key, val = in_progress
+            # Strip round-scoped suffix for display
+            display_id = key.split("@")[0] if "@" in key else key
+            round_info = ""
+            cr = val.get("current_round")
+            mr = val.get("max_attempts") or val.get("repeat_count")
+            if cr and mr:
+                round_info = f" (round {cr}/{mr})"
+            return f"{display_id}{round_info}"
+
+        # Check if all top-level tasks are completed
+        top_tasks = {k: v for k, v in tasks.items() if "@" not in k and "." not in k}
+        if top_tasks and all(v.get("status") == "completed" for v in top_tasks.values()):
+            return "completed"
+
+        # Some tasks pending, none in progress
+        return "pending"
 
     def __init__(
         self,
         todos_file: str = "todos.yaml",
-        state_file: str = None,
         provider: AIProvider = None,
         workspace: str = ".",
         timeout: int = 3600,
         bash_timeout: int = 300,
+        session_dir: str = None,
         log_dir: str = None,
         ideas_file: str = None,
         idle_interval: int = 30,
         use_cli: bool = False,
         backoff_max_wait: int = 300,
         model_roles: dict = None,
-        # Legacy parameters for backward compatibility
-        codebuddy_path: str = None,
-        model: str = None,
     ):
         """
         Initialize the TodoOrchestrator.
-        
+
         Args:
             todos_file: Path to the task configuration YAML
-            state_file: (Deprecated, ignored) State file path is now derived
-                        from log_dir automatically.
-            provider: AI provider instance (takes precedence over legacy params)
+            provider: AI provider instance
             workspace: Working directory for AI tool
             timeout: Default session timeout for AI calls (hard cap on
                 total session time).
             bash_timeout: No-new-output timeout for AI calls.  If the AI
                 produces no new output for this many seconds, the session
                 is killed and the next prompt includes long-running guidance.
-            log_dir: Root directory for all output files (conversation logs,
-                     state files, orchestrator.log).  Defaults to ".autoagent"
-                     relative to the current working directory.
+            session_dir: Pre-resolved session directory (absolute path).
+                If provided, ``log_dir`` is ignored.  Use
+                ``resolve_session_dir()`` to compute this.
+            log_dir: Root directory for all output files.  Only used when
+                ``session_dir`` is None (fallback: resolve via
+                ``.autoagent_log`` marker — for backward compat with tests).
             ideas_file: Path to ideas.md file (None to disable ideas watching)
             idle_interval: Seconds between idle checks for new ideas (default: 30)
             use_cli: If True, use CLI subprocess instead of CodeBuddy Agent SDK
@@ -140,8 +294,6 @@ class TodoOrchestrator:
                      when AI CLI calls fail repeatedly (default: 300)
             model_roles: Model role dict ({"plan": ..., "default": ..., "lite": ...}),
                      parsed by parse_model_spec(). None uses provider's default model.
-            codebuddy_path: (Legacy) Path to CodeBuddy executable
-            model: (Legacy) AI model to use
         """
         self.todos_file = todos_file
         self.workspace = os.path.abspath(workspace)
@@ -151,33 +303,30 @@ class TodoOrchestrator:
         self.use_cli = use_cli
         self.backoff_max_wait = backoff_max_wait
 
-        # Store provider (or create from legacy params)
-        if provider is not None:
-            self.provider = provider
-        elif codebuddy_path or model:
-            from ai_providers import CodeBuddyProvider
-            self.provider = CodeBuddyProvider(
-                executable=codebuddy_path or "codebuddy",
-                model=model,  # Use provider's default_model if not specified
-            )
-        else:
-            from ai_providers import CodeBuddyProvider
-            self.provider = CodeBuddyProvider()
+        self.provider = provider
 
         self.model_roles = model_roles or {
-            "plan": self.provider.model if provider else "",
-            "default": self.provider.model if provider else "",
-            "lite": self.provider.model if provider else "",
+            "plan": self.provider.model,
+            "default": self.provider.model,
+            "lite": self.provider.model,
         }
-        
-        # ── Resolve session log directory ──────────────────────────
-        # log_dir defaults to ".autoagent" relative to CWD.
-        if log_dir is None:
-            log_dir = os.path.abspath(".autoagent")
-        else:
-            log_dir = os.path.abspath(log_dir)
 
-        self.session_dir = self._resolve_log_session_dir(log_dir, self.workspace)
+        # ── Resolve session log directory ──────────────────────────
+        if session_dir:
+            self.session_dir = session_dir
+        else:
+            # Fallback for tests and simple usage: read .autoagent_log
+            if log_dir is None:
+                log_dir = os.path.abspath(".autoagent")
+            else:
+                log_dir = os.path.abspath(log_dir)
+            subdir = self._read_marker(self.workspace)
+            if subdir:
+                self.session_dir = os.path.join(log_dir, subdir)
+            else:
+                self.session_dir = self.resolve_session_dir(
+                    log_dir, self.workspace, mode="new"
+                )
         os.makedirs(self.session_dir, exist_ok=True)
 
         # Derived paths inside the session directory
@@ -445,7 +594,7 @@ class TodoOrchestrator:
         """
         Execute a single task, dispatching to the appropriate executor.
         
-        Each main task gets its own CodeBuddyClient for context isolation.
+        Each main task gets its own AIClient for context isolation.
         
         Args:
             task: Task configuration dict
@@ -465,7 +614,7 @@ class TodoOrchestrator:
             task_model = task_model_role
         self.provider.set_model(task_model)
         
-        # Create a new CodeBuddyClient for this main task (context isolation)
+        # Create a new AIClient for this main task (context isolation)
         context_id = f"task_{task_id}"
         
         # Check if this task was interrupted and has a saved session_id
@@ -1040,26 +1189,64 @@ def _merge_preset_with_args(args, preset):
     return args
 
 
+def _list_sessions(log_dir: str, workspace: str):
+    """List all known sessions and their status."""
+    rows = TodoOrchestrator._load_sessions_csv(log_dir)
+
+    # Also scan log_dir for session dirs not in CSV (e.g. from before CSV existed)
+    known_ids = {r["session_id"] for r in rows}
+    if os.path.isdir(log_dir):
+        for d in sorted(os.listdir(log_dir)):
+            full = os.path.join(log_dir, d)
+            if os.path.isdir(full) and d not in known_ids and d != "logs":
+                # Check if it looks like a session dir (has todos_state.yaml or orchestrator.log)
+                if os.path.exists(os.path.join(full, "orchestrator.log")) or \
+                   os.path.exists(os.path.join(full, "todos_state.yaml")):
+                    rows.append({
+                        "session_id": d,
+                        "workspace": "?",
+                        "created_at": "?",
+                    })
+
+    if not rows:
+        print(f"No sessions found in {log_dir}/")
+        return
+
+    # Determine active session for this workspace
+    active_subdir = TodoOrchestrator._read_marker(workspace)
+
+    print(f"\nSessions in {log_dir}/\n")
+    print(f"{'Workspace':<50s} {'Session ID':<40s} {'Created':<22s} {'Status'}")
+    print(f"{'-' * 50} {'-' * 40} {'-' * 22} {'-' * 30}")
+
+    for row in rows:
+        sid = row.get("session_id", "?")
+        ws = row.get("workspace", "?")
+        created = row.get("created_at", "?")
+        # Truncate workspace for display
+        ws_display = ws if len(ws) <= 48 else "..." + ws[-45:]
+
+        # Get status from todos_state.yaml
+        session_path = os.path.join(log_dir, sid)
+        status = TodoOrchestrator._get_session_status(session_path)
+
+        # Mark active session
+        if sid == active_subdir:
+            status += " (active)"
+
+        print(f"{ws_display:<50s} {sid:<40s} {created:<22s} {status}")
+
+    print()
+
+
 def main():
     """CLI entry point."""
     _ensure_utf8_stdio()
 
     # Load config.yaml defaults
     config = _load_config()
-    # session_timeout: hard cap on total AI session time (default 3600)
-    # For backward compatibility, also check the old 'bash_timeout' key
-    default_session_timeout = config.get('session_timeout',
-                                         config.get('bash_timeout', 3600))
-    # bash_timeout: no-new-output timeout (default 300)
+    default_session_timeout = config.get('session_timeout', 3600)
     default_bash_timeout = config.get('bash_timeout', 300)
-    # If config has the new session_timeout key, bash_timeout is independent;
-    # if only the old bash_timeout key exists, use it as session_timeout
-    # and fall back to 300 for the new bash_timeout.
-    if 'session_timeout' in config:
-        default_bash_timeout = config.get('bash_timeout', 300)
-    else:
-        # Old config: bash_timeout was actually session_timeout
-        default_bash_timeout = 300
 
     parser = argparse.ArgumentParser(
         description="AI-driven task execution system (supports CodeBuddy, Claude Code, Gemini CLI)",
@@ -1115,9 +1302,19 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         help='List available AI providers and exit',
     )
     parser.add_argument(
-        '--codebuddy-path',
+        '--continue', dest='continue_session',
+        action='store_true',
+        help='Continue from the current session (reads .autoagent_log)',
+    )
+    parser.add_argument(
+        '--resume', dest='resume_session',
         default=None,
-        help='(Legacy) Path to CodeBuddy executable. Prefer --provider + --executable.',
+        help='Resume a specific session by ID (e.g. 4jvowsl3 or full name)',
+    )
+    parser.add_argument(
+        '--list-sessions',
+        action='store_true',
+        help='List all sessions and exit',
     )
     parser.add_argument(
         '--model', '-m',
@@ -1260,15 +1457,35 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         print(f"✓ Created empty config file: {args.config}")
     
     # Resolve log_dir early so we can point orchestrator.log there too.
-    # The actual session sub-directory is determined later by the
-    # orchestrator (via .autoagent_log), but we need log_dir itself
-    # for the orchestrator.log file handler.
     _log_dir_raw = args.log_dir  # may be None
     _log_dir_abs = os.path.abspath(_log_dir_raw) if _log_dir_raw else os.path.abspath(".autoagent")
-
-    # Resolve session dir for orchestrator.log placement
     _workspace_abs = os.path.abspath(args.workspace)
-    _session_dir = TodoOrchestrator._resolve_log_session_dir(_log_dir_abs, _workspace_abs)
+
+    # ── Handle --list-sessions early (before session resolution) ──
+    if args.list_sessions:
+        _list_sessions(_log_dir_abs, _workspace_abs)
+        return
+
+    # ── Validate mutually exclusive session flags ──
+    if args.continue_session and args.resume_session:
+        print("❌ Cannot use --continue and --resume together.")
+        sys.exit(1)
+
+    # ── Resolve session directory based on mode ──
+    if args.continue_session:
+        _session_dir = TodoOrchestrator.resolve_session_dir(
+            _log_dir_abs, _workspace_abs, mode="continue"
+        )
+    elif args.resume_session:
+        _session_dir = TodoOrchestrator.resolve_session_dir(
+            _log_dir_abs, _workspace_abs, mode="resume",
+            resume_id=args.resume_session,
+        )
+    else:
+        # Default: fresh start
+        _session_dir = TodoOrchestrator.resolve_session_dir(
+            _log_dir_abs, _workspace_abs, mode="new"
+        )
     os.makedirs(_session_dir, exist_ok=True)
 
     # Setup logging – orchestrator.log goes into the session directory
@@ -1317,17 +1534,7 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
             sys.exit(1)
         
         # Create AI provider
-        # Legacy support: --codebuddy-path overrides executable for codebuddy provider
         executable = args.executable
-        if args.codebuddy_path and not executable:
-            executable = args.codebuddy_path
-            if args.provider == 'codebuddy':
-                pass  # Use codebuddy_path as executable
-            else:
-                logger.warning(
-                    "--codebuddy-path is deprecated when using --provider. "
-                    "Use --executable instead."
-                )
 
         # Parse model spec into role→model dict
         model_roles = parse_model_spec(args.model or "")
@@ -1381,7 +1588,7 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
             workspace=args.workspace,
             timeout=effective_session_timeout,
             bash_timeout=effective_bash_timeout,
-            log_dir=_log_dir_raw,
+            session_dir=_session_dir,
             ideas_file=args.ideas,
             idle_interval=args.idle_interval,
             use_cli=args.use_cli,

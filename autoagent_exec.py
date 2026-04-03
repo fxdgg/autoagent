@@ -30,9 +30,6 @@ Examples:
 Internal invocation (by the wrapper script, not by the AI directly):
     python autoagent_exec.py --log-dir <dir> --task-id <id> [--fast-fail-timeout <s>] --cmd "<command>"
 
-Legacy invocation (backward compatible):
-    python autoagent_exec.py --log-dir <dir> --task-id <id> [--fast-fail-timeout <s>] -- <command...>
-
 Signal file: <log-dir>/lr_tasks/lr_<task_id>_signal.json
 Output log:  <log-dir>/lr_tasks/lr_<task_id>_output.log
 """
@@ -40,7 +37,6 @@ Output log:  <log-dir>/lr_tasks/lr_<task_id>_output.log
 import argparse
 import json
 import os
-import shlex
 import subprocess
 import sys
 import time
@@ -110,27 +106,11 @@ def parse_args():
         default=None,
         help=argparse.SUPPRESS,
     )
-    # Everything after '--' is the command (legacy mode)
-    args, remaining = parser.parse_known_args()
+    args = parser.parse_args()
 
-    # Remove leading '--' if present
-    if remaining and remaining[0] == "--":
-        remaining = remaining[1:]
-
-    if args.cmd:
-        # --cmd mode: the wrapper script passes the entire command line
-        # as a single pre-joined string.  Use it verbatim so that shell
-        # operators (&&, |, ;, etc.) are preserved.
-        args.command_str = args.cmd
-    elif remaining:
-        # Legacy mode: command tokens passed after '--'.
-        # Re-join them into a shell string.
-        if os.name == "nt":
-            args.command_str = subprocess.list2cmdline(remaining)
-        else:
-            args.command_str = shlex.join(remaining)
-    else:
-        parser.error("No command specified. Append the command after the script path.")
+    if not args.cmd:
+        parser.error("No command specified. Use --cmd '<command>'.")
+    args.command_str = args.cmd
 
     return args
 
@@ -160,6 +140,29 @@ def main():
     # File paths (all lr_ files go into the lr_tasks subdirectory)
     signal_file = os.path.join(lr_tasks_dir, f"lr_{task_id}_signal.json")
     output_log = os.path.join(lr_tasks_dir, f"lr_{task_id}_output.log")
+
+    # ── Guard: reject if a task is already running for this task_id ──
+    # This prevents the AI from accidentally launching a second background
+    # task in the same session, which would cause the first task's results
+    # to be lost (AutoAgent only polls one signal file per task_id).
+    if os.path.isfile(signal_file):
+        try:
+            with open(signal_file, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+            if existing.get("status") == "running":
+                existing_pid = existing.get("pid", "?")
+                existing_cmd = existing.get("command", "?")
+                print(
+                    f"[ERROR] A long-running task is already active for task-id '{task_id}'.\n"
+                    f"   Existing PID: {existing_pid}\n"
+                    f"   Existing command: {existing_cmd}\n"
+                    f"\n"
+                    f"   It is not allowed to have two long-running tasks in parallel.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        except (json.JSONDecodeError, OSError):
+            pass  # Corrupted or unreadable — proceed normally
 
     # Open output log file in binary mode so that the subprocess's raw
     # bytes (which may be GBK on Chinese Windows) are preserved as-is.

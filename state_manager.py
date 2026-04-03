@@ -21,16 +21,37 @@ logger = logging.getLogger(__name__)
 class StateManager:
     """
     Manages task execution state with YAML persistence.
-    
+
     State structure:
     {
         "tasks": {
             "1": {"status": "pending", "attempts": 0, ...},
             "2": {"status": "in_progress", ...},
+            "1.1@2.1": {"status": "completed", ...},  # round-scoped subtask
             ...
         }
     }
+
+    Round-scoped keys use the format ``task_id@round_label`` (e.g.,
+    ``"1.2@3.1"``).  These are internal bookkeeping entries for subtask
+    state within a specific round and are excluded from summary counts
+    and in-progress queries.
     """
+
+    # Separator used in round-scoped state keys.
+    ROUND_SEP = "@"
+
+    @staticmethod
+    def round_key(task_id: str, round_label: str | None) -> str:
+        """Build a round-scoped state key.
+
+        Returns ``"task_id@round_label"`` when *round_label* is given,
+        or the plain ``task_id`` string otherwise.
+        """
+        task_id = str(task_id)
+        if round_label:
+            return f"{task_id}{StateManager.ROUND_SEP}{round_label}"
+        return task_id
 
     def __init__(self, state_file: str = "todos_state.yaml"):
         """
@@ -182,7 +203,9 @@ class StateManager:
     def get_summary(self) -> dict:
         """
         Get a summary of all task states.
-        
+
+        Round-scoped keys (containing ``@``) are excluded from counts.
+
         Returns:
             dict: Summary with counts by status
         """
@@ -193,24 +216,30 @@ class StateManager:
             "completed": 0,
             "failed": 0,
         }
-        
+
         for task_id, task_state in self.state["tasks"].items():
+            if self.ROUND_SEP in task_id:
+                continue
             summary["total"] += 1
             status = task_state.get("status", "pending")
             if status in summary:
                 summary[status] += 1
-        
+
         return summary
 
     def get_in_progress_tasks(self) -> list:
         """
         Get list of task IDs that are currently in_progress.
-        
+
+        Round-scoped keys (containing ``@``) are excluded.
+
         Returns:
             list: List of task_id strings with status 'in_progress'
         """
         in_progress = []
         for task_id, task_state in self.state["tasks"].items():
+            if self.ROUND_SEP in task_id:
+                continue
             if task_state.get("status") == "in_progress":
                 in_progress.append(task_id)
         return in_progress
@@ -218,30 +247,49 @@ class StateManager:
     def record_interrupt(self, task_id: str, attempt: int = 0):
         """
         Record an interruption (e.g., Ctrl+C) in the task's history.
-        
+
+        Also records the interrupt on any round-scoped subtask keys
+        (``id@round``) that are currently ``in_progress``, so the
+        information is visible to the prompt builder on resume.
+
         Args:
             task_id: Task identifier
             attempt: Current attempt number (uses existing if not provided)
         """
         task_id = str(task_id)
-        if task_id not in self.state["tasks"]:
-            return
-        
-        task_state = self.state["tasks"][task_id]
-        current_attempt = task_state.get("attempts", 0)
-        if attempt == 0:
-            attempt = current_attempt
-        
-        entry = {
-            "attempt": attempt,
-            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "result": "interrupted",
-            "summary": "Interrupted by user (Ctrl+C)",
-        }
-        
-        if "history" not in self.state["tasks"][task_id]:
-            self.state["tasks"][task_id]["history"] = []
-        
-        self.state["tasks"][task_id]["history"].append(entry)
-        self.save_state()
-        logger.info(f"Recorded interrupt for task {task_id}")
+
+        # Collect keys to record: the task itself + any in-progress
+        # round-scoped subtasks that belong to it (e.g. "1.2@3.1" for
+        # parent task "1").
+        keys_to_record = []
+        if task_id in self.state["tasks"]:
+            keys_to_record.append(task_id)
+        # Find in-progress round-scoped keys whose base subtask id starts
+        # with the parent task id (e.g. "1." matches "1.2@3.1").
+        prefix = task_id + "."
+        for key, st in self.state["tasks"].items():
+            if self.ROUND_SEP not in key:
+                continue
+            base_id = key.split(self.ROUND_SEP)[0]
+            if (base_id == task_id or base_id.startswith(prefix)) and st.get("status") == "in_progress":
+                keys_to_record.append(key)
+
+        for key in keys_to_record:
+            task_state = self.state["tasks"][key]
+            current_attempt = task_state.get("attempts", 0)
+            a = attempt if attempt else current_attempt
+
+            entry = {
+                "attempt": a,
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "result": "interrupted",
+                "summary": "Interrupted by user (Ctrl+C)",
+            }
+
+            if "history" not in self.state["tasks"][key]:
+                self.state["tasks"][key]["history"] = []
+            self.state["tasks"][key]["history"].append(entry)
+
+        if keys_to_record:
+            self.save_state()
+            logger.info(f"Recorded interrupt for {keys_to_record}")

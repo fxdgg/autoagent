@@ -30,7 +30,7 @@ def build_long_running_prompt(
 
     The prompt is organised into clearly separated sections:
 
-    1. **Task** — core instructions (name, criteria, hint)
+    1. **Task** — core instructions (name, criteria, hint on every attempt)
     2. **Context** — background information (main goal, workflow, prev step)
     3. **Previous Attempts** — retry information (only when attempt > 1)
     4. **Constraints** — long-running reminder + timeout warnings
@@ -56,7 +56,7 @@ def build_long_running_prompt(
         f"Task: {subtask['name']}",
         f"Completion Criteria: {subtask['completion_criteria']}",
     ]
-    if subtask.get('initial_hint') and attempt == 1:
+    if subtask.get('initial_hint'):
         task_lines.append(f"Initial Hint: {subtask['initial_hint']}")
     parts.append("\n".join(task_lines))
 
@@ -88,13 +88,17 @@ def build_long_running_prompt(
         if history_section:
             retry_lines.append(history_section)
 
-        fallback = (
+        retry_lines.append(
             "The previous attempt failed. Please analyze what went wrong "
             "and adjust your command or approach."
         )
-        retry_lines.append(build_suggested_fix_section(parent_context, fallback_msg=fallback))
 
         parts.append("## Previous Attempts\n" + "\n\n".join(retry_lines))
+
+    # ── Section 3b: Failure Guidance (always show when available) ──
+    fix_section = build_suggested_fix_section(parent_context, fallback_msg="")
+    if fix_section:
+        parts.append("## Guidance from Previous Failure\n" + fix_section)
 
     # ── Section 4: Constraints ───────────────────────────────────────
     constraint_lines = []
@@ -122,12 +126,8 @@ def build_long_running_prompt(
 
 
 def build_long_running_analysis_prompt(
-    subtask: dict,
-    status: str,
     output_log: str,
     command_info: str = "",
-    exit_code_info: str = "",
-    parent_context: dict = None,
 ) -> str:
     """Build the prompt for AI to analyse a completed long-running task.
 
@@ -135,12 +135,8 @@ def build_long_running_analysis_prompt(
     is preserved — it already knows the task name, criteria, workflow, etc.
 
     Args:
-        subtask: Subtask configuration dict (unused, kept for API compat).
-        status: Task status string (unused, kept for API compat).
         output_log: Path to the output log file (raw, will be normalised).
         command_info: Optional formatted string like ``"\\nCommand: ..."``
-        exit_code_info: Optional formatted string (unused, kept for API compat).
-        parent_context: Optional context (unused, kept for API compat).
     """
     output_log_display = output_log.replace("\\", "/")
 

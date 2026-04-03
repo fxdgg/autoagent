@@ -57,7 +57,8 @@ autoagent/
 │   └── simulation_test/         # 模拟测试（使用 TestProvider）
 │
 └── <log_dir>/                   # 日志根目录（默认 .autoagent，相对 CWD）
-    └── <project>_<random>/      # 项目专属会话目录（由 .autoagent_log 指定）
+    ├── sessions.csv                    # 会话注册表（Tab 分隔：session_id, workspace, created_at）
+    └── <project>_<random8>/     # 项目专属会话目录（由 .autoagent_log 指定）
 │       ├── orchestrator.log             # Orchestrator 运行日志
 │       ├── todos_state.yaml             # 任务状态（自动生成）
 │       ├── plans_state.yaml             # Ideas 状态跟踪（含 plan_tasks 断点续传数据）
@@ -139,6 +140,9 @@ autoagent/
   # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
   backoff_max_wait: 300
 
+  # Maximum retries for the ideas plan phase (each retry uses a fresh AI session).
+  max_plan_retries: 3
+
   # Maximum number of AI review rounds when processing ideas into TODO tasks.
   max_review_rounds: 5
 
@@ -146,12 +150,14 @@ autoagent/
   max_validation_retries: 2
 
   # Truncation limits for auto-built prompts (in characters)
-  # Only 3 keys are used:
+  # 4 keys are used:
   #   previous_subtask_summary: for subtask summaries, error text, log files
+  #   previous_attempt_output: for previous attempt's full AI output on retry
   #   history_summary: for history attempt summaries, ai_reasoning
   #   max: defensive upper bound for fields that should not normally be truncated
   truncation_limits:
     previous_subtask_summary: 4000
+    previous_attempt_output: 4000
     history_summary: 300
     max: 50000
 
@@ -182,9 +188,10 @@ autoagent/
   - `bash_timeout`: 无新输出超时配置值（检测 AI 卡住）
   - `fast_fail_timeout`: autoagent-exec 快速失败超时时间，命令在此时间内退出则立即报告结果，否则转为后台运行（代码兜底值 10 秒，shipped config.yaml 中设为 30 秒）
   - `backoff_max_wait`: AI CLI 连续失败时的最大退避等待时间（指数退避：5s→10s→20s→...→上限）
+  - `max_plan_retries`: Ideas plan 阶段的最大重试次数（默认 3）。每次重试使用全新 AI session。超过上限则跳过该 idea（保持 `in_progress` 状态，下次运行时重试）
   - `max_review_rounds`: Ideas 拆解时 AI 审查的最大轮数（代码兜底值 3，shipped config.yaml 中设为 5）
   - `max_validation_retries`: Ideas 拆解时 schema 校验的最大重试次数（默认 2）
-  - `max_marker_nudges`: 当 AI 忘记输出完成状态标记时的最大 nudge 次数（默认 2）。在同一 session 中发送轻量级追问，耗尽后回退到正常 retry 循环
+  - `max_marker_nudges`: 当 AI 未输出完成状态标记时的最大 nudge 次数（默认 2）。在同一 session 中发送轻量级追问（允许 AI 继续工作），耗尽后回退到正常 retry 循环。发送 nudge 前会先检查信号文件，若已有后台任务在运行则跳过 nudge 直接走 long_running 流程
   - `truncation_limits`: 控制各类提示词字段的最大字符数，防止上下文过长
   - `preset`: 定义常用参数预设，通过 `--preset <name>` 快速切换配置
 - **变量替换**：Preset 中支持 `${workspace}` 变量，会被替换为当前工作目录
@@ -242,6 +249,7 @@ autoagent/
 #### autoagent_exec.py
 - **作用**：long_running 任务启动器
 - **用途**：AI 通过 wrapper 脚本（`autoagent-exec.bat` / `autoagent-exec.sh`）调用此脚本启动长时间命令，支持快速失败检测 + 信号文件通信 + 智能输出（短输出内联打印，长输出只给路径）
+- **重复启动防护**：启动命令前检查信号文件，如果同一 task-id 已有 `status="running"` 的任务则拒绝启动（exit 1），防止 AI 在同一 session 中重复启动后台任务
 
 #### codebuddy_client.py
 - **作用**：统一 AI 客户端封装
@@ -249,10 +257,15 @@ autoagent/
   - `AIClient`：CLI 模式客户端（通过子进程调用 AI CLI 工具）
   - `AIClientSDK`：SDK 模式客户端（通过 CodeBuddy Agent SDK 调用）
   - `AIClientTest`：测试模式客户端（使用 TestProvider 的预定义响应）
+- **错误处理**：
+  - `_parse_cli_error()`：结构化解析 JSON 错误（支持 Anthropic 嵌套格式、扁平格式、纯文本 fallback）
+  - `system/api_retry` 事件实时显示（rate_limit、server_error 等 CLI 内部重试进度）
+  - `result` 事件 `is_error` 传播（避免空 response 丢失错误原因）
 
 #### state_manager.py
 - **作用**：状态持久化管理
 - **核心类**：`StateManager` — 管理任务状态的加载、保存、更新，写入操作通过 `threading.Lock` 保证线程安全
+- **Round-scoped keys**：子任务状态使用 `task_id@round_label` 格式的 key（如 `"1.2@3.1"`），实现精确的断点续传。`*_once` 类型使用 plain key 跨轮次共享。`round_key()` 静态方法构造 key，`get_summary()`/`get_in_progress_tasks()` 自动跳过 `@` key
 
 #### conversation_logger.py
 - **作用**：对话日志记录
@@ -277,7 +290,7 @@ autoagent/
 - **作用**：共享常量和工具函数
 - **内容**：角色定义（coding agent、task planner、task reviewer）、状态标记指令（✅/❌ completed/not completed）、通用辅助函数（构建历史记录、兄弟任务上下文、autoagent-exec 说明等）
 - **核心函数**：
-  - `build_system_prompt_coding_agent(exec_script_path, supports_system_prompt, task)`: 构建编码代理的系统提示词（含状态标记指令和 autoagent-exec 使用说明）
+  - `build_system_prompt_coding_agent(exec_script_path, supports_system_prompt)`: 构建编码代理的系统提示词（含状态标记指令、自主行动指令和 autoagent-exec 使用说明）
   - `load_system_prompt_prefix()`: 从 config.yaml 加载并缓存 `system_prompt_prefix`
   - `get_system_prompt_prefix(task)`: 获取有效的系统提示词前缀（任务级覆盖全局）
   - `apply_system_prompt_prefix(parts, task)`: 将前缀插入到 prompt 部件列表的开头
@@ -287,7 +300,6 @@ autoagent/
   - `build_sibling_context(task, parent_context)`: 构建兄弟任务上下文信息
   - `build_history_section(history, extract_summary_fn)`: 构建历史尝试记录
   - `build_suggested_fix_section(parent_context, fallback_msg)`: 构建修复建议
-  - `build_autoagent_exec_note(exec_script_path)`: 构建 autoagent-exec 使用说明（已废弃，保留向后兼容）
   - `build_previous_subtask_section(parent_context)`: 构建前一子任务摘要（用于上下文隔离的子任务间传递信息）
   - `build_long_running_reminder(exec_script_path)`: 构建长时间任务简短提醒
 
@@ -309,7 +321,7 @@ autoagent/
 
 #### prompts/marker_nudge.py
 - **作用**：Marker nudge 机制的 prompt 常量和配置加载
-- **内容**：当 AI 完成工作但忘记输出完成状态标记（✅/❌/⏳）时，发送轻量级追问 prompt 要求 AI 自我评估
+- **内容**：当 AI 未输出完成状态标记（✅/❌/⏳）时（可能是遗漏，也可能是 CLI/SDK 异常中断），发送轻量级追问 prompt。允许 AI 继续未完成的工作，但禁止重复执行已跑过的命令
 - **核心常量**：
   - `MARKER_NUDGE_PROMPT`: nudge 追问的 prompt 文本
   - `MAX_MARKER_NUDGES`: 从 `config.yaml` 加载的最大 nudge 次数（默认 2）
@@ -329,9 +341,15 @@ autoagent/
 - **创建方式**：用户复制 `todos.example.yaml` 并修改
 
 #### .autoagent_log（自动生成）
-- **作用**：记录项目对应的日志子文件夹名称
-- **内容**：如 `cufftdx_optimization_ko53bi1b`
-- **用途**：确保同一项目始终写入同一个日志子文件夹
+- **作用**：记录当前活跃会话的目录名称
+- **内容**：如 `cufftdx_optimization_2xrsx0i7`
+- **用途**：`--continue` 时读取此文件定位会话目录；`--resume` 时自动更新此文件
+
+#### sessions.csv（自动生成）
+- **位置**：`<log_dir>/sessions.csv`
+- **作用**：会话注册表，记录所有历史会话
+- **格式**：Tab 分隔，包含 `session_id`、`workspace`、`created_at` 三列
+- **用途**：`--list-sessions` 列出所有会话；`--resume` 搜索匹配会话（支持完整名称或短 ID 后缀匹配）
 
 ## 📝 配置文件详解
 
@@ -402,7 +420,7 @@ tasks:
 
 | 额外字段 | 类型 | 必填 | 说明 |
 |---------|------|------|------|
-| `initial_hint` | string | 否 | 初始提示（给 AI 的参考信息） |
+| `initial_hint` | string | 否 | 静态上下文提示（每次尝试都会传入） |
 
 #### 嵌套任务 (type: nested)
 
@@ -423,8 +441,8 @@ tasks:
 
 | 额外字段 | 类型 | 必填 | 说明 |
 |---------|------|------|------|
-| `initial_hint` | string | 否 | 初始提示（给 AI 的参考信息，如要运行的命令） |
-| `command` | string | 否 | （已废弃）旧版配置字段。现在 AI 会根据任务描述自主决定要运行的命令，并通过 `autoagent-exec` 启动 |
+| `initial_hint` | string | 否 | 静态上下文提示（每次尝试都会传入） |
+| `command` | string | 否 | 可选的命令提示。AI 会根据任务描述自主决定要运行的命令，并通过 `autoagent-exec` 启动 |
 
 ## 📊 状态值说明
 
