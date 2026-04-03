@@ -104,9 +104,20 @@ def build_simple_task_prompt(
         if history_section:
             retry_lines.append(history_section)
 
-        retry_lines.append(build_suggested_fix_section(parent_context))
+        retry_lines.append(
+            "Please analyze what went wrong and try a different approach."
+        )
 
         parts.append("## Previous Attempts\n" + "\n\n".join(retry_lines))
+
+    # ── Section 3b: Failure Guidance (always show when available) ──
+    # suggested_fix comes from the parent's failure_analysis or
+    # main_task_evaluation.  It must be shown even on the first attempt
+    # of a new round (attempt == 1) because failure_analysis creates a
+    # new round_label, resetting the attempt counter to 1.
+    fix_section = build_suggested_fix_section(parent_context, fallback_msg="")
+    if fix_section:
+        parts.append("## Guidance from Previous Failure\n" + fix_section)
 
     # ── Section 4: Constraints ───────────────────────────────────────
     constraint_lines = []

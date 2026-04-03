@@ -306,7 +306,8 @@ def build_history_section(history: list, extract_summary_fn) -> str:
                 history_lines.append(f"    Error: {error_msg[:limits.get('history_summary')]}")
         elif result_str == 'not_completed':
             summary = h.get('summary', '')
-            if summary:
+            # Skip "no marker found" entries — they add noise, not guidance
+            if summary and 'cannot find' not in summary.lower():
                 history_lines.append(f"    Summary: {summary[:limits.get('history_summary')]}")
     if not history_lines:
         return ""

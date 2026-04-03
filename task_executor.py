@@ -1181,12 +1181,28 @@ class NestedTaskExecutor:
                 "ai_reasoning": st_state.get('ai_reasoning', ''),
             })
         
-        # Include previous AI decisions for context
+        # Include previous AI decisions for context — only from the current
+        # main round (earlier rounds are irrelevant and waste tokens).
         parent_state = state_manager.get_task_state(task_id)
         prev_decisions = parent_state.get('ai_decisions', [])
         prev_decisions_text = ""
         if prev_decisions:
-            recent_decisions = prev_decisions[-3:]
+            # Extract current main round from round_label (e.g. "3.2" → 3)
+            current_main_round = None
+            if round_label:
+                try:
+                    current_main_round = int(round_label.split('.')[0])
+                except (ValueError, IndexError):
+                    pass
+            # Filter to decisions from the current main round only
+            if current_main_round is not None:
+                round_decisions = [
+                    d for d in prev_decisions
+                    if d.get('_main_round', d.get('attempt', 0)) == current_main_round
+                ]
+            else:
+                round_decisions = prev_decisions
+            recent_decisions = round_decisions[-3:]
             decision_lines = []
             for d in recent_decisions:
                 decision_lines.append(
@@ -1195,12 +1211,16 @@ class NestedTaskExecutor:
                     f"    Fix attempted: {d.get('suggested_fix', 'N/A')[:limits.get('max')]}"
                 )
             prev_decisions_text = "\n".join(decision_lines)
-        
+
+        # Build error text: prefer logs, then AI response, then output summary
+        error_text = result.logs or result.response_text or result.output
+        error_text = self._truncate_error(error_text)
+
         prompt = build_failure_analysis_prompt(
             task=task,
             failed_subtask=failed_subtask,
             all_subtasks=all_subtasks,
-            error_text=self._truncate_error(result.logs or result.output),
+            error_text=error_text,
             error_type=result.error_type or 'unknown',
             task_history_text=self._format_task_history(task_history),
             prev_decisions_text=prev_decisions_text,
@@ -1352,13 +1372,30 @@ class NestedTaskExecutor:
     ):
         """Copy completed subtask states from *old_round_label* to *new_round_label*.
 
-        Only subtasks **before** *retry_from* are copied.  ``*_once``
-        subtasks are skipped (they use plain keys shared across rounds).
+        Subtasks **before** *retry_from* are fully copied (if completed).
+        The *retry_from* subtask itself gets only its ``history`` list
+        carried forward (status stays ``pending``, attempts stays ``0``)
+        so the AI can see what failed in the previous round.
+
+        ``*_once`` subtasks are skipped (they use plain keys shared
+        across rounds).
         """
         retry_from = str(retry_from)
         for subtask in subtasks:
             st_id = str(subtask['id'])
             if st_id == retry_from:
+                # Carry forward only the history for the retry target
+                if not subtask.get('type', '').endswith('_once'):
+                    old_key = StateManager.round_key(st_id, old_round_label)
+                    old_state = state_manager.get_task_state(old_key)
+                    old_history = old_state.get('history', [])
+                    if old_history:
+                        new_key = StateManager.round_key(st_id, new_round_label)
+                        state_manager.state["tasks"][new_key] = {
+                            "status": "pending",
+                            "attempts": 0,
+                            "history": list(old_history),
+                        }
                 break
             if subtask.get('type', '').endswith('_once'):
                 continue
@@ -1695,12 +1732,15 @@ class LoopingTaskExecutor:
                 history_lines.append(f"    Summary: {h['ai_reasoning'][:limits.get('history_summary')]}")
         history_text = "\n".join(history_lines)
 
-        # Include previous AI decisions for context
+        # Include previous AI decisions for context — only from the current
+        # loop iteration (earlier loops are irrelevant and waste tokens).
         parent_state = state_manager.get_task_state(task_id)
         prev_decisions = parent_state.get('ai_decisions', [])
         prev_decisions_text = ""
         if prev_decisions:
-            recent_decisions = prev_decisions[-3:]
+            # Filter to decisions from the current loop only
+            loop_decisions = [d for d in prev_decisions if d.get('loop') == loop_idx]
+            recent_decisions = loop_decisions[-3:]
             decision_lines = []
             for d in recent_decisions:
                 decision_lines.append(
@@ -1710,11 +1750,15 @@ class LoopingTaskExecutor:
                 )
             prev_decisions_text = "\n".join(decision_lines)
 
+        # Build error text: prefer logs, then AI response, then output summary
+        error_text = result.logs or result.response_text or result.output
+        error_text = self._truncate_error(error_text)
+
         prompt = build_failure_analysis_prompt(
             task=task,
             failed_subtask=failed_subtask,
             all_subtasks=all_subtasks,
-            error_text=self._truncate_error(result.logs or result.output),
+            error_text=error_text,
             error_type=result.error_type or 'unknown',
             task_history_text=history_text,
             prev_decisions_text=prev_decisions_text,
@@ -1770,13 +1814,30 @@ class LoopingTaskExecutor:
     ):
         """Copy completed subtask states from *old_round_label* to *new_round_label*.
 
-        Only subtasks **before** *retry_from* are copied.  ``*_once``
-        subtasks are skipped (they use plain keys shared across rounds).
+        Subtasks **before** *retry_from* are fully copied (if completed).
+        The *retry_from* subtask itself gets only its ``history`` list
+        carried forward (status stays ``pending``, attempts stays ``0``)
+        so the AI can see what failed in the previous round.
+
+        ``*_once`` subtasks are skipped (they use plain keys shared
+        across rounds).
         """
         retry_from = str(retry_from)
         for subtask in subtasks:
             st_id = str(subtask['id'])
             if st_id == retry_from:
+                # Carry forward only the history for the retry target
+                if not subtask.get('type', '').endswith('_once'):
+                    old_key = StateManager.round_key(st_id, old_round_label)
+                    old_state = state_manager.get_task_state(old_key)
+                    old_history = old_state.get('history', [])
+                    if old_history:
+                        new_key = StateManager.round_key(st_id, new_round_label)
+                        state_manager.state["tasks"][new_key] = {
+                            "status": "pending",
+                            "attempts": 0,
+                            "history": list(old_history),
+                        }
                 break
             if subtask.get('type', '').endswith('_once'):
                 continue

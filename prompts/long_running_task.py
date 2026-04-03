@@ -88,13 +88,17 @@ def build_long_running_prompt(
         if history_section:
             retry_lines.append(history_section)
 
-        fallback = (
+        retry_lines.append(
             "The previous attempt failed. Please analyze what went wrong "
             "and adjust your command or approach."
         )
-        retry_lines.append(build_suggested_fix_section(parent_context, fallback_msg=fallback))
 
         parts.append("## Previous Attempts\n" + "\n\n".join(retry_lines))
+
+    # ── Section 3b: Failure Guidance (always show when available) ──
+    fix_section = build_suggested_fix_section(parent_context, fallback_msg="")
+    if fix_section:
+        parts.append("## Guidance from Previous Failure\n" + fix_section)
 
     # ── Section 4: Constraints ───────────────────────────────────────
     constraint_lines = []
