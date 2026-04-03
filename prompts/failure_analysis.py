@@ -20,10 +20,10 @@ def build_failure_analysis_prompt(
     failed_subtask: dict,
     all_subtasks: list,
     error_text: str,
-    error_type: str,
     task_history_text: str,
     prev_decisions_text: str,
     loop_info: Optional[Tuple[int, int]] = None,
+    previous_context: str = "",
 ) -> str:
     """Build the failure-analysis prompt for both *nested* and *looping* tasks.
 
@@ -31,13 +31,15 @@ def build_failure_analysis_prompt(
         task: Parent task configuration dict.
         failed_subtask: The subtask that failed.
         all_subtasks: All sibling subtasks (used for available IDs).
-        error_text: Truncated error output.
-        error_type: Error classification string.
+        error_text: The failed subtask's AI output (truncated).
         task_history_text: Pre-formatted subtask status block.
         prev_decisions_text: Pre-formatted previous AI decisions block
             (may be empty).
         loop_info: For looping tasks, a tuple of (loop_idx, repeat_count).
             None for nested tasks.
+        previous_context: Summary from the previous (successful) subtask,
+            providing context about the state of the project before the
+            failure occurred.  May be empty.
     """
     failed_id = str(failed_subtask['id'])
     available_ids = [str(s['id']) for s in all_subtasks]
@@ -60,13 +62,17 @@ Failed Subtask:
   ID: {failed_id}
   Name: {failed_subtask['name']}
   Type: {failed_subtask['type']}
-  Completion Criteria: {failed_subtask.get('completion_criteria', 'N/A')}
-  Error Type: {error_type}"""
+  Completion Criteria: {failed_subtask.get('completion_criteria', 'N/A')}"""
 
     parts.append(failed_section)
 
-    # -- ## Error Output --
-    parts.append(f"## Error Output\n\n{error_text}")
+    # -- ## Previous Step Context (conditional) --
+    if previous_context:
+        parts.append(f"## Previous Step Context\n\n{previous_context}")
+
+    # -- ## Failed Subtask Output --
+    if error_text and error_text != "(no error output)":
+        parts.append(f"## Failed Subtask Output\n\n{error_text}")
 
     # -- ## All Subtasks Status --
     parts.append(f"## All Subtasks Status\n\n{task_history_text}")

@@ -1060,6 +1060,7 @@ class NestedTaskExecutor:
                         client, task, subtask, subtasks, result, state_manager,
                         conv_logger=conv_logger, round_num=attempts,
                         round_label=round_label,
+                        previous_context=previous_subtask_summary,
                     )
 
                     # Reset subtasks based on AI decision
@@ -1150,11 +1151,11 @@ class NestedTaskExecutor:
 
     def _ai_analyze_failure(
         self, client, task, failed_subtask, all_subtasks, result, state_manager,
-        conv_logger=None, round_num=1, round_label=None,
+        conv_logger=None, round_num=1, round_label=None, previous_context="",
     ) -> dict:
         """
         AI Decision Point 1: Analyze subtask failure.
-        
+
         Returns:
             dict with keys: analysis, retry_from, suggested_fix
         """
@@ -1223,10 +1224,10 @@ class NestedTaskExecutor:
             failed_subtask=failed_subtask,
             all_subtasks=all_subtasks,
             error_text=error_text,
-            error_type=result.error_type or 'unknown',
             task_history_text=self._format_task_history(task_history),
             prev_decisions_text=prev_decisions_text,
             loop_info=None,
+            previous_context=self._truncate_error(previous_context) if previous_context else "",
         )
         print(f"\n   🤖 [AI Decision Point 1: Failure Analysis]")
         
@@ -1658,6 +1659,7 @@ class LoopingTaskExecutor:
                         client, task, subtask, subtasks, result, state_manager,
                         conv_logger=conv_logger, loop_idx=loop_idx,
                         round_label=round_label,
+                        previous_context=previous_subtask_summary,
                     )
 
                     retry_from = ai_decision.get('retry_from', subtask_id)
@@ -1691,7 +1693,7 @@ class LoopingTaskExecutor:
 
     def _ai_analyze_failure(
         self, client, task, failed_subtask, all_subtasks, result, state_manager,
-        conv_logger=None, loop_idx=1, round_label=None,
+        conv_logger=None, loop_idx=1, round_label=None, previous_context="",
     ) -> dict:
         """
         AI analyzes subtask failure and decides retry strategy.
@@ -1761,10 +1763,10 @@ class LoopingTaskExecutor:
             failed_subtask=failed_subtask,
             all_subtasks=all_subtasks,
             error_text=error_text,
-            error_type=result.error_type or 'unknown',
             task_history_text=history_text,
             prev_decisions_text=prev_decisions_text,
             loop_info=(loop_idx, task.get('repeat_count', 1)),
+            previous_context=self._truncate_error(previous_context) if previous_context else "",
         )
 
         print(f"\n   🤖 [AI: Failure Analysis (loop {loop_idx})]")
