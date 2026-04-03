@@ -537,13 +537,23 @@ class SimpleTaskExecutor:
 **执行逻辑**：
 
 ```python
-attempts = 0
-max_attempts = task.get('max_attempts', 5)
+should_reset = True
+last_ai_output = None
 
 while attempts < max_attempts:
+    # 根据失败类型决定是否重置 session
+    if attempts > 1 and should_reset:
+        client.reset_session()
+        # 将 last_ai_output 注入 prompt 的 "Previous Attempt Output" section
+
     result = client.ask(prompt)
+    last_ai_output = result
+
     if is_completed(result):
         return True
+
+    # BashTimeoutError → should_reset = False（session 存活，in-session follow-up）
+    # SessionTimeoutError / not_completed / 其他 → should_reset = True
     attempts += 1
 
 return False
@@ -570,9 +580,9 @@ class LoopingTaskExecutor:
 
 ```python
 for loop in range(task['repeat_count']):
-    # 每轮重置所有子任务状态
-    reset_subtask_states(task)
-    
+    # 每轮使用独立的 round-scoped state keys（如 1.1@2.1）
+    # 无需 reset，新 round 的 key 自动为 pending
+
     for subtask in task['subtasks']:
         result = subtask_executor.execute(subtask, client)
         if not result.success:
@@ -1542,7 +1552,7 @@ orchestrator.run_with_idle()  # 不会退出，直到 Ctrl+C
 | **AIProvider** | AI CLI 工具抽象基类、命令构造 |
 | **CodeBuddyProvider / ClaudeCodeProvider / GeminiCLIProvider / OpenCodeProvider** | 具体 AI 工具的命令构造 |
 | **AIClient** (别名 CodeBuddyClient) | AI 调用、Context 管理、stream-json 解析 |
-| **SimpleTaskExecutor** | 简单任务执行（自循环完成检测） |
+| **SimpleTaskExecutor** | 简单任务执行（自循环完成检测，按失败类型决定是否 reset session） |
 | **NestedTaskExecutor** | 嵌套任务执行、AI 决策调度 |
 | **LoopingTaskExecutor** | 循环任务执行（固定 N 次迭代） |
 | **SubtaskExecutor** | 子任务分发执行（接收 session_dir） |

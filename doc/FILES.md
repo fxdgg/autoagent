@@ -146,12 +146,14 @@ autoagent/
   max_validation_retries: 2
 
   # Truncation limits for auto-built prompts (in characters)
-  # Only 3 keys are used:
+  # 4 keys are used:
   #   previous_subtask_summary: for subtask summaries, error text, log files
+  #   previous_attempt_output: for previous attempt's full AI output on retry
   #   history_summary: for history attempt summaries, ai_reasoning
   #   max: defensive upper bound for fields that should not normally be truncated
   truncation_limits:
     previous_subtask_summary: 4000
+    previous_attempt_output: 4000
     history_summary: 300
     max: 50000
 

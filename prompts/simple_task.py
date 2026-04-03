@@ -8,6 +8,7 @@ from prompts.shared import (
     build_sibling_context,
     build_history_section,
     build_previous_subtask_section,
+    build_previous_attempt_output_section,
     build_suggested_fix_section,
     build_timeout_guidance,
 )
@@ -23,6 +24,7 @@ def build_simple_task_prompt(
     timeout_type: str = None,
     exec_script_path: str = "",
     project_description: str = "",
+    previous_attempt_output: str = None,
 ) -> str:
     """Build the prompt sent to AI for a simple task execution.
 
@@ -53,6 +55,9 @@ def build_simple_task_prompt(
             convenience script (forward-slash normalised).
         project_description: Optional root-level description from
             ``todos.yaml`` providing project-wide context.
+        previous_attempt_output: Full AI output from the previous attempt
+            (truncated).  Injected when the session was reset so the AI
+            can see what it already did.
     """
     parts = []
 
@@ -88,6 +93,11 @@ def build_simple_task_prompt(
     # ── Section 3: Previous Attempts (retry only) ────────────────────
     if attempt > 1:
         retry_lines = []
+
+        # Full output from the previous attempt (when session was reset)
+        prev_output = build_previous_attempt_output_section(previous_attempt_output)
+        if prev_output:
+            retry_lines.append(prev_output)
 
         history = state.get('history', [])
         history_section = build_history_section(history, extract_summary_fn)

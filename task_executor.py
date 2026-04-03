@@ -279,26 +279,27 @@ class SimpleTaskExecutor:
         attempts = current_state.get('attempts', 0)
         
         logger.info(f"Executing simple task {task_id}: {task['name']}")
-        
+
         last_timeout_error = None  # Track if previous attempt timed out
         last_timeout_type = None   # "bash" or "session"
+        should_reset = True        # Whether to reset session before next retry
+        last_ai_output = None      # Full AI output from previous attempt
 
         while attempts < max_attempts:
             attempts += 1
 
-            # Reset session before each retry attempt to prevent unbounded
-            # context growth.  The full task description and Previous Attempts
-            # section is included in every prompt, so the AI loses nothing
-            # important by starting a fresh session.  Without this reset,
-            # turns accumulate across retries (75 → 100 → 373 → 500+ turns)
-            # and the AI's output gets truncated before it can emit the
-            # completion marker — creating a vicious cycle.
-            if attempts > 1:
+            # Reset session before retry — but skip reset when the previous
+            # failure was a BashTimeoutError (the session is still alive and
+            # the AI's work context is preserved; we just need to tell it
+            # the command was killed).
+            if attempts > 1 and should_reset:
                 client.reset_session()
                 logger.info(
                     f"Task {task_id}: reset session before retry attempt {attempts} "
                     f"(preventing context accumulation)"
                 )
+            # Default: next retry will reset (overridden by BashTimeoutError handler)
+            should_reset = True
 
             state_manager.mark_task_status(
                 sk, "in_progress",
@@ -311,14 +312,40 @@ class SimpleTaskExecutor:
             # Re-fetch state each attempt so history from previous attempts is visible
             current_state = state_manager.get_task_state(sk)
 
-            # Build prompt (with timeout feedback if previous attempt timed out)
-            prompt, exec_script_path = self._build_prompt(
-                task, attempts, current_state,
-                parent_context=parent_context,
-                timeout_feedback=last_timeout_error,
-                timeout_type=last_timeout_type,
-                project_description=project_description,
-            )
+            # Build prompt.  When retrying after a session reset, include
+            # the previous attempt's full AI output so the AI can see what
+            # it already did.  When continuing in the same session (e.g.
+            # after BashTimeoutError), use a lightweight in-session follow-up
+            # instead of rebuilding the full task prompt.
+            _log_round = (parent_context or {}).get('round_label') or str(attempts)
+            if attempts > 1 and last_timeout_type == "bash" and not should_reset:
+                # In-session continuation after BashTimeoutError — the AI's
+                # context is intact, just tell it what happened.
+                prompt = (
+                    "Your previous command was terminated because it produced "
+                    "no output for an extended period.\n"
+                    "The command was likely too long-running for direct Bash "
+                    "execution. Please use autoagent-exec for long-running "
+                    "commands (see system instructions).\n"
+                    "Continue working on the task from where you left off.\n"
+                    "When done, end with: ✅ completed or ❌ not completed: <reason>"
+                )
+                exec_script_path = ""
+                if self.session_dir:
+                    exec_script_path = _write_autoagent_exec_script(
+                        session_dir=self.session_dir,
+                        task_id=task_id,
+                        fast_fail_timeout=_load_fast_fail_timeout(),
+                    )
+            else:
+                prompt, exec_script_path = self._build_prompt(
+                    task, attempts, current_state,
+                    parent_context=parent_context,
+                    timeout_feedback=last_timeout_error,
+                    timeout_type=last_timeout_type,
+                    project_description=project_description,
+                    previous_attempt_output=last_ai_output,
+                )
             last_timeout_error = None  # Reset after injecting into prompt
             last_timeout_type = None
             try:
@@ -330,10 +357,6 @@ class SimpleTaskExecutor:
                 )
                 # Always prepend system_prompt_prefix to user prompt
                 effective_prompt = prepend_system_prompt_prefix(prompt, task)
-                # Determine round label for log file naming:
-                # - Subtasks: use parent's round_label (internal retries → same file)
-                # - Top-level: each attempt → own file
-                _log_round = (parent_context or {}).get('round_label') or str(attempts)
                 if conv_logger:
                     conv_logger.log_prompt(
                         task_id=task_id,
@@ -349,6 +372,7 @@ class SimpleTaskExecutor:
                     system_prompt=system_prompt,
                 )
                 self.last_response_text = result
+                last_ai_output = result  # Save for next retry's prompt
 
                 # Append response to log AFTER AI returns
                 if conv_logger:
@@ -445,11 +469,16 @@ class SimpleTaskExecutor:
                 if isinstance(e, BashTimeoutError):
                     last_timeout_error = str(e)
                     last_timeout_type = "bash"
-                    print(f"   ⏰ Bash timeout detected — next attempt will include long-running task guidance")
+                    should_reset = False  # Session still alive — continue in-session
+                    last_ai_output = None  # Not needed (AI still has context)
+                    print(f"   ⏰ Bash timeout detected — will continue in same session")
                 elif isinstance(e, SessionTimeoutError):
                     last_timeout_error = str(e)
                     last_timeout_type = "session"
-                    print(f"   ⏰ Session timeout detected — next attempt will continue where left off")
+                    should_reset = True  # Session killed — must reset
+                    print(f"   ⏰ Session timeout detected — next attempt will start fresh with previous output")
+                else:
+                    should_reset = True  # Other errors — reset
                 # Append error as response (prompt was already logged above)
                 if conv_logger:
                     conv_logger.log_response(
@@ -474,7 +503,7 @@ class SimpleTaskExecutor:
         )
         return False
 
-    def _build_prompt(self, task: dict, attempt: int, state: dict, parent_context: dict = None, timeout_feedback: str = None, timeout_type: str = None, project_description: str = "") -> tuple:
+    def _build_prompt(self, task: dict, attempt: int, state: dict, parent_context: dict = None, timeout_feedback: str = None, timeout_type: str = None, project_description: str = "", previous_attempt_output: str = None) -> tuple:
         """Build the prompt for AI.
         
         Delegates to ``prompts.simple_task.build_simple_task_prompt``.
@@ -512,6 +541,7 @@ class SimpleTaskExecutor:
             timeout_type=timeout_type,
             exec_script_path=exec_script_path,
             project_description=project_description,
+            previous_attempt_output=previous_attempt_output,
         ), exec_script_path
 
     @staticmethod

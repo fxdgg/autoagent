@@ -496,7 +496,20 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
 - ✅ 防止上下文无限增长（每个子任务独立 session）
 - ✅ 通过 previous_subtask_summary 保持必要的上下文连续性
 - ✅ 子任务之间可以引用前一个子任务创建的文件（文件在磁盘上）
-- ✅ 同一子任务的重试也会重置 session（防止上下文累积导致输出截断）
+
+**Retry 策略（按失败类型区分）**：
+
+SimpleTaskExecutor 根据失败类型决定是否重置 session：
+
+| 失败类型 | Session Reset | 上一轮输出 | 说明 |
+|----------|:---:|:---:|------|
+| `❌ not completed` | ✅ | 传递到 prompt | AI 明确失败，需要新策略 |
+| Missing marker（nudge 耗尽） | ✅ | 传递到 prompt | AI 未输出标记 |
+| `BashTimeoutError` | ❌ | 不需要（同一 session） | 命令超时但 session 存活，in-session follow-up 告知 AI 命令被 kill |
+| `SessionTimeoutError` | ✅ | 传递到 prompt | session 进程已被 kill |
+| 其他 `AICallError` | ✅ | 传递到 prompt | API 错误 |
+
+当 session 被 reset 时，上一轮 AI 的完整输出（截断到 4000 字符）会注入到下一轮 prompt 的 "Previous Attempt Output" section 中，让 AI 知道上次做到了哪一步。当 session 不 reset 时（BashTimeoutError），AI 的上下文完整保留，只需发送轻量级的 in-session follow-up。
 
 **完成检测三层策略**：
 

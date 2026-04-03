@@ -383,6 +383,28 @@ def build_previous_subtask_section(parent_context: dict) -> str:
     return f"=== Previous Step Result ===\n{summary}\n============================"
 
 
+def build_previous_attempt_output_section(output: str) -> str:
+    """Build a section containing the AI's output from the previous attempt.
+
+    When a task is retried with a session reset, the AI loses its
+    conversation history.  This section injects a truncated copy of the
+    previous attempt's full output so the AI can see what it already did
+    and continue from there instead of starting over.
+
+    Returns an empty string when *output* is falsy.
+    """
+    if not output:
+        return ""
+    max_len = limits.get('previous_attempt_output')
+    if len(output) > max_len:
+        output = "...(truncated)\n" + output[-max_len:]
+    return (
+        "=== Previous Attempt Output ===\n"
+        f"{output}\n"
+        "==============================="
+    )
+
+
 def build_timeout_guidance(
     exec_script_path: str,
     timeout_feedback: str,
