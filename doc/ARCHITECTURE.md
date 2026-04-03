@@ -511,14 +511,21 @@ def _execute_subtask(self, client: CodeBuddyClient, subtask: dict):
 
 **Marker Nudge 机制**：
 
-当 `_check_completion()` 返回 `None`（AI 忘记输出状态标记）时，系统不会立即浪费一次完整的 retry，
-而是在**同一 session** 中发送一个轻量级的 nudge prompt，要求 AI 自我评估并输出标记。
+当 `_check_completion()` 返回 `None`（AI 未输出状态标记——可能是忘记了，也可能是 CLI/SDK 异常中断）时，系统不会立即浪费一次完整的 retry，
+而是在**同一 session** 中发送一个轻量级的 nudge prompt，要求 AI 检查进度并输出标记。
 
-- Nudge prompt 只有几十个 token，远比重置 session 并重放整个任务描述要廉价
+- Nudge prompt 允许 AI 读文件、跑命令验证，也允许继续未完成的工作，但**禁止重复执行已跑过的命令**（特别是 autoagent-exec）
 - 最大 nudge 次数由 `config.yaml` 的 `max_marker_nudges` 配置（默认 2）
 - 所有 nudge 耗尽后仍无标记，才回退到正常的 retry 循环（重置 session）
 - Nudge 机制在 `SimpleTaskExecutor._nudge_for_marker()` 中实现，
   `SubtaskExecutor` 的 simple 和 long_running 子任务执行路径中也会调用
+
+**信号文件预检测（Signal-File Pre-Check）**：
+
+在发送 nudge 之前，`_nudge_for_marker()` 会先调用 `_check_signal_file_for_running_task()` 检查
+`lr_tasks/lr_{task_id}_signal.json` 是否存在且 status 为 `"running"` 或 `"finished"`。如果检测到，
+说明 AI 已通过 autoagent-exec 成功提交了后台任务但遗漏了 `LONG_RUNNING_IN_PROGRESS` 标记。此时
+直接返回合成的 `"⏳ LONG_RUNNING_IN_PROGRESS"` 响应，**完全跳过 nudge**，避免 AI 被追问后重复启动任务。
 
 #### 3. Context 生命周期管理
 
@@ -803,6 +810,7 @@ tasks:
    └─ N 秒后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
    ↓
 4. AI 看到 "TASK SUBMITTED" 后输出 LONG_RUNNING_IN_PROGRESS
+   （如果 AI 遗漏此标记，信号文件预检测会自动补充——见 Marker Nudge 章节）
    ↓
 5. AutoAgent 检测到 LONG_RUNNING_IN_PROGRESS，开始轮询信号文件
    ↓
@@ -1185,12 +1193,19 @@ def _execute_long_running_subtask(self, subtask, client, ...):
         status = self._poll_signal_file(signal_file)
         # 重启 AI 分析结果
         return self._ai_analyze_long_running_result(...)
-    
+
     # 3b. AI 直接完成（快速成功或自行处理）
     if self._check_completion(result):
         return SubtaskResult(success=True)
-    
-    # 3c. 快速失败，AI 已看到错误，下一轮重试
+
+    # 3c. 无标记 → nudge（会先检查信号文件，有则合成 LR 标记跳过 nudge）
+    nudge_result = self._nudge_for_marker(...)
+    if nudge_result and self._check_long_running_in_progress(nudge_result):
+        # 信号文件预检测触发，或 AI 在 nudge 中回忆起已提交任务
+        status = self._poll_signal_file(signal_file)
+        return self._ai_analyze_long_running_result(...)
+
+    # 3d. 快速失败，AI 已看到错误，下一轮重试
 ```
 
 ### session_dir 传递机制

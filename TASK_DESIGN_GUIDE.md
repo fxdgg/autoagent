@@ -35,14 +35,19 @@ Key implications for task design:
   previous-attempt context are included in every prompt, so the AI loses
   nothing important. This prevents unbounded context accumulation across
   retries (which can cause output truncation and a vicious retry cycle).
-- When the AI completes its work but forgets to emit a completion status
-  marker (✅/❌/⏳), AutoAgent uses a **marker-nudge** mechanism: instead
-  of resetting the session and replaying the entire task, a lightweight
-  follow-up prompt is sent in the same session asking the AI to
-  self-evaluate. The number of nudge attempts is configurable via
-  `max_marker_nudges` in `config.yaml` (default: 2). If all nudges are
-  exhausted without a marker, the system falls back to the normal retry
-  loop (which resets the session).
+- When the AI does not output a completion status marker (✅/❌/⏳) —
+  whether because it forgot, or because the CLI/SDK crashed mid-response —
+  AutoAgent uses a **marker-nudge** mechanism: instead of resetting the
+  session and replaying the entire task, a lightweight follow-up prompt is
+  sent in the same session. The AI may continue unfinished work and read
+  files to verify, but is told not to re-run commands it already executed.
+  If the AI previously called `autoagent-exec`, the system checks for a
+  signal file before nudging — if one exists, the nudge is skipped and a
+  synthetic `LONG_RUNNING_IN_PROGRESS` is returned automatically. The
+  number of nudge attempts is configurable via `max_marker_nudges` in
+  `config.yaml` (default: 2). If all nudges are exhausted without a
+  marker, the system falls back to the normal retry loop (which resets
+  the session).
 - The AI's persona/role can be customized per-task via the
   `system_prompt_prefix` field in `todos.yaml` (see §12 below).
 
@@ -399,13 +404,16 @@ can cause the AI's output to be truncated before it emits the completion
 marker). The full task description and previous-attempt summaries are
 included in every prompt, so no important context is lost.
 
-**Marker-nudge mechanism:** If the AI finishes its work but forgets to
-output a status marker, AutoAgent sends a short follow-up prompt in the
-same session (without resetting) asking the AI to self-evaluate. This is
-much cheaper than a full retry. The number of nudge attempts is
-configurable via `max_marker_nudges` in `config.yaml` (default: 2).
-After all nudges are exhausted, the system falls back to the normal
-retry loop.
+**Marker-nudge mechanism:** If the AI does not output a status marker
+(e.g. it forgot, or the CLI/SDK crashed mid-response), AutoAgent sends a
+short follow-up prompt in the same session (without resetting). The AI
+may continue unfinished work and read files, but is told not to re-run
+commands it already executed. Before sending the nudge, the system checks
+for an `autoagent-exec` signal file — if one exists, the nudge is
+skipped entirely and a synthetic `LONG_RUNNING_IN_PROGRESS` is returned.
+The number of nudge attempts is configurable via `max_marker_nudges` in
+`config.yaml` (default: 2). After all nudges are exhausted, the system
+falls back to the normal retry loop.
 
 ### 5.2 Nested/Looping Failure Analysis
 

@@ -681,7 +681,8 @@ class SubtaskExecutor:
 1. 构造 prompt，告知 AI 使用 `autoagent-exec` wrapper 脚本启动命令（内部参数由 wrapper 预填）
 2. AI 通过 wrapper 脚本调用 `autoagent-exec`
 3. 如果 AI 报告 `LONG_RUNNING_IN_PROGRESS`，轮询信号文件等待完成
-4. 完成后重启 AI 会话，让 AI 读取输出日志并评估结果
+4. 如果 AI 未输出任何标记，`_nudge_for_marker()` 会先检查信号文件：若已有后台任务在运行则跳过 nudge，直接合成 `LONG_RUNNING_IN_PROGRESS` 进入轮询流程
+5. 完成后重启 AI 会话，让 AI 读取输出日志并评估结果
 
 ### autoagent_exec.py
 
@@ -1436,13 +1437,13 @@ limits.reload()                                    # 重新从 config.yaml 加�
 
 ## Marker Nudge 配置（config.yaml）
 
-控制当 AI 忘记输出完成状态标记时的轻量级追问机制。通过 `prompts/marker_nudge.py` 加载。
+控制当 AI 未输出完成状态标记时的轻量级追问机制（标记缺失可能是 AI 遗漏，也可能是 CLI/SDK 异常中断）。通过 `prompts/marker_nudge.py` 加载。
 
 ### 配置字段
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `max_marker_nudges` | 2 | 最大 nudge 次数。当 AI 完成工作但未输出状态标记（✅/❌/⏳）时，在同一 session 中发送轻量级追问。耗尽后回退到正常 retry 循环 |
+| `max_marker_nudges` | 2 | 最大 nudge 次数。当 AI 未输出状态标记（✅/❌/⏳）时，在同一 session 中发送轻量级追问（允许 AI 继续工作，但禁止重复执行已跑过的命令）。发送前会先检查信号文件，若已有后台任务在运行则跳过 nudge。耗尽后回退到正常 retry 循环 |
 
 ---
 

@@ -184,7 +184,7 @@ autoagent/
   - `backoff_max_wait`: AI CLI 连续失败时的最大退避等待时间（指数退避：5s→10s→20s→...→上限）
   - `max_review_rounds`: Ideas 拆解时 AI 审查的最大轮数（代码兜底值 3，shipped config.yaml 中设为 5）
   - `max_validation_retries`: Ideas 拆解时 schema 校验的最大重试次数（默认 2）
-  - `max_marker_nudges`: 当 AI 忘记输出完成状态标记时的最大 nudge 次数（默认 2）。在同一 session 中发送轻量级追问，耗尽后回退到正常 retry 循环
+  - `max_marker_nudges`: 当 AI 未输出完成状态标记时的最大 nudge 次数（默认 2）。在同一 session 中发送轻量级追问（允许 AI 继续工作），耗尽后回退到正常 retry 循环。发送 nudge 前会先检查信号文件，若已有后台任务在运行则跳过 nudge 直接走 long_running 流程
   - `truncation_limits`: 控制各类提示词字段的最大字符数，防止上下文过长
   - `preset`: 定义常用参数预设，通过 `--preset <name>` 快速切换配置
 - **变量替换**：Preset 中支持 `${workspace}` 变量，会被替换为当前工作目录
@@ -309,7 +309,7 @@ autoagent/
 
 #### prompts/marker_nudge.py
 - **作用**：Marker nudge 机制的 prompt 常量和配置加载
-- **内容**：当 AI 完成工作但忘记输出完成状态标记（✅/❌/⏳）时，发送轻量级追问 prompt 要求 AI 自我评估
+- **内容**：当 AI 未输出完成状态标记（✅/❌/⏳）时（可能是遗漏，也可能是 CLI/SDK 异常中断），发送轻量级追问 prompt。允许 AI 继续未完成的工作，但禁止重复执行已跑过的命令
 - **核心常量**：
   - `MARKER_NUDGE_PROMPT`: nudge 追问的 prompt 文本
   - `MAX_MARKER_NUDGES`: 从 `config.yaml` 加载的最大 nudge 次数（默认 2）

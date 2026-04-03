@@ -67,9 +67,13 @@ fast_fail_timeout: 30
 # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
 backoff_max_wait: 300
 
-# Maximum number of lightweight "nudge" follow-ups when the AI forgets to
-# emit a completion status marker. Nudges are sent in the same session
-# instead of resetting and replaying the entire task.
+# Maximum number of lightweight "nudge" follow-ups when the AI does not
+# output a completion status marker (e.g. AI forgot, or CLI/SDK crashed).
+# Nudges are sent in the same session instead of resetting and replaying
+# the entire task. The AI may continue unfinished work, but is told not to
+# re-run commands it already executed. Before each nudge, the system checks
+# for an autoagent-exec signal file — if one exists, the nudge is skipped
+# and a synthetic LONG_RUNNING_IN_PROGRESS is returned automatically.
 max_marker_nudges: 2
 
 # System prompt prefix (appended to the system prompt for all tasks)
@@ -430,6 +434,7 @@ tasks:
    - 超时内成功：智能输出（短输出内联打印并标注 not truncated，长输出只给路径）
    - 超时后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
 4. AutoAgent 检测到 `LONG_RUNNING_IN_PROGRESS`，开始轮询信号文件
+   （如果 AI 遗漏了此标记，信号文件预检测会在 nudge 前自动补充）
 5. 任务完成后，重新启动 AI 分析输出日志并判断完成条件
 
 **技术细节**：
