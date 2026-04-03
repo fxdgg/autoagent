@@ -249,6 +249,10 @@ autoagent/
   - `AIClient`：CLI 模式客户端（通过子进程调用 AI CLI 工具）
   - `AIClientSDK`：SDK 模式客户端（通过 CodeBuddy Agent SDK 调用）
   - `AIClientTest`：测试模式客户端（使用 TestProvider 的预定义响应）
+- **错误处理**：
+  - `_parse_cli_error()`：结构化解析 JSON 错误（支持 Anthropic 嵌套格式、扁平格式、纯文本 fallback）
+  - `system/api_retry` 事件实时显示（rate_limit、server_error 等 CLI 内部重试进度）
+  - `result` 事件 `is_error` 传播（避免空 response 丢失错误原因）
 
 #### state_manager.py
 - **作用**：状态持久化管理

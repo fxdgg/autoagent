@@ -445,8 +445,11 @@ def ask(
 1. 将 prompt 写入临时文件（避免 shell 转义问题）
 2. 通过 provider 构造 CLI 命令
 3. 启动子进程，实时解析 stream-json 输出
-4. 收集 assistant 文本和完整日志（含工具调用）
-5. 调用完成后保存到 `last_full_log`
+   - 处理 `system/api_retry` 事件：实时显示 API 重试进度（rate_limit、server_error 等）
+   - 处理 `result` 事件的 `is_error`：错误详情附加到 response 避免空响应
+4. 进程退出码非零时，通过 `_parse_cli_error()` 结构化解析错误 JSON
+5. 收集 assistant 文本和完整日志（含工具调用）
+6. 调用完成后保存到 `last_full_log`
 
 **示例**：
 

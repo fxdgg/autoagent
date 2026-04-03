@@ -1469,6 +1469,42 @@ stateDiagram-v2
 delay = min(5 * 2^(consecutive_failures - 1), backoff_max_wait)
 ```
 
+### 结构化错误解析
+
+AI CLI 工具（Claude Code、CodeBuddy、Gemini CLI 等）在失败时可能返回结构化 JSON 错误，而非纯文本。`AIClient._parse_cli_error()` 支持解析多种错误格式：
+
+**支持的格式**：
+- Anthropic/Claude 嵌套格式：`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`
+- 扁平 JSON 格式：`{"error":"rate_limit","message":"Rate limit exceeded"}`
+- stream-json 多行输出（取最后一行尝试解析 JSON）
+- 纯文本（fallback）
+
+**解析结果**：返回 `(message, error_type)` 元组，`error_type` 为 `None`（纯文本）或字符串如 `"overloaded_error"`、`"rate_limit"`、`"authentication_error"` 等。错误消息格式为：
+```
+claude returned exit code 1: [overloaded_error] Overloaded
+```
+
+### API 重试事件显示
+
+Claude Code 在 API 请求失败时会在 stream-json 中发出 `system/api_retry` 事件（CLI 内部自动重试）。AutoAgent 实时显示这些事件，让用户了解重试进度：
+
+```
+⚠️  API retry 1/3: rate_limit (HTTP 429), waiting 5.0s...
+```
+
+事件字段：
+
+| 字段 | 说明 |
+|------|------|
+| `error` | 错误类别：`rate_limit`、`server_error`、`billing_error`、`authentication_failed` 等 |
+| `error_status` | HTTP 状态码（429、503 等），连接错误时为 `null` |
+| `attempt` / `max_retries` | 当前重试次数 / 最大重试次数 |
+| `retry_delay_ms` | 下次重试前的等待时间（毫秒） |
+
+### stream-json result 错误传播
+
+当 stream-json 的 `result` 事件报告 `is_error=True` 但 AI 未产生任何文本时（如 API 错误导致 session 立即终止），AutoAgent 会将错误详情附加到 response 中（`[ERROR] <detail>`），避免上层只看到 "empty response" 而不知原因。
+
 ### 健壮性增强
 
 #### retry_from 验证

@@ -292,16 +292,21 @@ class AIClient:
             stderr_text = "".join(stderr_chunks)
 
             if process.returncode != 0:
-                error_msg = stderr_text.strip() or stdout_text.strip()
+                raw_error = stderr_text.strip() or stdout_text.strip()
+                message, error_type = self._parse_cli_error(raw_error)
                 # Check for authentication error
-                if "Authentication" in error_msg or "login" in error_msg.lower():
+                if error_type in ("authentication_error", "authentication_failed") \
+                        or "Authentication" in message \
+                        or "login" in message.lower():
                     raise AICallError(
                         f"{self.provider.name} authentication required. "
                         f"Please run '{self.provider.executable} --help' to check. "
-                        f"Error: {error_msg}"
+                        f"Error: {message}"
                     )
+                prefix = f"[{error_type}] " if error_type else ""
                 raise AICallError(
-                    f"{self.provider.name} returned exit code {process.returncode}: {error_msg}"
+                    f"{self.provider.name} returned exit code {process.returncode}: "
+                    f"{prefix}{message}"
                 )
 
             # Combine all assistant text from stream-json events
@@ -430,7 +435,25 @@ class AIClient:
         if event_type == "system":
             # CodeBuddy CLI: system/init event — session_id already
             # captured above via the generic early-capture block.
-            pass
+            #
+            # Claude Code also emits "system" events with subtype
+            # "api_retry" when an API request fails with a retryable
+            # error (rate_limit, server_error, etc.).  The CLI handles
+            # retries internally; we just display progress.
+            subtype = event.get("subtype", "")
+            if subtype == "api_retry":
+                error_cat = event.get("error", "unknown")
+                attempt = event.get("attempt", "?")
+                max_retries = event.get("max_retries", "?")
+                delay_ms = event.get("retry_delay_ms", 0)
+                http_status = event.get("error_status")
+                status_str = f" (HTTP {http_status})" if http_status else ""
+                msg = (f"   ⚠️  API retry {attempt}/{max_retries}: "
+                       f"{error_cat}{status_str}, "
+                       f"waiting {delay_ms / 1000:.1f}s...")
+                sys.stdout.write(f"\033[31m{msg}\033[0m\n")
+                sys.stdout.flush()
+                full_log_parts.append(msg)
 
         elif event_type == "assistant":
             # CodeBuddy/Claude format: AI message with content[] array
@@ -504,7 +527,10 @@ class AIClient:
                 preview = content[:500]
                 if len(content) > 500:
                     preview += f"... ({len(content)} chars total)"
-                sys.stdout.write(f"   ↳ {preview}\n")
+                if is_error:
+                    sys.stdout.write(f"\033[31m   ↳ {preview}\033[0m\n")
+                else:
+                    sys.stdout.write(f"   ↳ {preview}\n")
                 sys.stdout.flush()
                 error_marker = " ❌" if is_error else ""
                 log_content = content[:2000]
@@ -527,7 +553,10 @@ class AIClient:
                             preview = content[:500]
                             if len(content) > 500:
                                 preview += f"... ({len(content)} chars total)"
-                            sys.stdout.write(f"   ↳ {preview}\n")
+                            if is_error:
+                                sys.stdout.write(f"\033[31m   ↳ {preview}\033[0m\n")
+                            else:
+                                sys.stdout.write(f"   ↳ {preview}\n")
                             sys.stdout.flush()
                             error_marker = " ❌" if is_error else ""
                             log_content = content[:2000]
@@ -568,9 +597,21 @@ class AIClient:
             
             status = "❌ Error" if is_error else "✅ Done"
             summary = f"\n--- {status} ({num_turns} turns, {duration_ms/1000:.1f}s) ---\n"
-            sys.stdout.write(summary)
+            if is_error:
+                sys.stdout.write(f"\033[31m{summary}\033[0m")
+            else:
+                sys.stdout.write(summary)
             sys.stdout.flush()
             full_log_parts.append(f"\n{summary}")
+
+            # When is_error is True and no assistant text was collected,
+            # the caller would only see "empty response".  Attach error
+            # details so the AICallError message is informative.
+            if is_error and not assistant_text_parts:
+                error_detail = event.get("error", result_text or "unknown error")
+                if isinstance(error_detail, dict):
+                    error_detail = error_detail.get("message", str(error_detail))
+                assistant_text_parts.append(f"[ERROR] {error_detail}")
         
         elif event_type == "step_start":
             # OpenCode format: session start event — extract session ID
@@ -677,6 +718,54 @@ class AIClient:
             # Generic tool
             summary = json.dumps(tool_input, ensure_ascii=False)[:200]
             return f"\n🔧 **[{tool_name}]** {summary}\n"
+
+    @staticmethod
+    def _parse_cli_error(raw_error: str) -> tuple:
+        """Parse CLI error output, extracting structured info if available.
+
+        AI CLI tools (Claude Code, CodeBuddy, Gemini CLI, etc.) may
+        return structured JSON errors when they fail.  Common formats:
+
+        - Anthropic/Claude: ``{"type":"error","error":{"type":"overloaded_error","message":"..."}}``
+        - Flat JSON: ``{"error":"rate_limit","message":"..."}``
+        - Plain text (fallback)
+
+        The raw error string may also be multi-line stream-json output
+        where only the last line is the error JSON.
+
+        Returns:
+            ``(message, error_type)`` where *error_type* is ``None``
+            for unstructured errors, or a string like
+            ``"overloaded_error"``, ``"rate_limit"``,
+            ``"authentication_error"`` etc.
+        """
+        text = raw_error.strip()
+        if not text:
+            return ("(empty error output)", None)
+
+        # Try the full text first, then just the last line (stream-json)
+        for candidate in [text, text.rsplit('\n', 1)[-1].strip()]:
+            try:
+                data = json.loads(candidate)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            # Anthropic nested format: {"type":"error","error":{"type":"...","message":"..."}}
+            err = data.get("error", {})
+            if isinstance(err, dict) and ("message" in err or "type" in err):
+                return (
+                    err.get("message", json.dumps(err, ensure_ascii=False)),
+                    err.get("type"),
+                )
+            # Flat format: {"message":"...", "error":"...", "type":"..."}
+            if "message" in data:
+                return (
+                    data["message"],
+                    data.get("type") or (data.get("error") if isinstance(data.get("error"), str) else None),
+                )
+
+        return (text, None)
 
     def _parse_json_response(self, response: str) -> dict:
         """
@@ -1065,8 +1154,10 @@ class AIClientSDK:
                     if is_error:
                         errors = message.errors or []
                         if errors:
+                            error_type = getattr(message, 'error_type', None) or ''
+                            prefix = f"[{error_type}] " if error_type else ""
                             raise AICallError(
-                                f"CodeBuddy SDK error: {'; '.join(errors)}"
+                                f"CodeBuddy SDK error: {prefix}{'; '.join(str(e) for e in errors)}"
                             )
 
                 elif isinstance(message, StreamEvent):
