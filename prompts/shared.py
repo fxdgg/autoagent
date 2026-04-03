@@ -296,14 +296,16 @@ def build_history_section(history: list, extract_summary_fn) -> str:
     history_lines = []
     for h in recent:
         result_str = h.get('result', 'unknown')
-        # Include error and not_completed entries; skip completed
-        if result_str not in ('error', 'not_completed'):
+        # Include error, not_completed, and interrupted entries; skip completed
+        if result_str not in ('error', 'not_completed', 'interrupted'):
             continue
         history_lines.append(f"  - Attempt {h.get('attempt', '?')}: {result_str}")
         if result_str == 'error':
             error_msg = h.get('error', '')
             if error_msg:
                 history_lines.append(f"    Error: {error_msg[:limits.get('history_summary')]}")
+        elif result_str == 'interrupted':
+            history_lines.append(f"    Note: {h.get('summary', 'Interrupted by user')[:limits.get('history_summary')]}")
         elif result_str == 'not_completed':
             summary = h.get('summary', '')
             # Skip "no marker found" entries — they add noise, not guidance

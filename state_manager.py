@@ -247,30 +247,49 @@ class StateManager:
     def record_interrupt(self, task_id: str, attempt: int = 0):
         """
         Record an interruption (e.g., Ctrl+C) in the task's history.
-        
+
+        Also records the interrupt on any round-scoped subtask keys
+        (``id@round``) that are currently ``in_progress``, so the
+        information is visible to the prompt builder on resume.
+
         Args:
             task_id: Task identifier
             attempt: Current attempt number (uses existing if not provided)
         """
         task_id = str(task_id)
-        if task_id not in self.state["tasks"]:
-            return
-        
-        task_state = self.state["tasks"][task_id]
-        current_attempt = task_state.get("attempts", 0)
-        if attempt == 0:
-            attempt = current_attempt
-        
-        entry = {
-            "attempt": attempt,
-            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "result": "interrupted",
-            "summary": "Interrupted by user (Ctrl+C)",
-        }
-        
-        if "history" not in self.state["tasks"][task_id]:
-            self.state["tasks"][task_id]["history"] = []
-        
-        self.state["tasks"][task_id]["history"].append(entry)
-        self.save_state()
-        logger.info(f"Recorded interrupt for task {task_id}")
+
+        # Collect keys to record: the task itself + any in-progress
+        # round-scoped subtasks that belong to it (e.g. "1.2@3.1" for
+        # parent task "1").
+        keys_to_record = []
+        if task_id in self.state["tasks"]:
+            keys_to_record.append(task_id)
+        # Find in-progress round-scoped keys whose base subtask id starts
+        # with the parent task id (e.g. "1." matches "1.2@3.1").
+        prefix = task_id + "."
+        for key, st in self.state["tasks"].items():
+            if self.ROUND_SEP not in key:
+                continue
+            base_id = key.split(self.ROUND_SEP)[0]
+            if (base_id == task_id or base_id.startswith(prefix)) and st.get("status") == "in_progress":
+                keys_to_record.append(key)
+
+        for key in keys_to_record:
+            task_state = self.state["tasks"][key]
+            current_attempt = task_state.get("attempts", 0)
+            a = attempt if attempt else current_attempt
+
+            entry = {
+                "attempt": a,
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "result": "interrupted",
+                "summary": "Interrupted by user (Ctrl+C)",
+            }
+
+            if "history" not in self.state["tasks"][key]:
+                self.state["tasks"][key]["history"] = []
+            self.state["tasks"][key]["history"].append(entry)
+
+        if keys_to_record:
+            self.save_state()
+            logger.info(f"Recorded interrupt for {keys_to_record}")
