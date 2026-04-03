@@ -1132,6 +1132,11 @@ bash autoagent-exec.sh <command...>
 ```
 启动命令
   ↓
+检查信号文件是否已有 status="running" 的任务
+  ├─ 有 → ❌ 拒绝启动，输出错误并 exit(1)
+  │   （防止 AI 在同一 session 中重复启动后台任务）
+  └─ 无 → 继续
+  ↓
 等待 N 秒（fast_fail_timeout）
   ↓
 ┌──────────────────────────────────────────────────┐

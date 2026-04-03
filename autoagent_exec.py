@@ -161,6 +161,29 @@ def main():
     signal_file = os.path.join(lr_tasks_dir, f"lr_{task_id}_signal.json")
     output_log = os.path.join(lr_tasks_dir, f"lr_{task_id}_output.log")
 
+    # ── Guard: reject if a task is already running for this task_id ──
+    # This prevents the AI from accidentally launching a second background
+    # task in the same session, which would cause the first task's results
+    # to be lost (AutoAgent only polls one signal file per task_id).
+    if os.path.isfile(signal_file):
+        try:
+            with open(signal_file, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+            if existing.get("status") == "running":
+                existing_pid = existing.get("pid", "?")
+                existing_cmd = existing.get("command", "?")
+                print(
+                    f"[ERROR] A long-running task is already active for task-id '{task_id}'.\n"
+                    f"   Existing PID: {existing_pid}\n"
+                    f"   Existing command: {existing_cmd}\n"
+                    f"\n"
+                    f"   It is not allowed to have two long-running tasks in parallel.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        except (json.JSONDecodeError, OSError):
+            pass  # Corrupted or unreadable — proceed normally
+
     # Open output log file in binary mode so that the subprocess's raw
     # bytes (which may be GBK on Chinese Windows) are preserved as-is.
     # We will decode properly when reading the file back.

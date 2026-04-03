@@ -242,6 +242,7 @@ autoagent/
 #### autoagent_exec.py
 - **作用**：long_running 任务启动器
 - **用途**：AI 通过 wrapper 脚本（`autoagent-exec.bat` / `autoagent-exec.sh`）调用此脚本启动长时间命令，支持快速失败检测 + 信号文件通信 + 智能输出（短输出内联打印，长输出只给路径）
+- **重复启动防护**：启动命令前检查信号文件，如果同一 task-id 已有 `status="running"` 的任务则拒绝启动（exit 1），防止 AI 在同一 session 中重复启动后台任务
 
 #### codebuddy_client.py
 - **作用**：统一 AI 客户端封装
