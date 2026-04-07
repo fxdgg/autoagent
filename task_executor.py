@@ -159,12 +159,11 @@ def _build_failed_subtask_history(
     if not history:
         return ""
     lines = []
-    for entry in history:
-        attempt = entry.get('attempt', '?')
+    for idx, entry in enumerate(history, 1):
         result = entry.get('result', 'unknown')
         summary = entry.get('summary', '')
         error = entry.get('error', '')
-        line = f"  - Attempt {attempt}: {result}"
+        line = f"- Attempt {idx}: {result}"
         detail = summary or error
         if detail:
             # Truncate long summaries to keep the prompt manageable
@@ -988,7 +987,10 @@ class NestedTaskExecutor:
             conv_logger.register_nested_task(task_id, task['name'], subtask_ids)
         
         logger.info(f"Executing nested task {task_id}: {task['name']}")
-        
+
+        # Clear stale previous_subtask_summary from prior top-level tasks
+        _save_previous_subtask_summary(self.session_dir, "")
+
         current_state = state_manager.get_task_state(task_id)
         attempts = current_state.get('attempts', 0)
 
@@ -1017,22 +1019,22 @@ class NestedTaskExecutor:
             all_completed = True
             
             # Build parent context for subtask prompt enrichment
-            # Get the latest AI decision (suggested_fix) from previous rounds
+            # Get the latest AI decision (suggested_fix) from the CURRENT main round only
             parent_state = state_manager.get_task_state(task_id)
             ai_decisions = parent_state.get('ai_decisions', [])
-            latest_fix = ai_decisions[-1].get('suggested_fix', '') if ai_decisions else ''
-            # Track which subtask the fix is targeted at (only that one gets it)
-            fix_target_id = ai_decisions[-1].get('retry_from', '') if ai_decisions else ''
-            # Also check main_task_evaluations for suggested improvements
+            current_round_decisions = [
+                d for d in ai_decisions
+                if d.get('_main_round', d.get('attempt', 0)) == _main_round
+            ]
+            latest_fix = current_round_decisions[-1].get('suggested_fix', '') if current_round_decisions else ''
+            fix_target_id = current_round_decisions[-1].get('retry_from', '') if current_round_decisions else ''
+            # Also check main_task_evaluations for next_strategy
             evaluations = parent_state.get('main_task_evaluations', [])
+            next_strategy = ""
             if evaluations:
                 last_eval = evaluations[-1]
-                eval_context_parts = []
-                if last_eval.get('next_strategy'):
-                    eval_context_parts.append(f"Strategy from previous evaluation: {last_eval['next_strategy']}")
-                if eval_context_parts:
-                    eval_context = "\n".join(eval_context_parts)
-                    latest_fix = f"{latest_fix}\n\n{eval_context}".strip() if latest_fix else eval_context
+                if not last_eval.get('completed', False):
+                    next_strategy = last_eval.get('next_strategy', '')
 
             # Cap composite fix context to avoid oversized prompts
             if latest_fix and len(latest_fix) > limits.get('max'):
@@ -1047,12 +1049,18 @@ class NestedTaskExecutor:
                 'main_task_criteria': task.get('completion_criteria', ''),
                 'round_label': f"{_main_round}.{_failure_sub_round}",
                 'project_description': project_description,
+                'next_strategy': next_strategy,
             }
 
             context_isolation = task.get('context_isolation', True)
-            # Restore previous_subtask_summary from disk so that resumed
-            # runs have context from the last completed subtask.
-            previous_subtask_summary = _load_previous_subtask_summary(self.session_dir)
+            # Restore previous_subtask_summary from disk so that retries
+            # within the same round have context.  For the first attempt
+            # of a new round, start fresh (don't carry stale context).
+            if attempts > 1:
+                previous_subtask_summary = _load_previous_subtask_summary(self.session_dir)
+            else:
+                previous_subtask_summary = ""
+                _save_previous_subtask_summary(self.session_dir, "")
             previous_subtask_id = ""
 
             for subtask in subtasks:
@@ -1076,13 +1084,6 @@ class NestedTaskExecutor:
                 # Skip already completed subtasks (in this round)
                 if subtask_state.get('status') == 'completed':
                     print(f"\n   📌 Subtask {subtask_id}: {subtask['name']} (already completed, skipping)")
-                    # Use the skipped subtask's stored reasoning as context.
-                    # This overrides the disk-loaded summary so the next
-                    # executing subtask sees context from its immediate
-                    # predecessor, not from a stale session save.
-                    skipped_reasoning = subtask_state.get('ai_reasoning', '')
-                    if skipped_reasoning:
-                        previous_subtask_summary = skipped_reasoning
                     previous_subtask_id = subtask_id
                     # If this skipped subtask holds suggested_fix, carry forward
                     if parent_context.get('suggested_fix'):
@@ -1105,6 +1106,9 @@ class NestedTaskExecutor:
                     conv_logger=conv_logger, parent_task_id=task_id,
                     parent_context=parent_context,
                 )
+
+                # Clear one-shot guidance after first execution consumes it
+                parent_context['next_strategy'] = ''
 
                 if not result.success:
                     all_completed = False
@@ -1197,7 +1201,7 @@ class NestedTaskExecutor:
                 _failure_sub_round = 1
                 new_rl = f"{_main_round}.{_failure_sub_round}"
                 self._carry_forward_completed(retry_from, subtasks, state_manager, old_rl, new_rl)
-        
+
         # Max attempts reached
         print(f"\n   ❌ Nested task {task_id} failed after {max_attempts} rounds")
         state_manager.mark_task_status(
@@ -1288,12 +1292,11 @@ class NestedTaskExecutor:
             failed_subtask=failed_subtask,
             all_subtasks=all_subtasks,
             error_text=error_text,
-            task_history_text=self._format_task_history(task_history),
             prev_decisions_text=prev_decisions_text,
-            loop_info=None,
             previous_context=self._truncate_error(previous_context) if previous_context else "",
             failed_subtask_history=failed_subtask_history,
             previous_subtask_id=previous_subtask_id,
+            subtasks_with_status=task_history,
         )
         print(f"\n   🤖 [AI Decision Point 1: Failure Analysis]")
         
@@ -1391,8 +1394,8 @@ class NestedTaskExecutor:
         prompt = build_main_evaluation_prompt(
             task=task,
             subtasks=subtasks,
-            execution_results_text=self._format_execution_results(execution_results),
             prev_eval_section=prev_eval_section,
+            subtasks_with_status=execution_results,
         )
         
         print(f"\n   🤖 [AI Decision Point 2: Main Task Evaluation]")
@@ -1474,20 +1477,9 @@ class NestedTaskExecutor:
                 new_key = StateManager.round_key(st_id, new_round_label)
                 state_manager.state["tasks"][new_key] = dict(old_state)
         state_manager.save_state()
-
-    def _format_task_history(self, history: list) -> str:
-        """Format task history for prompt, including completion criteria."""
-        lines = []
-        for item in history:
-            lines.append(
-                f"  - {item['subtask_id']} ({item['name']}): "
-                f"status={item['status']}, attempts={item['attempts']}"
-            )
-            if item.get('completion_criteria'):
-                lines.append(f"    Criteria: {item['completion_criteria'][:limits.get('max')]}")
-            if item.get('ai_reasoning'):
-                lines.append(f"    Summary: {item['ai_reasoning'][:limits.get('history_summary')]}")
-        return "\n".join(lines)
+        # Clear stale previous_subtask_summary — the new round should not
+        # inherit context from the old round's last completed subtask.
+        _save_previous_subtask_summary(self.session_dir, "")
 
     @staticmethod
     def _truncate_error(error_text: str, max_chars: int = None) -> str:
@@ -1500,26 +1492,6 @@ class NestedTaskExecutor:
         if len(error_text) <= max_chars:
             return error_text
         return f"(truncated, showing last {max_chars} chars)\n...{error_text[-max_chars:]}"
-
-
-    def _format_execution_results(self, results: list) -> str:
-        """Format execution results for prompt.
-
-        Note: completion_criteria is never truncated — the evaluator needs
-        the full criteria to judge whether the task is complete.
-        """
-        lines = []
-        for r in results:
-            lines.append(
-                f"  - {r['subtask_id']} ({r['name']}): "
-                f"status={r['status']}, attempts={r['attempts']}"
-            )
-            if r.get('completion_criteria'):
-                # Never truncate criteria — evaluator must see them in full
-                lines.append(f"    Criteria: {r['completion_criteria']}")
-            if r.get('ai_reasoning'):
-                lines.append(f"    Result: {r['ai_reasoning'][:limits.get('history_summary')]}")
-        return "\n".join(lines)
 
 
 class LoopingTaskExecutor:
@@ -1570,6 +1542,9 @@ class LoopingTaskExecutor:
             conv_logger.register_nested_task(task_id, task['name'], subtask_ids)
 
         logger.info(f"Executing looping task {task_id}: {task['name']} (repeat_count={repeat_count})")
+
+        # Clear stale previous_subtask_summary from prior top-level tasks
+        _save_previous_subtask_summary(self.session_dir, "")
 
         # Resume from the last saved loop index if the task was interrupted.
         # current_loop is persisted in state on each iteration start, so on
@@ -1677,9 +1652,14 @@ class LoopingTaskExecutor:
             }
 
             context_isolation = task.get('context_isolation', True)
-            # Restore previous_subtask_summary from disk so that resumed
-            # runs have context from the last completed subtask.
-            previous_subtask_summary = _load_previous_subtask_summary(self.session_dir)
+            # Restore previous_subtask_summary from disk so that retries
+            # within the same round have context.  For the first attempt
+            # of a new round, start fresh (don't carry stale context).
+            if attempts > 1:
+                previous_subtask_summary = _load_previous_subtask_summary(self.session_dir)
+            else:
+                previous_subtask_summary = ""
+                _save_previous_subtask_summary(self.session_dir, "")
             previous_subtask_id = ""
 
             for subtask in subtasks:
@@ -1703,13 +1683,6 @@ class LoopingTaskExecutor:
                 # Skip already completed subtasks (in this round)
                 if subtask_state.get('status') == 'completed':
                     print(f"\n   📌 Subtask {subtask_id}: {subtask['name']} (already completed, skipping)")
-                    # Use the skipped subtask's stored reasoning as context.
-                    # This overrides the disk-loaded summary so the next
-                    # executing subtask sees context from its immediate
-                    # predecessor, not from a stale session save.
-                    skipped_reasoning = subtask_state.get('ai_reasoning', '')
-                    if skipped_reasoning:
-                        previous_subtask_summary = skipped_reasoning
                     previous_subtask_id = subtask_id
                     # If this skipped subtask holds suggested_fix, carry forward
                     if parent_context.get('suggested_fix'):
@@ -1812,17 +1785,6 @@ class LoopingTaskExecutor:
                 "ai_reasoning": st_state.get('ai_reasoning', ''),
             })
 
-        history_lines = []
-        for h in task_history:
-            history_lines.append(
-                f"  - {h['subtask_id']} ({h['name']}): status={h['status']}, attempts={h['attempts']}"
-            )
-            if h.get('completion_criteria'):
-                history_lines.append(f"    Criteria: {h['completion_criteria'][:limits.get('max')]}")
-            if h.get('ai_reasoning'):
-                history_lines.append(f"    Summary: {h['ai_reasoning'][:limits.get('history_summary')]}")
-        history_text = "\n".join(history_lines)
-
         # Include previous AI decisions for context — only from the current
         # loop iteration (earlier loops are irrelevant and waste tokens).
         parent_state = state_manager.get_task_state(task_id)
@@ -1855,12 +1817,11 @@ class LoopingTaskExecutor:
             failed_subtask=failed_subtask,
             all_subtasks=all_subtasks,
             error_text=error_text,
-            task_history_text=history_text,
             prev_decisions_text=prev_decisions_text,
-            loop_info=(loop_idx, task.get('repeat_count', 1)),
             previous_context=self._truncate_error(previous_context) if previous_context else "",
             failed_subtask_history=failed_subtask_history,
             previous_subtask_id=previous_subtask_id,
+            subtasks_with_status=task_history,
         )
 
         print(f"\n   🤖 [AI: Failure Analysis (loop {loop_idx})]")
@@ -1945,6 +1906,9 @@ class LoopingTaskExecutor:
                 new_key = StateManager.round_key(st_id, new_round_label)
                 state_manager.state["tasks"][new_key] = dict(old_state)
         state_manager.save_state()
+        # Clear stale previous_subtask_summary — the new round should not
+        # inherit context from the old round's last completed subtask.
+        _save_previous_subtask_summary(self.session_dir, "")
 
     @staticmethod
     def _truncate_error(error_text: str, max_chars: int = None) -> str:
