@@ -45,13 +45,15 @@
 # --- Rule 1: Idea 1 decomposition ---
 # Tests: AI decomposes the first idea (Use __sincosf intrinsic) into a simple task
 # IdeasWatcher calls client.ask() with the idea content and expects YAML back
-- id: 2
-  name: "Replace cosf/sinf with __sincosf intrinsic"
-  type: simple
-  completion_criteria: |
-    Replace all separate cosf() and sinf() calls in cufftdx_dct3d.cuh with the __sincosf() intrinsic.
-  initial_hint: |
-    Look at the PostProcess functions in both DCT and IDCT kernels in cufftdx_dct3d.cuh.
+description: "Optimize cuFFTDx DCT3D kernel by replacing separate trig calls with fused intrinsics"
+tasks:
+  - id: 2
+    name: "Replace cosf/sinf with __sincosf intrinsic"
+    type: simple
+    completion_criteria: |
+      Replace all separate cosf() and sinf() calls in cufftdx_dct3d.cuh with the __sincosf() intrinsic.
+    initial_hint: |
+      Look at the PostProcess functions in both DCT and IDCT kernels in cufftdx_dct3d.cuh.
 ---RULE---
 # --- Rule 2: Idea 1 review - APPROVED ---
 # Tests: Reviewer AI approves the task decomposition for idea 1
@@ -65,23 +67,25 @@ The task decomposition looks good:
 ---RULE---
 # --- Rule 3: Idea 2 decomposition ---
 # Tests: AI decomposes the second idea (shared memory transpose) into a nested task
-- id: 3
-  name: "Implement shared memory transpose for non-X axis operations"
-  type: nested
-  max_attempts: 10
-  completion_criteria: |
-    Implement shared memory transpose buffer for AXIS=1 and AXIS=2 operations.
-  subtasks:
-    - id: 3.1
-      name: "Implement shared memory transpose buffer"
-      type: simple
-      completion_criteria: |
-        Add shared memory transpose logic for Y and Z axis passes.
-    - id: 3.2
-      name: "Benchmark and verify correctness"
-      type: long_running
-      completion_criteria: |
-        Run the full benchmark suite. Score must be 100/100.
+description: "Optimize cuFFTDx DCT3D kernel with shared memory transpose for non-X axis"
+tasks:
+  - id: 3
+    name: "Implement shared memory transpose for non-X axis operations"
+    type: nested
+    max_attempts: 10
+    completion_criteria: |
+      Implement shared memory transpose buffer for AXIS=1 and AXIS=2 operations.
+    subtasks:
+      - id: 3.1
+        name: "Implement shared memory transpose buffer"
+        type: simple
+        completion_criteria: |
+          Add shared memory transpose logic for Y and Z axis passes.
+      - id: 3.2
+        name: "Benchmark and verify correctness"
+        type: long_running
+        completion_criteria: |
+          Run the full benchmark suite. Score must be 100/100.
 ---RULE---
 # --- Rule 4: Idea 2 review #1 - REJECTED ---
 # Tests: Reviewer AI rejects the first version and provides feedback
@@ -94,25 +98,27 @@ Please add initial_hint to the main task and be more specific in subtask 3.2's c
 ---RULE---
 # --- Rule 5: Idea 2 revision ---
 # Tests: Original AI revises the tasks based on reviewer feedback
-- id: 3
-  name: "Implement shared memory transpose for non-X axis operations"
-  type: nested
-  max_attempts: 10
-  completion_criteria: |
-    Implement shared memory transpose buffer for AXIS=1 and AXIS=2 operations.
-  initial_hint: |
-    Focus on cufftdx_dct3d.cuh. For AXIS=1 and AXIS=2, global memory access is strided. Use shared memory as a transpose buffer to improve coalescing.
-  subtasks:
-    - id: 3.1
-      name: "Implement shared memory transpose buffer"
-      type: simple
-      completion_criteria: |
-        Add shared memory transpose logic for Y and Z axis passes.
-    - id: 3.2
-      name: "Benchmark and verify correctness"
-      type: long_running
-      completion_criteria: |
-        Run the full benchmark suite using the project's benchmark script.
+description: "Optimize cuFFTDx DCT3D kernel with shared memory transpose for non-X axis"
+tasks:
+  - id: 3
+    name: "Implement shared memory transpose for non-X axis operations"
+    type: nested
+    max_attempts: 10
+    completion_criteria: |
+      Implement shared memory transpose buffer for AXIS=1 and AXIS=2 operations.
+    initial_hint: |
+      Focus on cufftdx_dct3d.cuh. For AXIS=1 and AXIS=2, global memory access is strided. Use shared memory as a transpose buffer to improve coalescing.
+    subtasks:
+      - id: 3.1
+        name: "Implement shared memory transpose buffer"
+        type: simple
+        completion_criteria: |
+          Add shared memory transpose logic for Y and Z axis passes.
+      - id: 3.2
+        name: "Benchmark and verify correctness"
+        type: long_running
+        completion_criteria: |
+          Run the full benchmark suite using the project's benchmark script.
 ---RULE---
 # --- Rule 6: Idea 2 review #2 - APPROVED ---
 # Tests: Reviewer AI approves the revised task decomposition
