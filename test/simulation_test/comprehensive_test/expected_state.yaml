@@ -1,0 +1,590 @@
+tasks:
+  '1':
+    status: completed
+    context_id: task_1
+    context_created_at: '2026-04-07 17:29:23'
+    attempts: 5
+    current_round: 5
+    max_attempts: 100
+    ai_decisions:
+    - attempt: 1
+      _main_round: 1
+      time: '2026-04-07 17:29:24'
+      failed_at: '1.3'
+      retry_from: '1.1'
+      suggested_fix: Update config.yaml to set timestamp_format='datetime64' and add
+        a type coercion step for string-to-datetime conversion in the processing pipeline.
+    - attempt: 2
+      _main_round: 1
+      time: '2026-04-07 17:29:24'
+      failed_at: '1.4'
+      retry_from: '1.4'
+      suggested_fix: Add null checks for optional fields in the benchmark runner before
+        accessing field values. Use std::optional or check for nullptr before dereferencing.
+    - attempt: 3
+      _main_round: 1
+      time: '2026-04-07 17:29:24'
+      failed_at: '1.4'
+      retry_from: '1.4'
+      suggested_fix: 'Replace the broad null check with a targeted check: only skip
+        records where the optional field pointer is nullptr, not where the field value
+        is zero or empty string. Use field.has_value() instead of field != nullptr.'
+    main_task_evaluations:
+    - round: 1
+      time: '2026-04-07 17:29:25'
+      completed: false
+      analysis: All subtasks completed but the throughput improvement of 50% may not
+        be reliable. The benchmark was run only once and results may vary. Need to
+        run at least 3 iterations and report the median.
+      next_strategy: Re-run processing with 3 benchmark iterations and report median
+        throughput. Also add p95 latency metric.
+      retry_from: '1.3'
+    - round: 2
+      time: '2026-04-07 17:29:25'
+      completed: true
+      analysis: All subtasks completed successfully. Processing pipeline achieves
+        43.75% throughput improvement and 57.1% p95 latency improvement (median of
+        3 runs). Results are consistent with std < 2%. All correctness checks pass
+        at 100%.
+    last_attempt: '2026-04-07 17:29:25'
+  '1.1':
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:23'
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:23'
+      result: completed
+      summary: ✅ completed
+  '1.2':
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:24'
+    ai_reasoning: ✅ completed
+  1.3@1.1:
+    status: failed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:24'
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:24'
+      result: not_completed
+      summary: '❌ not completed: Configuration mismatch with prepared data schema'
+  1.3@1.2:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:24'
+    ai_reasoning: ✅ completed
+    history: &id001
+    - &id004
+      attempt: 1
+      time: '2026-04-07 17:29:24'
+      result: completed
+      summary: ✅ completed
+  1.4@1.2:
+    status: failed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:24'
+    history:
+    - &id002
+      attempt: 1
+      time: '2026-04-07 17:29:24'
+      result: not_completed
+      summary: '❌ not completed: Segfault during benchmark - null pointer in optional
+        field handling'
+  1.3@1.3:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:24'
+    ai_reasoning: ✅ completed
+    history: *id001
+  1.4@1.3:
+    status: failed
+    attempts: 1
+    history:
+    - *id002
+    - &id003
+      attempt: 1
+      time: '2026-04-07 17:29:24'
+      result: not_completed
+      summary: '❌ not completed: Negative throughput values for large batch sizes'
+    last_attempt: '2026-04-07 17:29:24'
+  1.3@1.4:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:24'
+    ai_reasoning: ✅ completed
+    history: *id001
+  1.4@1.4:
+    status: completed
+    attempts: 1
+    history:
+    - *id002
+    - *id003
+    - attempt: 1
+      time: '2026-04-07 17:29:25'
+      result: completed
+      summary: ✅ completed
+    last_attempt: '2026-04-07 17:29:25'
+    ai_reasoning: ✅ completed
+  1.5@1.4:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:25'
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:25'
+      result: completed
+      summary: ✅ completed
+  1.3@2.1:
+    status: completed
+    attempts: 1
+    history:
+    - *id004
+    - attempt: 1
+      time: '2026-04-07 17:29:25'
+      result: completed
+      summary: ✅ completed
+    last_attempt: '2026-04-07 17:29:25'
+    ai_reasoning: ✅ completed
+  1.4@2.1:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:25'
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:25'
+      result: completed
+      summary: ✅ completed
+  1.5@2.1:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:25'
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:25'
+      result: completed
+      summary: ✅ completed
+  '2':
+    status: completed
+    context_id: task_2
+    context_created_at: '2026-04-07 17:29:25'
+    current_loop: 2
+    repeat_count: 2
+    ai_decisions:
+    - loop: 1
+      attempt: 1
+      time: '2026-04-07 17:29:25'
+      failed_at: '2.2'
+      retry_from: '2.1'
+      suggested_fix: Add null_handling='drop' parameter to the processing config,
+        or add a preprocessing filter that removes records with null user_id before
+        the main processing step.
+    - loop: 1
+      attempt: 2
+      time: '2026-04-07 17:29:25'
+      failed_at: '2.2'
+      retry_from: '2.2'
+      suggested_fix: Add email validation regex to the preprocessing filter alongside
+        the null handling. Use re.match(r'^[^@]+@[^@]+\.[^@]+$', email) and drop records
+        that fail validation.
+    total_loops: 2
+    last_attempt: '2026-04-07 17:29:25'
+  '2.1':
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:25'
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:25'
+      result: completed
+      summary: ✅ completed
+  2.2@1.1:
+    status: failed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:25'
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:25'
+      result: not_completed
+      summary: '❌ not completed: Null values in required field ''user_id'''
+  2.2@1.2:
+    status: failed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:25'
+    history:
+    - &id005
+      attempt: 1
+      time: '2026-04-07 17:29:25'
+      result: not_completed
+      summary: '❌ not completed: Malformed email entries after null filtering'
+  2.2@1.3:
+    status: completed
+    attempts: 1
+    history:
+    - *id005
+    - attempt: 1
+      time: '2026-04-07 17:29:25'
+      result: completed
+      summary: ✅ completed
+    last_attempt: '2026-04-07 17:29:25'
+    ai_reasoning: ✅ completed
+  2.3@1.3:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:25'
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:25'
+      result: completed
+      summary: ✅ completed
+  2.2@2.1:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:25'
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:25'
+      result: completed
+      summary: ✅ completed
+  2.3@2.1:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:25'
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:25'
+      result: completed
+      summary: ✅ completed
+  '3':
+    status: completed
+    context_id: task_3
+    context_created_at: '2026-04-07 17:29:25'
+    attempts: 2
+    current_round: 2
+    max_attempts: 100
+    ai_decisions:
+    - attempt: 1
+      _main_round: 1
+      time: '2026-04-07 17:29:27'
+      failed_at: '3.2'
+      retry_from: '3.1'
+      suggested_fix: Re-run the build with AUTH_ENABLED=true in the build configuration
+        and add a type coercion step for the auth token fields.
+    last_attempt: '2026-04-07 17:29:30'
+    main_task_evaluations:
+    - round: 1
+      time: '2026-04-07 17:29:30'
+      completed: true
+      analysis: All subtasks completed successfully. Build artifacts generated with
+        auth module, all 47 integration tests pass, staging deployment healthy with
+        proper connection pool sizing, and all 12 smoke tests pass.
+  3.1@1.1:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:27'
+    ai_reasoning: ✅ completed
+  3.2@1.1:
+    status: failed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:27'
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:27'
+      result: not_completed
+      summary: '❌ not completed: 3 integration tests failed'
+  3.1@1.2:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:28'
+    ai_reasoning: ✅ completed
+  3.2@1.2:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:28'
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:28'
+      result: completed
+      summary: ✅ completed
+  3.3@1.2:
+    status: completed
+    attempts: 2
+    last_attempt: '2026-04-07 17:29:30'
+    error_type: validation_failed
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:29'
+      result: not_completed
+      summary: '❌ not completed: Health checks failing - database connection pool
+        exhausted'
+  3.4@1.2:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:30'
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:30'
+      result: completed
+      summary: ✅ completed
+  '4':
+    status: failed
+    context_id: task_4
+    context_created_at: '2026-04-07 17:29:30'
+    current_loop: 1
+    repeat_count: 2
+    ai_decisions:
+    - loop: 1
+      attempt: 1
+      time: '2026-04-07 17:29:31'
+      failed_at: '4.2'
+      retry_from: '4.1'
+      suggested_fix: Update the SQL aggregation to use CAST(SUM(amount) AS DECIMAL(12,2))
+        instead of CAST(SUM(amount) AS INTEGER) in the revenue report query.
+    - loop: 1
+      attempt: 2
+      time: '2026-04-07 17:29:32'
+      failed_at: '4.2'
+      retry_from: '4.2'
+      suggested_fix: 'Fix the YoY comparison formula in chart_generator.py: change
+        (prev_quarter - curr_quarter) to (curr_quarter - prev_quarter) for growth
+        calculation.'
+    failed_at_loop: 1
+    last_attempt: '2026-04-07 17:29:32'
+  4.1@1.1:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:31'
+    ai_reasoning: ✅ completed
+  4.2@1.1:
+    status: failed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:31'
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:31'
+      result: not_completed
+      summary: '❌ not completed: Revenue figures mismatch due to rounding error'
+  4.1@1.2:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:32'
+    ai_reasoning: ✅ completed
+  4.2@1.2:
+    status: failed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:32'
+    history:
+    - &id006
+      attempt: 1
+      time: '2026-04-07 17:29:32'
+      result: not_completed
+      summary: '❌ not completed: Chart 7 YoY comparison has sign error'
+  4.1@1.3:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:32'
+    ai_reasoning: ✅ completed
+  4.2@1.3:
+    status: pending
+    attempts: 0
+    history:
+    - *id006
+  '5':
+    status: completed
+    context_id: task_5
+    context_created_at: '2026-04-07 17:29:32'
+    attempts: 3
+    current_round: 3
+    max_attempts: 3
+    ai_decisions:
+    - attempt: 1
+      _main_round: 1
+      time: '2026-04-07 17:29:32'
+      failed_at: '5.2'
+      retry_from: '5.2'
+      suggested_fix: Retry the same subtask
+    main_task_evaluations:
+    - round: 1
+      time: '2026-04-07 17:29:32'
+      completed: false
+      analysis: 'AI evaluation failed: Failed to parse JSON from test response. Response
+        preview: All visible checks look good, but I am not returning JSON.
+
+        Please consider this an intentionally malformed evaluation response.'
+      next_strategy: Retry all subtasks
+      retry_from: '5.1'
+    - round: 2
+      time: '2026-04-07 17:29:33'
+      completed: true
+      analysis: Fallback handling works correctly. The malformed failure-analysis
+        and evaluation responses both triggered safe defaults, and the transformation
+        plus verification steps completed successfully in the second pass.
+    last_attempt: '2026-04-07 17:29:33'
+  5.1@1.1:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:32'
+    ai_reasoning: ✅ completed
+    history: &id007
+    - &id009
+      attempt: 1
+      time: '2026-04-07 17:29:32'
+      result: completed
+      summary: ✅ completed
+  5.2@1.1:
+    status: failed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:32'
+    history:
+    - &id008
+      attempt: 1
+      time: '2026-04-07 17:29:32'
+      result: not_completed
+      summary: '❌ not completed: Missing region field in normalized payload'
+  5.1@1.2:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:32'
+    ai_reasoning: ✅ completed
+    history: *id007
+  5.2@1.2:
+    status: completed
+    attempts: 1
+    history:
+    - *id008
+    - attempt: 1
+      time: '2026-04-07 17:29:32'
+      result: completed
+      summary: ✅ completed
+    last_attempt: '2026-04-07 17:29:32'
+    ai_reasoning: ✅ completed
+  5.3@1.2:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:32'
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:32'
+      result: completed
+      summary: ✅ completed
+  5.1@2.1:
+    status: completed
+    attempts: 1
+    history:
+    - *id009
+    - attempt: 1
+      time: '2026-04-07 17:29:33'
+      result: completed
+      summary: ✅ completed
+    last_attempt: '2026-04-07 17:29:33'
+    ai_reasoning: ✅ completed
+  5.2@2.1:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:33'
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:33'
+      result: completed
+      summary: ✅ completed
+  5.3@2.1:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:33'
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:33'
+      result: completed
+      summary: ✅ completed
+  '6':
+    status: completed
+    context_id: task_6
+    context_created_at: '2026-04-07 17:29:33'
+    attempts: 2
+    current_round: 2
+    max_attempts: 100
+    ai_decisions:
+    - attempt: 1
+      _main_round: 1
+      time: '2026-04-07 17:29:33'
+      failed_at: '6.2'
+      retry_from: '6.2'
+      suggested_fix: Reset the replay buffer before reconstructing the final checkpoint,
+        then rebuild the checkpoint exclusively from the latest validated cursor snapshot
+        instead of mixing in stale offsets.
+    last_attempt: '2026-04-07 17:29:33'
+    main_task_evaluations:
+    - round: 1
+      time: '2026-04-07 17:29:33'
+      completed: true
+      analysis: Oversized context was truncated safely in downstream prompts, retry
+        analysis remained actionable, and the final checkpoint reconstruction plus
+        validation completed successfully.
+  6.1@1.1:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:33'
+    ai_reasoning: ✅ completed
+    history: &id010
+    - attempt: 1
+      time: '2026-04-07 17:29:33'
+      result: completed
+      summary: ✅ completed
+  6.2@1.1:
+    status: failed
+    attempts: 2
+    last_attempt: '2026-04-07 17:29:33'
+    history:
+    - &id011
+      attempt: 1
+      time: '2026-04-07 17:29:33'
+      result: not_completed
+      summary: '❌ not completed: Reconciliation cursor stopped before final checkpoint'
+    - &id012
+      attempt: 2
+      time: '2026-04-07 17:29:33'
+      result: not_completed
+      summary: '❌ not completed: Replay buffer still applies stale offset'
+  6.1@1.2:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:33'
+    ai_reasoning: ✅ completed
+    history: *id010
+  6.2@1.2:
+    status: completed
+    attempts: 1
+    history:
+    - *id011
+    - *id012
+    - attempt: 1
+      time: '2026-04-07 17:29:33'
+      result: completed
+      summary: ✅ completed
+    last_attempt: '2026-04-07 17:29:33'
+    ai_reasoning: ✅ completed
+  6.3@1.2:
+    status: completed
+    attempts: 1
+    last_attempt: '2026-04-07 17:29:33'
+    ai_reasoning: ✅ completed
+    history:
+    - attempt: 1
+      time: '2026-04-07 17:29:33'
+      result: completed
+      summary: ✅ completed

@@ -20,6 +20,7 @@ Usage:
 import os
 import sys
 import json
+import re
 import time
 import shutil
 import argparse
@@ -109,9 +110,19 @@ def reset_test(project_root, log_dir):
         if subdir_name:
             session_dir = os.path.join(log_dir, subdir_name)
             if os.path.exists(session_dir):
-                shutil.rmtree(session_dir)
+                try:
+                    shutil.rmtree(session_dir)
+                except OSError as e:
+                    print(f"warning: failed to remove previous session dir {session_dir}: {e}")
 
-        os.remove(marker)
+        try:
+            os.remove(marker)
+        except OSError:
+            try:
+                with open(marker, "w", encoding="utf-8") as f:
+                    f.write("")
+            except OSError as e:
+                print(f"warning: failed to clear marker {marker}: {e}")
 
     # Clean leftover dirs
     for d in ["monitors", "logs"]:
@@ -194,6 +205,179 @@ def run_orchestrator(project_root, autoagent_dir, test_rules, log_dir,
         return -1, None
     except KeyboardInterrupt:
         return 130, None
+
+
+def _normalize_log_content(text):
+    """Normalize session-specific paths in conversation log content.
+
+    Replaces absolute paths to autoagent-exec.bat with a stable placeholder
+    and normalizes variable runtime values (PIDs, log file paths) so that
+    logs from different runs can be compared.
+    """
+    text = text.replace("\\", "/")
+    # Replace quoted autoagent-exec paths:
+    #   "F:/Workspace/.../scripts/autoagent-exec.bat" → "<autoagent-exec>"
+    text = re.sub(
+        r'"[^"]*?/scripts/autoagent-exec\.(?:bat|sh)"',
+        '"<autoagent-exec>"',
+        text,
+    )
+    # Normalize PIDs:  "   PID: 12345" → "   PID: <PID>"
+    text = re.sub(r'PID: \d+', 'PID: <PID>', text)
+    # Normalize log file paths that contain session IDs:
+    #   .../logs/<session_id>/... → .../logs/<SESSION>/...
+    text = re.sub(
+        r'(?:(?:[A-Za-z]:)?[^"\n]*?/)?logs/(?:<SESSION>|[A-Za-z0-9_.-]+_[a-z0-9]+)/',
+        'logs/<SESSION>/',
+        text,
+    )
+    return text
+
+
+def _normalize_state_data(data):
+    """Recursively strip runtime-variable fields from parsed todos_state data."""
+    STRIP_KEYS = {'time', 'last_attempt', 'context_created_at'}
+    if isinstance(data, dict):
+        return {k: _normalize_state_data(v) for k, v in data.items()
+                if k not in STRIP_KEYS}
+    if isinstance(data, list):
+        return [_normalize_state_data(item) for item in data]
+    return data
+
+
+def compare_state_file(session_dir, project_root):
+    """Compare actual todos_state.yaml against expected reference.
+
+    Parses both files, strips timestamps, then compares the normalized
+    YAML output.  Returns a list of error strings (empty if match).
+    """
+    import yaml
+
+    expected_path = os.path.join(project_root, "expected_state.yaml")
+    if not os.path.isfile(expected_path):
+        return []  # No expected state file → skip comparison
+
+    actual_path = os.path.join(session_dir, "todos_state.yaml")
+    if not os.path.isfile(actual_path):
+        return ["State compare: todos_state.yaml not found in session"]
+
+    with open(expected_path, "r", encoding="utf-8") as f:
+        expected_data = yaml.safe_load(f)
+    with open(actual_path, "r", encoding="utf-8") as f:
+        actual_data = yaml.safe_load(f)
+
+    expected_norm = _normalize_state_data(expected_data)
+    actual_norm = _normalize_state_data(actual_data)
+
+    expected_text = yaml.dump(expected_norm, default_flow_style=False,
+                              allow_unicode=True, sort_keys=True)
+    actual_text = yaml.dump(actual_norm, default_flow_style=False,
+                            allow_unicode=True, sort_keys=True)
+
+    if expected_text == actual_text:
+        return []
+
+    exp_lines = expected_text.splitlines()
+    act_lines = actual_text.splitlines()
+    errors = ["State compare: todos_state.yaml content differs"]
+    for i, (e, a) in enumerate(zip(exp_lines, act_lines), 1):
+        if e != a:
+            errors.append(f"  line {i} expected: {e!r}")
+            errors.append(f"  line {i} actual:   {a!r}")
+            break
+    else:
+        diff_line = min(len(exp_lines), len(act_lines)) + 1
+        if diff_line <= len(exp_lines):
+            errors.append(f"  line {diff_line} expected: {exp_lines[diff_line-1]!r}")
+        else:
+            errors.append("  expected: <EOF>")
+        if diff_line <= len(act_lines):
+            errors.append(f"  line {diff_line} actual:   {act_lines[diff_line-1]!r}")
+        else:
+            errors.append("  actual:   <EOF>")
+    return errors
+
+
+def compare_conversation_logs(session_dir, project_root):
+    """Compare actual conversation logs against expected reference logs.
+
+    The expected logs live in <project_root>/expected_logs/ and are
+    pre-normalized (session-specific paths replaced with placeholders).
+
+    Returns a list of error strings (empty if all match).
+    """
+    expected_dir = os.path.join(project_root, "expected_logs")
+    if not os.path.isdir(expected_dir):
+        return [f"Expected logs directory not found: {expected_dir}"]
+
+    actual_conv_dir = os.path.join(session_dir, "conversations")
+    if not os.path.isdir(actual_conv_dir):
+        return ["Conversations directory not found in session"]
+
+    errors = []
+
+    # Walk the expected_logs directory and compare each file
+    for dirpath, _dirnames, filenames in os.walk(expected_dir):
+        for fname in sorted(filenames):
+            if not fname.endswith(".md"):
+                continue
+            expected_path = os.path.join(dirpath, fname)
+            # Compute relative path from expected_dir
+            rel_path = os.path.relpath(expected_path, expected_dir)
+            actual_path = os.path.join(actual_conv_dir, rel_path)
+
+            if not os.path.isfile(actual_path):
+                errors.append(f"Log compare: missing file {rel_path}")
+                continue
+
+            with open(expected_path, "r", encoding="utf-8") as f:
+                expected_text = _normalize_log_content(f.read())
+            with open(actual_path, "r", encoding="utf-8") as f:
+                actual_text = _normalize_log_content(f.read())
+
+            if expected_text != actual_text:
+                # Find first difference for diagnostics
+                exp_lines = expected_text.splitlines()
+                act_lines = actual_text.splitlines()
+                diff_line = None
+                for i, (e, a) in enumerate(zip(exp_lines, act_lines), 1):
+                    if e != a:
+                        diff_line = i
+                        break
+                if diff_line is None:
+                    # One is longer than the other
+                    diff_line = min(len(exp_lines), len(act_lines)) + 1
+
+                errors.append(
+                    f"Log compare: {rel_path} differs at line {diff_line}"
+                )
+                # Show context around the first diff
+                start = max(0, diff_line - 2)
+                end = min(max(len(exp_lines), len(act_lines)), diff_line + 2)
+                if diff_line <= len(exp_lines):
+                    errors.append(f"  expected: {exp_lines[diff_line - 1]!r}")
+                else:
+                    errors.append(f"  expected: <EOF>")
+                if diff_line <= len(act_lines):
+                    errors.append(f"  actual:   {act_lines[diff_line - 1]!r}")
+                else:
+                    errors.append(f"  actual:   <EOF>")
+
+    # Also check for unexpected extra files in actual that aren't in expected
+    for dirpath, _dirnames, filenames in os.walk(actual_conv_dir):
+        for fname in sorted(filenames):
+            if not fname.endswith(".md"):
+                continue
+            actual_path = os.path.join(dirpath, fname)
+            rel_path = os.path.relpath(actual_path, actual_conv_dir)
+            expected_path = os.path.join(expected_dir, rel_path)
+            if not os.path.isfile(expected_path):
+                # Skip index files (task_N.md) — these are auto-generated summaries
+                if re.match(r"task_\d+\.md$", fname):
+                    continue
+                errors.append(f"Log compare: unexpected file {rel_path}")
+
+    return errors
 
 
 def verify_test(test_case, session_dir, actual_exit_code):
@@ -291,6 +475,18 @@ def verify_test(test_case, session_dir, actual_exit_code):
                     f"Task '{task_id}': expected history to contain a "
                     f"not_completed entry, but none found"
                 )
+
+    # 4. Compare conversation logs (only for tests with compare_logs=true)
+    if test_case.get("compare_logs") and session_dir:
+        project_root = test_case.get("_project_root", "")
+        log_errors = compare_conversation_logs(session_dir, project_root)
+        errors.extend(log_errors)
+
+    # 5. Compare state file (only for tests with compare_state=true)
+    if test_case.get("compare_state") and session_dir:
+        project_root = test_case.get("_project_root", "")
+        state_errors = compare_state_file(session_dir, project_root)
+        errors.extend(state_errors)
 
     return len(errors) == 0, errors
 
@@ -418,6 +614,8 @@ Examples:
         project_root = os.path.abspath(
             os.path.join(test_root, tc["project_root"])
         )
+        # Store resolved path for verify_test's log comparison
+        tc["_project_root"] = project_root
         test_rules = os.path.join(test_root, tc["test_rules"])
 
         print(f"\n[{idx}/{total}] Test {test_num}: {name}")
@@ -481,22 +679,28 @@ Examples:
                 print(f"    - {err}")
             # Show orchestrator output on failure if not verbose mode
             if not args.verbose and proc_result and hasattr(proc_result, "stdout"):
+                def _safe_print(s):
+                    try:
+                        print(s)
+                    except UnicodeEncodeError:
+                        print(s.encode("utf-8", errors="replace").decode("ascii", errors="replace"))
+
                 if proc_result.stdout:
                     # Show last 30 lines of output
                     lines = proc_result.stdout.strip().split("\n")
                     if len(lines) > 30:
                         print(f"\n  --- Last 30 lines of orchestrator output ---")
                         for line in lines[-30:]:
-                            print(f"    {line}")
+                            _safe_print(f"    {line}")
                     else:
                         print(f"\n  --- Orchestrator output ---")
                         for line in lines:
-                            print(f"    {line}")
+                            _safe_print(f"    {line}")
                 if proc_result.stderr:
                     stderr_lines = proc_result.stderr.strip().split("\n")
                     print(f"\n  --- Orchestrator stderr (last 15 lines) ---")
                     for line in stderr_lines[-15:]:
-                        print(f"    {line}")
+                        _safe_print(f"    {line}")
 
         results.append((test_num, name, passed, errors, elapsed))
 

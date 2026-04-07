@@ -14,7 +14,6 @@ from prompts.shared import (
 
 def build_ideas_review_prompt(
     idea_content: str,
-    tasks_yaml: str,
     temp_tasks_path: str,
 ) -> str:
     """Build the prompt that asks a reviewer AI to evaluate generated tasks.
@@ -24,7 +23,6 @@ def build_ideas_review_prompt(
 
     Args:
         idea_content: Raw idea text.
-        tasks_yaml: YAML-formatted task list string.
         temp_tasks_path: File path where corrected YAML should be written.
     """
     task_design_guide = load_task_design_guide()
@@ -40,16 +38,14 @@ for quality, completeness, and correctness.
 These tasks will be executed by an AI coding agent that can read/modify files, run shell
 commands, and analyze code and outputs.
 
-## Original Idea
-
+<original_idea>
 {idea_content[:limits.get('max')] + chr(10) + chr(10) + '(idea text truncated)' if len(idea_content) > limits.get('max') else idea_content}
+</original_idea>
 
-## Generated Tasks (YAML)
+The generated tasks have been saved to the following file:
+  {temp_tasks_path}
 
-```yaml
-{tasks_yaml[:limits.get('max')] + chr(10) + '# (YAML truncated)' if len(tasks_yaml) > limits.get('max') else tasks_yaml}```
-
-## Task Design Guide
+Please read this file to review the tasks.
 
 The following guide describes how AutoAgent executes tasks at runtime. Use it as
 the authoritative reference for task types, schema, hierarchy rules, and best
@@ -59,8 +55,7 @@ practices when reviewing the generated tasks.
 {task_design_guide}
 </task_design_guide>
 
-## Review Criteria
-
+<review_criteria>
 Evaluate the generated tasks against these criteria:
 
 1. **Schema correctness**: Does every task have the required fields for its type?
@@ -83,9 +78,9 @@ Evaluate the generated tasks against these criteria:
    model name string. Tasks requiring complex reasoning should use `"default"`;
    straightforward tasks can use `"lite"`. The `model` field is valid on ALL task types
    (including `long_running` and `long_running_once`).
+</review_criteria>
 
-## Instructions
-
+<instructions>
 If the tasks pass ALL criteria, respond with EXACTLY:
 \u2705 completed
 
@@ -95,50 +90,45 @@ If the tasks need improvement:
    Write the corrected full task list into that file.
    Do NOT include markdown code fences or any extra text in the file.
 2. After modifying the file, respond with: \u274c not completed
+</instructions>
 """
 
 
 def build_revision_prompt(
     temp_tasks_path: str,
     human_feedback: str = "",
-    current_tasks_yaml: str = "",
 ) -> str:
     """Build a revision prompt sent to the reviewer AI after human feedback.
 
     This prompt is sent to the **same reviewer** whose session context is
     preserved.  It optionally includes:
-    - The latest YAML (if the human edited the temp file)
     - Human text feedback (if the human provided any)
 
     Args:
         temp_tasks_path: File path where revised YAML should be written.
         human_feedback: Free-form feedback text from the human user (may be empty).
-        current_tasks_yaml: Updated YAML string if the human edited the file
-            (empty string means no file edits).
     """
     parts: list[str] = []
 
-    if current_tasks_yaml:
-        yaml_display = current_tasks_yaml[:limits.get('max')]
-        if len(current_tasks_yaml) > limits.get('max'):
-            yaml_display += '\n# (YAML truncated)'
-        parts.append(f"""## Updated Tasks (edited by human)
+    parts.append(f"""The current tasks are saved in the following file:
+  {temp_tasks_path}
 
-```yaml
-{yaml_display}```""")
+Please read this file to see the current tasks.""")
 
     if human_feedback:
         fb_display = human_feedback[:limits.get('max')]
         if len(human_feedback) > limits.get('max'):
             fb_display += '\n\n(feedback truncated)'
-        parts.append(f"""## Human Feedback
+        parts.append(f"""<human_feedback>
+{fb_display}
+</human_feedback>""")
 
-{fb_display}""")
-
-    parts.append(f"""Please revise the task decomposition based on the information above.
-Write ONLY valid YAML (a list of tasks) into the following file:
+    parts.append(f"""<instructions>
+Please revise the task decomposition based on the information above.
+Write ONLY valid YAML (a dictionary containing a `description` string and a `tasks` list) into the following file:
   {temp_tasks_path}
 
-Do NOT include markdown code fences or any extra text in the file.""")
+Do NOT include markdown code fences or any extra text in the file.
+</instructions>""")
 
     return '\n\n'.join(parts) + '\n'

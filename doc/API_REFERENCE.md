@@ -299,7 +299,7 @@ type prompt.txt | claude --verbose --print --output-format stream-json [--resume
 |------|----|
 | `name` | `"gemini"` |
 | `default_executable` | `"gemini"` |
-| `default_model` | `"gemini-2.5-pro"` |
+| `default_model` | `"gemini-3-flash"` |
 | `supports_system_prompt` | `False` |
 
 **命令模式**：
@@ -343,6 +343,27 @@ type prompt.txt | opencode run --format json [-m <model>] -s <session_id>
 
 **说明**：测试用 Provider，不调用真实 AI CLI 工具。从 `--test-rules` 指定的规则文件中按顺序读取预定义响应，用于测试编排逻辑。配合 `AIClientTest` 使用。
 
+#### CodexProvider
+
+| 属性 | 值 |
+|------|----|
+| `name` | `"codex"` |
+| `default_executable` | `"codex"` |
+| `default_model` | `"gpt-5.4-mini"` |
+| `supports_system_prompt` | `False` |
+
+**命令模式**：
+```bash
+type prompt.txt | codex exec --json --dangerously-bypass-approvals-and-sandbox -s danger-full-access [-c session_id="<session_id>"] [-m <model>] -
+```
+
+与 CodeBuddy 的关键差异：
+- 使用 `codex exec` 子命令
+- 使用 `--json` 替代 `--output-format stream-json`
+- 使用 `--dangerously-bypass-approvals-and-sandbox -s danger-full-access` 跳过确认
+- 会话续接使用 `-c session_id="<session_id>"`
+- 输出格式使用行分隔 JSON
+
 ### 工厂函数
 
 #### get_provider
@@ -366,6 +387,7 @@ def get_provider(
 | `claude` | `claude-code`, `claude` |
 | `gemini` | `gemini-cli`, `gemini` |
 | `opencode` | `oc` |
+| `codex` | `codex` |
 | `test` | - |
 
 #### list_providers
@@ -643,16 +665,19 @@ class NestedTaskExecutor:
 1. **子任务失败时** → 调用 AI 分析失败原因，返回 `retry_from`
 2. **所有子任务完成后** → 调用 AI 评估主任务，返回 `main_task_completed` 和 `retry_from`
 
-**AI 失败分析请求格式**：
+**AI 失败分析 prompt 结构**：
 
-```python
-# 系统提供的上下文
-context = {
-    "failed_subtask": { "id": "2.2", "exit_code": 137, "error_log": "..." },
-    "task_history": [...],
-    "related_files": [...]
-}
-```
+`build_failure_analysis_prompt()` 构建的 prompt 包含以下 section（按顺序，部分为条件性）：
+
+| Section | 条件 | 说明 |
+|---------|------|------|
+| `## Failed Subtask` | 始终 | 主任务名称、完成标准、失败子任务详情 |
+| `## Previous Step ({id}) Context` | `previous_context` 非空 | 上一个成功子任务的完整 AI 输出，提供失败发生时的项目状态上下文 |
+| `## Failed Subtask ({id}) Output` | `error_text` 非空 | 失败子任务的 AI 输出（优先级：logs > response_text > output summary） |
+| `## Failed Subtask ({id}) Attempt History` | `failed_subtask_history` 非空 | 失败子任务在当前 round 中的逐次尝试记录（attempt/result/detail） |
+| `## All Subtasks Status` | 始终 | 所有子任务的状态概览 |
+| `## Previous Failure Analyses` | 有历史 decisions | 当前 round 内之前的 failure analysis 结果（Nested 按 `_main_round` 过滤，Looping 按 `loop_idx` 过滤） |
+| `## Instructions` | 始终 | 要求返回 JSON，禁止重复已尝试的修复 |
 
 **AI 失败分析响应格式**：
 
@@ -664,7 +689,7 @@ context = {
 }
 ```
 
-> **注意**：`suggested_fix` 仅传递给 `retry_from` 指定的子任务，后续子任务不会看到此修复建议（因为修复建议针对的是特定子任务的问题）。
+> **注意**：`suggested_fix` 仅传递给 `retry_from` 指定的子任务。如果该子任务是 `*_once` 类型且被跳过，fix 会自动 carry forward 到下一个实际执行的子任务。后续其他子任务不会看到此修复建议。
 
 **AI 主任务评估响应格式**：
 
@@ -1244,7 +1269,7 @@ def get_in_progress_tasks(self) -> list
 def record_interrupt(self, task_id: str, attempt: int = 0)
 ```
 
-记录一次中断事件（如 Ctrl+C）到任务的执行历史中。自动触发 `save_state()`。
+记录一次中断事件（如 Ctrl+C）到任务的执行历史中。除了记录到顶层 task_id 外，还会扫描所有 round-scoped key（包含 `@` 的 key），找到属于该 task 且状态为 `in_progress` 的子任务一并记录中断。这确保断点续传时子任务的 prompt 能在 Previous Attempts 中看到 `interrupted` 记录。自动触发 `save_state()`。
 
 ---
 
@@ -1348,7 +1373,7 @@ class SessionTimeoutError(AICallError):
 |------|------|--------|------|
 | `--config` | `-c` | `todos.yaml` | 任务配置文件路径 |
 | `--task` | `-t` | None | 只执行指定任务 ID |
-| `--provider` | `-P` | `codebuddy` | AI provider：`codebuddy`、`claude`、`gemini`、`opencode`、`test` |
+| `--provider` | `-P` | `codebuddy` | AI provider：`codebuddy`、`claude`、`gemini`、`opencode`、`codex`、`test` |
 | `--executable` | - | None | 覆盖 provider 默认可执行文件路径 |
 | `--extra-args` | - | None | 传递给 AI 工具的额外 CLI 参数 |
 | `--use-cli` | - | - | 强制使用 CLI 模式（而非 SDK 模式） |
@@ -1421,7 +1446,7 @@ python orchestrator.py
 python orchestrator.py --provider claude --task 2
 
 # 使用 Gemini CLI 并指定模型
-python orchestrator.py --provider gemini --model gemini-2.5-pro
+python orchestrator.py --provider gemini --model gemini-3-flash
 
 # 使用 OpenCode
 python orchestrator.py --provider opencode
@@ -1577,7 +1602,7 @@ orchestrator.run_with_idle()  # 不会退出，直到 Ctrl+C
 |------|------|
 | **TodoOrchestrator** | 任务调度、状态管理、配置解析、ideas 处理、idle 模式 |
 | **AIProvider** | AI CLI 工具抽象基类、命令构造 |
-| **CodeBuddyProvider / ClaudeCodeProvider / GeminiCLIProvider / OpenCodeProvider** | 具体 AI 工具的命令构造 |
+| **CodeBuddyProvider / ClaudeCodeProvider / GeminiCLIProvider / OpenCodeProvider / CodexProvider** | 具体 AI 工具的命令构造 |
 | **AIClient** | AI 调用、Context 管理、stream-json 解析 |
 | **SimpleTaskExecutor** | 简单任务执行（自循环完成检测，按失败类型决定是否 reset session） |
 | **NestedTaskExecutor** | 嵌套任务执行、AI 决策调度 |

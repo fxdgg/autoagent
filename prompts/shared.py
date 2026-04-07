@@ -257,37 +257,64 @@ STATUS_MARKER_INSTRUCTION = (
 # Helper functions
 # ---------------------------------------------------------------------------
 
-def build_sibling_context(task: dict, parent_context: dict) -> str:
-    """Build the sibling-subtask orientation section.
+def indent_block(text: str, spaces: int = 4) -> str:
+    """Indent every non-empty line of *text* by *spaces* spaces.
 
-    Returns an empty string when there is no sibling information to show.
+    Leading/trailing whitespace is stripped from the whole block first.
+    Empty lines within the text are preserved as-is (no trailing
+    whitespace added).  This keeps the user's original relative
+    indentation structure intact while shifting the whole block
+    rightward.
+    """
+    if not text:
+        return ""
+    text = text.strip()
+    if not text:
+        return ""
+    prefix = " " * spaces
+    lines = text.split("\n")
+    return "\n".join(prefix + line if line.strip() else line for line in lines)
+
+
+def build_workflow_section(task: dict, parent_context: dict) -> str:
+    """Build the sibling-subtask workflow orientation text.
+
+    Returns the plain workflow lines (no wrapping tag — caller adds
+    ``<workflow>``).  The current subtask is marked with ``→``.
+
+    Returns an empty string when there is no sibling information.
     """
     if not parent_context or not parent_context.get('subtasks'):
         return ""
 
-    subtask_lines = []
+    lines = []
     current_id = str(task['id'])
     for st in parent_context['subtasks']:
         st_id = str(st['id'])
-        marker = "\u2192" if st_id == current_id else " "
-        subtask_lines.append(f"  {marker} {st_id}. {st['name']}")
-    return f"This task is part of a larger workflow:\n" + "\n".join(subtask_lines)
+        marker = "→" if st_id == current_id else " "
+        lines.append(f"{marker} {st_id}. {st['name']}")
+    return "\n".join(lines)
+
+
+# Keep the old name as an alias so existing callers don't break during
+# the transition.  Can be removed once all call-sites are updated.
+build_sibling_context = build_workflow_section
 
 
 def build_history_section(history: list, extract_summary_fn) -> str:
-    """Build the previous-attempts history section.
+    """Build the previous-attempts history lines.
 
-    Includes attempts that ended with an error (e.g. timeout, AI call
-    failure) or ``not_completed`` — both carry useful diagnostic
-    information for the next attempt.  ``completed`` entries are omitted
-    because they indicate success and provide no actionable guidance.
+    Returns the formatted bullet list **without** a heading or wrapping
+    tag — the caller wraps it in ``<attempt_history>``.
+
+    Includes attempts that ended with ``error``, ``not_completed``, or
+    ``interrupted``.  ``completed`` entries are omitted (they carry no
+    actionable guidance).
 
     Args:
         history: Full history list from state.
-        extract_summary_fn: A callable that takes an ai_response string and
-            returns a short summary.
-
-    Returns the formatted string (may be empty).
+        extract_summary_fn: Callable(ai_response) → str (unused but
+            kept for API compatibility).
     """
     if not history:
         return ""
@@ -296,10 +323,9 @@ def build_history_section(history: list, extract_summary_fn) -> str:
     history_lines = []
     for h in recent:
         result_str = h.get('result', 'unknown')
-        # Include error, not_completed, and interrupted entries; skip completed
         if result_str not in ('error', 'not_completed', 'interrupted'):
             continue
-        history_lines.append(f"  - Attempt {h.get('attempt', '?')}: {result_str}")
+        history_lines.append(f"- Attempt {h.get('attempt', '?')}: {result_str}")
         if result_str == 'error':
             error_msg = h.get('error', '')
             if error_msg:
@@ -313,18 +339,19 @@ def build_history_section(history: list, extract_summary_fn) -> str:
                 history_lines.append(f"    Summary: {summary[:limits.get('history_summary')]}")
     if not history_lines:
         return ""
-    return f"Previous Attempts:\n" + "\n".join(history_lines)
+    return "\n".join(history_lines)
 
 
 def build_suggested_fix_section(parent_context: dict, fallback_msg: str = None) -> str:
-    """Build the AI-suggested-fix section for retry prompts.
+    """Build the AI-suggested-fix content for retry prompts.
+
+    Returns the plain fix text (no wrapping tag — caller adds
+    ``<guidance_from_previous_failure>``).
 
     Args:
         parent_context: May contain a ``suggested_fix`` key.
         fallback_msg: Message to use when no suggested fix is available.
             Defaults to a generic "try a different approach" message.
-
-    Returns the formatted string.
     """
     if parent_context and parent_context.get('suggested_fix'):
         fix_text = parent_context['suggested_fix']
@@ -332,7 +359,6 @@ def build_suggested_fix_section(parent_context: dict, fallback_msg: str = None) 
         if len(fix_text) > max_len:
             fix_text = f"(truncated, showing last {max_len} chars)\n..." + fix_text[-max_len:]
         return (
-            f"**AI Analysis from previous failure:**\n"
             f"{fix_text}\n\n"
             f"Please take this analysis into account and try a different approach."
         )
@@ -343,32 +369,33 @@ def build_suggested_fix_section(parent_context: dict, fallback_msg: str = None) 
 
 
 def build_previous_subtask_section(parent_context: dict) -> str:
-    """Build the previous-subtask summary section for context-isolated prompts.
+    """Return the previous-subtask summary text and its tag name.
 
-    When context isolation is enabled, each subtask starts a fresh AI session.
-    This section injects a truncated summary of the previous subtask's AI
-    response so the new session has essential context.
+    Returns a ``(tag_name, content)`` tuple.  *tag_name* includes the
+    previous subtask ID when available (e.g.
+    ``"previous_step_result (1.2)"``).  *content* is the truncated
+    summary text **without** any wrapping tag — the caller wraps it.
 
-    Returns an empty string when there is no previous summary to inject.
+    Returns ``("", "")`` when there is no previous summary.
     """
     if not parent_context:
-        return ""
+        return ("", "")
     summary = parent_context.get('previous_subtask_summary', '')
     if not summary:
-        return ""
+        return ("", "")
+    prev_id = parent_context.get('previous_subtask_id', '')
+    tag_name = f"previous_step_result ({prev_id})" if prev_id else "previous_step_result"
     max_len = limits.get('previous_subtask_summary')
     if len(summary) > max_len:
         summary = "...(truncated)\n" + summary[-max_len:]
-    return f"=== Previous Step Result ===\n{summary}\n============================"
+    return (tag_name, summary)
 
 
 def build_previous_attempt_output_section(output: str) -> str:
-    """Build a section containing the AI's output from the previous attempt.
+    """Return the previous-attempt output text.
 
-    When a task is retried with a session reset, the AI loses its
-    conversation history.  This section injects a truncated copy of the
-    previous attempt's full output so the AI can see what it already did
-    and continue from there instead of starting over.
+    Returns the truncated output **without** any wrapping tag — the
+    caller wraps it in ``<previous_attempt_output>``.
 
     Returns an empty string when *output* is falsy.
     """
@@ -377,11 +404,7 @@ def build_previous_attempt_output_section(output: str) -> str:
     max_len = limits.get('previous_attempt_output')
     if len(output) > max_len:
         output = "...(truncated)\n" + output[-max_len:]
-    return (
-        "=== Previous Attempt Output ===\n"
-        f"{output}\n"
-        "==============================="
-    )
+    return output
 
 
 def build_timeout_guidance(
@@ -389,42 +412,34 @@ def build_timeout_guidance(
     timeout_feedback: str,
     timeout_type: str = "bash",
 ) -> str:
-    """Build the timeout-warning section.
+    """Build the timeout-warning text.
+
+    Returns plain text (no wrapping tag — caller adds ``<constraints>``).
 
     Args:
         exec_script_path: Path to the autoagent-exec wrapper script.
         timeout_feedback: Human-readable description of the timeout event.
-        timeout_type: Either ``"bash"`` (no output for N seconds — remind
-            the AI to use autoagent-exec) or ``"session"`` (total session
-            time exceeded — tell the AI it was interrupted by the user).
+        timeout_type: ``"bash"`` or ``"session"``.
     """
     if timeout_type == "session":
-        # Session timeout: not included in the prompt per design.
-        # Return empty — session timeout is handled via history entries.
         return ""
 
-    # bash timeout: short reminder — the system prompt already contains
-    # full autoagent-exec usage instructions.
     return (
-        f"**⏰ TIMEOUT WARNING:** The previous session was terminated because "
-        f"no new output was produced for an extended period. "
-        f"If your task involves a long-running command, remember to use "
-        f"`autoagent-exec` (see system instructions)."
+        "⏰ TIMEOUT WARNING: The previous session was terminated because "
+        "no new output was produced for an extended period. "
+        "If your task involves a long-running command, remember to use "
+        "`autoagent-exec` (see system instructions)."
     )
 
 
 def build_long_running_reminder(exec_script_path: str) -> str:
     """Build a short reminder for long-running tasks.
 
-    This is a concise reminder that the AI must use autoagent-exec.
-    The full usage instructions are already in the system prompt.
-
-    Args:
-        exec_script_path: Path to the autoagent-exec wrapper script.
+    Returns plain text (no wrapping tag — caller adds ``<constraints>``).
     """
     return (
-        f"**⚠️ Long-Running Task:** You MUST use `autoagent-exec` to run your command. "
-        f"Do NOT run it directly in Bash. Example:\n"
+        "⚠️ Long-Running Task: You MUST use `autoagent-exec` to run your command. "
+        "Do NOT run it directly in Bash. Example:\n"
         f'  "{exec_script_path}" "cd build && cmake .. && make -j8"\n'
-        f"See system instructions for full details."
+        "See system instructions for full details."
     )

@@ -1,0 +1,49 @@
+# =============================================================================
+# Test 8: max_attempts exhausted causing task failure
+# =============================================================================
+# This configuration tests that when a nested task exhausts its max_attempts,
+# the orchestrator correctly marks the task as failed and moves on.
+#
+# Task structure:
+#   Task 1: nested (max_attempts=2)
+#     - 1.1: simple (succeeds)
+#     - 1.2: simple (max_attempts=1, always fails)
+#   Task 2: simple (should still execute after task 1 fails)
+#
+# Expected behavior:
+#   - Task 1 round 1: subtask 1.1 succeeds, 1.2 fails
+#   - Failure analysis decides retry_from=1.2
+#   - Task 1 round 2: subtask 1.2 fails again
+#   - Failure analysis runs again
+#   - max_attempts=2 exhausted, task 1 marked as failed
+#   - Task 2 still executes and succeeds
+# =============================================================================
+
+tasks:
+  - id: 1
+    name: "Task that will exhaust max_attempts"
+    type: nested
+    max_attempts: 2
+    completion_criteria: |
+      All subtasks completed successfully.
+    subtasks:
+      - id: 1.1
+        name: "Setup step"
+        type: simple
+        completion_criteria: |
+          Setup completed.
+
+      - id: 1.2
+        name: "Failing step"
+        type: simple
+        max_attempts: 1
+        completion_criteria: |
+          Processing completed correctly.
+
+  - id: 2
+    name: "Task after failed task"
+    type: simple
+    completion_criteria: |
+      This task completed successfully.
+    initial_hint: |
+      This is a simple task that should execute even after task 1 failed.

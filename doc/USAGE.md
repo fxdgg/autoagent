@@ -49,6 +49,9 @@ gemini --version
 
 # OpenCode
 opencode --version
+
+# OpenAI Codex
+codex --version
 ```
 
 ### 4. 配置 Preset（可选）
@@ -503,15 +506,18 @@ python orchestrator.py
 # Claude Code（默认模型 claude-sonnet-4-6）
 python orchestrator.py --provider claude
 
-# Gemini Cli（默认模型 gemini-2.5-pro）
+# Gemini Cli（默认模型 gemini-3-flash）
 python orchestrator.py --provider gemini
 
 # OpenCode（使用 opencode 自身配置的默认模型）
 python orchestrator.py --provider opencode
 
+# OpenAI Codex（默认模型 gpt-5.4-mini）
+python orchestrator.py --provider codex
+
 # 指定模型
 python orchestrator.py --provider codebuddy --model deepseek-v3.2
-python orchestrator.py --provider gemini --model gemini-2.5-pro
+python orchestrator.py --provider gemini --model gemini-3-flash
 
 # 使用自定义可执行文件路径
 python orchestrator.py --provider claude --executable /usr/local/bin/claude
@@ -949,7 +955,7 @@ python orchestrator.py
 |----------|------|----------|------|
 | CodeBuddy | `codebuddy` | 从 config.yaml 的 `default_model` 加载 | `cb` |
 | Claude Code | `claude` | `claude-sonnet-4-6` | `claude-code`, `claude` |
-| Gemini CLI | `gemini` | `gemini-2.5-pro` | `gemini-cli`, `gemini` |
+| Gemini CLI | `gemini` | `gemini-3-flash` | `gemini-cli`, `gemini` |
 | OpenCode | `opencode` | （使用自身配置默认） | `oc` |
 | Test | `test` | `test` | - |
 

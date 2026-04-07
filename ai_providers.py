@@ -24,15 +24,17 @@ logger = logging.getLogger(__name__)
 
 def _load_default_model():
     """Load default model from config.yaml."""
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+    config_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "config.yaml"
+    )
     if os.path.isfile(config_path):
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
-            return config.get('default_model', 'deepseek-v3.2')
+            return config.get("default_model", "deepseek-v3.2")
         except Exception:
             pass
-    return 'deepseek-v3.2'
+    return "deepseek-v3.2"
 
 
 # Default model loaded from config.yaml, fallback to deepseek-v3.2
@@ -42,21 +44,21 @@ DEFAULT_MODEL = _load_default_model()
 class AIProvider:
     """
     Base class for AI CLI tool providers.
-    
+
     Subclasses must implement:
     - build_command(): Construct the CLI command string
     - get_stdin_command(): Build the full command with stdin piping
-    
+
     The stream-json output format is assumed to be compatible across
     all providers (CodeBuddy, Claude Code, Gemini CLI all support it).
     """
 
     # Provider name (used for display and config)
     name: str = "base"
-    
+
     # Default executable name
     default_executable: str = "ai-tool"
-    
+
     # Default model
     default_model: str = ""
 
@@ -73,7 +75,7 @@ class AIProvider:
     ):
         """
         Initialize provider.
-        
+
         Args:
             executable: Path to the CLI executable (None = use default)
             model: AI model to use (None = use provider default)
@@ -104,15 +106,15 @@ class AIProvider:
     def get_stdin_command(self, prompt_file_path: str, cmd_args: str) -> str:
         """
         Build the full command that pipes a prompt file to the CLI tool.
-        
+
         Args:
             prompt_file_path: Path to the temp file containing the prompt
             cmd_args: The command args from build_command()
-            
+
         Returns:
             str: Full command string with stdin piping
         """
-        if os.name == 'nt':
+        if os.name == "nt":
             return f'type "{prompt_file_path}" | {cmd_args}'
         else:
             return f'cat "{prompt_file_path}" | {cmd_args}'
@@ -138,7 +140,7 @@ class AIProvider:
 class CodeBuddyProvider(AIProvider):
     """
     Provider for CodeBuddy CLI.
-    
+
     Command pattern:
         type prompt.txt | codebuddy --debug --verbose --print
             --output-format stream-json [--resume <session_id>] --model <model> -y -
@@ -212,22 +214,22 @@ class ClaudeCodeProvider(AIProvider):
 
         if self.extra_args:
             parts.append(self.extra_args)
-        
+
         # '-' reads prompt from stdin
         parts.append("-")
-        
+
         return " ".join(parts)
 
 
 class GeminiCLIProvider(AIProvider):
     """
     Provider for Gemini Cli.
-    
+
     Command pattern:
         type prompt.txt | gemini --output-format stream-json
             -p - [--resume latest] --model <model> --yolo
             [--include-directories <dir1>,<dir2>,...]
-    
+
     Key differences from CodeBuddy:
     - Uses -p (--prompt) for non-interactive mode instead of --print
     - Uses --yolo or -y instead of -y for auto-accept
@@ -238,7 +240,7 @@ class GeminiCLIProvider(AIProvider):
 
     name = "gemini"
     default_executable = "gemini"
-    default_model = "gemini-2.5-pro"
+    default_model = "gemini-3-flash"
 
     def __init__(
         self,
@@ -249,7 +251,7 @@ class GeminiCLIProvider(AIProvider):
     ):
         """
         Initialize Gemini CLI provider.
-        
+
         Args:
             executable: Path to the CLI executable (None = use default)
             model: AI model to use (None = use provider default)
@@ -267,23 +269,23 @@ class GeminiCLIProvider(AIProvider):
 
         if session_id:
             parts.extend(["--resume", session_id])
-        
+
         parts.extend(["--model", self.model])
         parts.append("--yolo")
-        
+
         # Add --include-directories if specified
         if self.include_directories:
             dirs_str = ",".join(self.include_directories)
             parts.extend(["--include-directories", dirs_str])
-        
+
         if self.extra_args:
             parts.append(self.extra_args)
-        
+
         # system_prompt is ignored — Gemini CLI does not support it
 
         # -p - means: non-interactive mode, read prompt from stdin
         parts.extend(["-p", "-"])
-        
+
         return " ".join(parts)
 
 
@@ -335,35 +337,80 @@ class OpenCodeProvider(AIProvider):
         """
         OpenCode supports stdin pipe for the message, just like other providers.
         """
-        if os.name == 'nt':
+        if os.name == "nt":
             return f'type "{prompt_file_path}" | {cmd_args}'
         else:
             return f'cat "{prompt_file_path}" | {cmd_args}'
+
+class CodexProvider(AIProvider):
+    """
+    Provider for OpenAI Codex CLI.
+
+    Command pattern:
+        type prompt.txt | codex exec --json --dangerously-bypass-approvals-and-sandbox
+            -s danger-full-access [-m <model>] -
+
+    Key features:
+    - Uses `codex exec` subcommand for non-interactive mode
+    - Uses --json for JSONL output
+    - Uses --dangerously-bypass-approvals-and-sandbox for auto-accept
+    - Uses -s danger-full-access to disable sandbox
+    - '-' reads prompt from stdin
+    - Does not support --append-system-prompt (system_prompt prepended to user prompt)
+    """
+
+    name = "codex"
+    default_executable = "codex"
+    default_model = "gpt-5.4-mini"
+    supports_system_prompt = False
+
+    def build_command(self, session_id: str = None, system_prompt: str = None) -> str:
+        parts = [self.executable, "exec"]
+
+        parts.append("--json")
+        parts.append("--dangerously-bypass-approvals-and-sandbox")
+        parts.extend(["-s", "danger-full-access"])
+
+        if session_id:
+            parts.extend(["-c", f'session_id="{session_id}"'])
+
+        if self.model:
+            parts.extend(["-m", self.model])
+
+        if self.extra_args:
+            parts.append(self.extra_args)
+
+        # system_prompt is not supported natively — caller prepends to user prompt
+
+        # '-' reads prompt from stdin
+        parts.append("-")
+
+        return " ".join(parts)
 
 
 class TestProvider(AIProvider):
     """
     Test provider that reads pre-defined responses from a rules file.
-    
+
     This provider does NOT call any real AI tool. Instead, it reads
     responses sequentially from a test_rules file. This is useful for
     testing the orchestration logic without incurring AI costs.
-    
+
     The rules file format uses '---RULE---' as a delimiter between
     consecutive responses. Each section between delimiters is returned
     verbatim as the AI response for one ask() call.
-    
+
     Example test_rules.txt:
     ```
     I have completed the task successfully.
-    
+
     ✅ completed
     ---RULE---
     {"analysis": "Build failed", "retry_from": "1.1", "reasoning": "...", "suggested_fix": "...", "confidence": "high"}
     ---RULE---
     ❌ not completed: build error in line 42
     ```
-    
+
     For long_running tasks, the AI response should instruct the system
     to run a command. You can use 'sleep 15' for testing.
     """
@@ -388,28 +435,28 @@ class TestProvider(AIProvider):
 
     def _load_rules(self, filepath: str):
         """Load test rules from file, split by '---RULE---' delimiter.
-        
+
         The delimiter must appear on its own line (leading/trailing whitespace
         is ignored). Lines starting with '#' at the beginning of a rule
         section are treated as comments and stripped.
         """
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, "r", encoding="utf-8") as f:
             lines = f.readlines()
-        
+
         # Split into sections by '---RULE---' lines
         sections = []
         current_section = []
         for line in lines:
-            if line.strip() == '---RULE---':
+            if line.strip() == "---RULE---":
                 if current_section:
-                    sections.append(''.join(current_section))
+                    sections.append("".join(current_section))
                     current_section = []
             else:
                 current_section.append(line)
         # Don't forget the last section
         if current_section:
-            sections.append(''.join(current_section))
-        
+            sections.append("".join(current_section))
+
         # Clean up each section: strip leading/trailing whitespace,
         # and remove leading comment lines (lines starting with #) and blank lines
         for section in sections:
@@ -420,32 +467,32 @@ class TestProvider(AIProvider):
             # Remove leading comment lines and blank lines
             result_lines = []
             past_leading = False
-            for line in stripped.split('\n'):
+            for line in stripped.split("\n"):
                 sline = line.strip()
-                if not past_leading and (sline.startswith('#') or sline == ''):
+                if not past_leading and (sline.startswith("#") or sline == ""):
                     continue  # Skip leading comments and blank lines
                 past_leading = True
                 result_lines.append(line)
-            cleaned = '\n'.join(result_lines).strip()
+            cleaned = "\n".join(result_lines).strip()
             if cleaned:
                 self._rules.append(cleaned)
-        
+
         logger.info(f"Loaded {len(self._rules)} test rules from {filepath}")
 
     def get_next_response(self) -> str:
         """
         Get the next pre-defined response.
-        
+
         Returns responses in order. If all rules are exhausted,
         cycles back to the last rule (to avoid index errors in
         long-running tests).
-        
+
         Returns:
             str: The next test response
         """
         if not self._rules:
             return "❌ not completed: No test rules loaded"
-        
+
         if self._rule_index >= len(self._rules):
             # Cycle on the last rule to avoid crashes
             logger.warning(
@@ -453,10 +500,12 @@ class TestProvider(AIProvider):
                 f"Repeating last rule."
             )
             return self._rules[-1]
-        
+
         response = self._rules[self._rule_index]
         self._rule_index += 1
-        logger.info(f"TestProvider: returning rule {self._rule_index}/{len(self._rules)}")
+        logger.info(
+            f"TestProvider: returning rule {self._rule_index}/{len(self._rules)}"
+        )
         return response
 
     def peek_remaining(self) -> int:
@@ -480,6 +529,7 @@ PROVIDERS = {
     "claude": ClaudeCodeProvider,
     "gemini": GeminiCLIProvider,
     "opencode": OpenCodeProvider,
+    "codex": CodexProvider,
     "test": TestProvider,
 }
 
@@ -491,6 +541,7 @@ PROVIDER_ALIASES = {
     "gemini-cli": "gemini",
     "gemini": "gemini",
     "oc": "opencode",
+    "codex": "codex",
 }
 
 
@@ -504,7 +555,7 @@ def get_provider(
 ) -> AIProvider:
     """
     Create an AI provider by name.
-    
+
     Args:
         name: Provider name or alias (e.g. "codebuddy", "claude", "gemini", "test")
         executable: Override the default executable path
@@ -512,25 +563,24 @@ def get_provider(
         extra_args: Additional CLI arguments
         test_rules_file: Path to test rules file (only for "test" provider)
         include_directories: List of additional directories for Gemini sandbox
-        
+
     Returns:
         AIProvider: Configured provider instance
-        
+
     Raises:
         ValueError: If the provider name is unknown
     """
     # Resolve aliases
     resolved = PROVIDER_ALIASES.get(name.lower(), name.lower())
-    
+
     provider_class = PROVIDERS.get(resolved)
     if not provider_class:
-        available = ", ".join(sorted(set(list(PROVIDERS.keys()) + list(PROVIDER_ALIASES.keys()))))
-        raise ValueError(
-            f"Unknown AI provider: {name!r}. "
-            f"Available: {available}"
+        available = ", ".join(
+            sorted(set(list(PROVIDERS.keys()) + list(PROVIDER_ALIASES.keys())))
         )
-    
-    if resolved == 'test':
+        raise ValueError(f"Unknown AI provider: {name!r}. Available: {available}")
+
+    if resolved == "test":
         if not test_rules_file:
             raise ValueError(
                 "TestProvider requires --test-rules <file> to specify the rules file."
@@ -541,15 +591,15 @@ def get_provider(
             model=model,
             extra_args=extra_args,
         )
-    
-    if resolved == 'gemini':
+
+    if resolved == "gemini":
         return GeminiCLIProvider(
             executable=executable,
             model=model,
             extra_args=extra_args,
             include_directories=include_directories,
         )
-    
+
     return provider_class(
         executable=executable,
         model=model,
@@ -603,18 +653,20 @@ def parse_model_spec(model_str: str) -> dict:
         return {"plan": "", "default": "", "lite": ""}
 
     # Check if it's a multi-role spec (contains both ';' and ':' with a valid role prefix)
-    if ';' in model_str or any(model_str.startswith(f"{role}:") for role in MODEL_ROLES):
+    if ";" in model_str or any(
+        model_str.startswith(f"{role}:") for role in MODEL_ROLES
+    ):
         roles = {}
-        for part in model_str.split(';'):
+        for part in model_str.split(";"):
             part = part.strip()
             if not part:
                 continue
-            if ':' not in part:
+            if ":" not in part:
                 raise ValueError(
                     f"Invalid model spec segment: {part!r}. "
                     f"Expected 'role:model' format (roles: {', '.join(MODEL_ROLES)})"
                 )
-            role, model = part.split(':', 1)
+            role, model = part.split(":", 1)
             role = role.strip()
             model = model.strip()
             if role not in MODEL_ROLES:
@@ -627,8 +679,7 @@ def parse_model_spec(model_str: str) -> dict:
         # 'default' must be present if any role is specified
         if "default" not in roles:
             raise ValueError(
-                "Multi-role model spec must include 'default'. "
-                f"Got: {model_str!r}"
+                f"Multi-role model spec must include 'default'. Got: {model_str!r}"
             )
 
         # Fill missing roles with 'default' value

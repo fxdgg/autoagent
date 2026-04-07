@@ -1,0 +1,3 @@
+.autoagent/
+*.pyc
+__pycache__/

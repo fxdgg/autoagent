@@ -1,0 +1,59 @@
+# =============================================================================
+# Test 6: Looping task + invalid JSON from failure_analysis/main_task_evaluation
+# =============================================================================
+# This configuration tests:
+#   1. Looping task type executes correctly (repeat_count=2)
+#   2. When AI returns invalid JSON in failure_analysis, the system falls back
+#      to a safe default (retry from the failed subtask)
+#   3. When AI returns invalid JSON in main_task_evaluation (for nested task),
+#      the system falls back to "not completed"
+#
+# Task structure:
+#   Task 1: looping (repeat_count=2, max_attempts_per_loop=3)
+#     - 1.1: simple (always succeeds)
+#     - 1.2: simple (max_attempts=1, fails in loop 1 to trigger failure_analysis)
+#   Task 2: nested (max_attempts=2)
+#     - 2.1: simple (always succeeds)
+#     - 2.2: simple (always succeeds)
+# =============================================================================
+
+tasks:
+  - id: 1
+    name: "Test looping task with invalid JSON in failure analysis"
+    type: looping
+    repeat_count: 2
+    max_attempts_per_loop: 3
+    completion_criteria: |
+      Both loop iterations completed successfully.
+    subtasks:
+      - id: 1.1
+        name: "Setup step"
+        type: simple
+        completion_criteria: |
+          Setup completed successfully.
+
+      - id: 1.2
+        name: "Processing step"
+        type: simple
+        max_attempts: 1
+        completion_criteria: |
+          Processing completed with correct output.
+
+  - id: 2
+    name: "Test nested task with invalid JSON in evaluation"
+    type: nested
+    max_attempts: 2
+    completion_criteria: |
+      All subtasks completed and results verified.
+    subtasks:
+      - id: 2.1
+        name: "Execute main work"
+        type: simple
+        completion_criteria: |
+          Main work completed.
+
+      - id: 2.2
+        name: "Verify results"
+        type: simple
+        completion_criteria: |
+          Results verified successfully.
