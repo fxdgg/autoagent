@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 class AICallError(Exception):
     """AI call error (auth failure, response parse failure, etc.)"""
+
     pass
 
 
@@ -39,6 +40,7 @@ class BashTimeoutError(AICallError):
     This usually means a long-running command is blocking the session.
     The caller should inject long-running-command guidance in the next prompt.
     """
+
     pass
 
 
@@ -47,19 +49,20 @@ class SessionTimeoutError(AICallError):
 
     The caller should tell the AI it was interrupted by the user (Ctrl+C).
     """
+
     pass
 
 
 class AIClient:
     """
     AI CLI client with context management.
-    
+
     Supports multiple AI backends through the provider abstraction:
     - CodeBuddy (codebuddy)
     - Claude Code (claude)
     - Gemini Cli (gemini)
     - OpenCode (opencode)
-    
+
     Each main task should create its own AIClient instance.
     Sessions are reset between subtasks to prevent unbounded context growth.
     Retries within the same subtask share the session via session_id (--resume).
@@ -100,7 +103,7 @@ class AIClient:
         self._consecutive_failures = 0
         self._backoff_base = 5  # seconds
         self._backoff_max = 300  # default max wait, overridden by config
-    
+
     @property
     def session_id(self) -> str:
         """Get the current session ID (for context persistence)."""
@@ -109,7 +112,7 @@ class AIClient:
     def resume_session(self, session_id: str):
         """
         Resume a previous session by setting the session ID.
-        
+
         Args:
             session_id: The session ID to resume (e.g., from a previous run)
         """
@@ -127,12 +130,12 @@ class AIClient:
     ) -> Union[str, dict]:
         """
         Send a prompt to CodeBuddy and get a response.
-        
+
         Session continuity is handled automatically via session_id:
         - If a session_id exists (from a previous call or resume_session()),
           the CLI will resume that session.
         - Otherwise, a new session is started.
-        
+
         Args:
             prompt: The prompt to send
             expect_json: Whether to parse the response as JSON
@@ -140,10 +143,10 @@ class AIClient:
             system_prompt: Optional system prompt.  For providers that
                 support ``--append-system-prompt`` it is passed via CLI;
                 for others it is prepended to the user prompt.
-            
+
         Returns:
             str or dict: The AI response (parsed as JSON if expect_json=True)
-            
+
         Raises:
             AICallError: If the call fails
         """
@@ -159,7 +162,9 @@ class AIClient:
                 f"[{self.context_id}] Backoff: waiting {delay}s before retry "
                 f"(consecutive failures: {self._consecutive_failures})"
             )
-            print(f"   ⏳ Waiting {delay}s before retry (attempt after {self._consecutive_failures} consecutive failure(s))")
+            print(
+                f"   ⏳ Waiting {delay}s before retry (attempt after {self._consecutive_failures} consecutive failure(s))"
+            )
             time.sleep(delay)
 
         # Build command args (without prompt - prompt goes via stdin)
@@ -172,19 +177,19 @@ class AIClient:
             effective_system_prompt = None  # Already in prompt
 
         cmd_args = self._build_command(system_prompt=effective_system_prompt)
-        
+
         logger.info(
             f"[{self.context_id}] Calling {self.provider.name} "
             f"(session_id={self.session_id or 'new'}, model={self.provider.model}, timeout={effective_timeout}s)"
         )
         logger.debug(f"[{self.context_id}] Prompt: {prompt[:200]}...")
         logger.debug(f"[{self.context_id}] Command: {cmd_args}")
-        
+
         # Write prompt to a temp file to avoid shell escaping issues
         prompt_file_path = None
         try:
             with tempfile.NamedTemporaryFile(
-                mode='w', suffix='.txt', delete=False, encoding='utf-8'
+                mode="w", suffix=".txt", delete=False, encoding="utf-8"
             ) as pf:
                 pf.write(prompt)
                 prompt_file_path = pf.name
@@ -201,17 +206,19 @@ class AIClient:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                encoding='utf-8',
-                errors='replace',
+                encoding="utf-8",
+                errors="replace",
                 cwd=self.workspace,
                 bufsize=1,  # Line-buffered
             )
 
             # Collect stderr in a background thread to avoid blocking
             stderr_chunks = []
+
             def _read_stderr():
                 for line in process.stderr:
                     stderr_chunks.append(line)
+
             stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
             stderr_thread.start()
 
@@ -229,20 +236,16 @@ class AIClient:
                     if now > session_deadline:
                         _timeout_type = "session"
                         process.kill()
-                        raise subprocess.TimeoutExpired(
-                            full_cmd, effective_timeout
-                        )
+                        raise subprocess.TimeoutExpired(full_cmd, effective_timeout)
                     if bash_timeout and (now - last_output_time) > bash_timeout:
                         _timeout_type = "bash"
                         process.kill()
-                        raise subprocess.TimeoutExpired(
-                            full_cmd, bash_timeout
-                        )
+                        raise subprocess.TimeoutExpired(full_cmd, bash_timeout)
                     last_output_time = now
                     stdout_chunks.append(line)
                     # Parse stream-json lines for real-time display
                     self._handle_stream_line(
-                        line.rstrip('\n'), assistant_text_parts, full_log_parts
+                        line.rstrip("\n"), assistant_text_parts, full_log_parts
                     )
             except subprocess.TimeoutExpired:
                 process.kill()
@@ -258,7 +261,9 @@ class AIClient:
             try:
                 process.wait(timeout=30)
             except subprocess.TimeoutExpired:
-                logger.warning("Process did not exit within 30s after stdout closed, killing")
+                logger.warning(
+                    "Process did not exit within 30s after stdout closed, killing"
+                )
                 process.kill()
                 try:
                     process.wait(timeout=10)
@@ -273,9 +278,11 @@ class AIClient:
                 raw_error = stderr_text.strip() or stdout_text.strip()
                 message, error_type = self._parse_cli_error(raw_error)
                 # Check for authentication error
-                if error_type in ("authentication_error", "authentication_failed") \
-                        or "Authentication" in message \
-                        or "login" in message.lower():
+                if (
+                    error_type in ("authentication_error", "authentication_failed")
+                    or "Authentication" in message
+                    or "login" in message.lower()
+                ):
                     raise AICallError(
                         f"{self.provider.name} authentication required. "
                         f"Please run '{self.provider.executable} --help' to check. "
@@ -351,17 +358,19 @@ class AIClient:
             system_prompt=system_prompt,
         )
 
-    def _handle_stream_line(self, line: str, assistant_text_parts: list, full_log_parts: list = None):
+    def _handle_stream_line(
+        self, line: str, assistant_text_parts: list, full_log_parts: list = None
+    ):
         """
         Parse a single line of stream-json output and display relevant info in real-time.
-        
-        Supports three stream-json dialects:
-        
+
+        Supports four stream-json dialects:
+
         **CodeBuddy / Claude Code format:**
           - "assistant": AI message with message.content[] array (text blocks and/or tool_use)
           - "user": Contains tool_result in message.content[] array
           - "result": Final result with "result", "is_error", "duration_ms", "num_turns"
-        
+
         **Gemini CLI format:**
           - "message" + role="assistant": AI text in "content" string, with "delta":true
           - "tool_use": Top-level event with "tool_name" and "parameters"
@@ -369,14 +378,19 @@ class AIClient:
           - "result": Final result with "status", "stats.duration_ms", "stats.tool_calls"
           - "init": Session init (ignored)
           - "message" + role="user": Echo of user prompt (ignored)
-        
+
         **OpenCode format:**
           - "step_start": Session start, contains "sessionID" (at top level or in data)
           - "text": AI text in data.text
           - "tool_call": Tool invocation with data.name (tool name) and data.input (JSON string)
           - "tool_result": Tool result (handled by existing tool_result branch)
           - "step_finish": Step finished with data.reason (and optional data.tokens, data.cost)
-        
+
+        **Codex format:**
+          - "thread.started": Session start with "thread_id"
+          - "turn.started" / "turn.completed": Turn boundaries
+          - "item.completed": AI text ("agent_message"), tool calls ("tool_call"), tool results ("tool_call_output")
+
         Args:
             line: A single line of stream-json output
             assistant_text_parts: List to collect assistant text for final response
@@ -387,7 +401,7 @@ class AIClient:
 
         if not line.strip():
             return
-        
+
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
@@ -399,7 +413,7 @@ class AIClient:
         event_type = event.get("type", "")
         # DEBUG: Log the stream json (disabled currently)
         # logger.debug(f"[{self.context_id}] Event content: {json.dumps(event, ensure_ascii=False)[:500]}")
-        
+
         # Capture session_id as early as possible from any event that
         # carries it (system/init, assistant, result, step_start).
         # This is critical for Ctrl+C recovery: if the user interrupts
@@ -426,9 +440,11 @@ class AIClient:
                 delay_ms = event.get("retry_delay_ms", 0)
                 http_status = event.get("error_status")
                 status_str = f" (HTTP {http_status})" if http_status else ""
-                msg = (f"   ⚠️  API retry {attempt}/{max_retries}: "
-                       f"{error_cat}{status_str}, "
-                       f"waiting {delay_ms / 1000:.1f}s...")
+                msg = (
+                    f"   ⚠️  API retry {attempt}/{max_retries}: "
+                    f"{error_cat}{status_str}, "
+                    f"waiting {delay_ms / 1000:.1f}s..."
+                )
                 sys.stdout.write(f"\033[31m{msg}\033[0m\n")
                 sys.stdout.flush()
                 full_log_parts.append(msg)
@@ -455,7 +471,7 @@ class AIClient:
                     self._display_tool_use(tool_name, tool_input)
                     tool_log = self._format_tool_use_for_log(tool_name, tool_input)
                     full_log_parts.append(tool_log)
-        
+
         elif event_type == "message":
             # Gemini format: "message" event with "role" field
             role = event.get("role", "")
@@ -470,7 +486,7 @@ class AIClient:
                     sys.stdout.write(content)
                     sys.stdout.flush()
             # role="user" is just an echo of the prompt — ignore it
-        
+
         elif event_type == "tool_use":
             # Handle both Gemini and OpenCode formats
             if "part" in event:
@@ -485,7 +501,9 @@ class AIClient:
                     except json.JSONDecodeError:
                         tool_input = {"raw": tool_input_raw}
                 else:
-                    tool_input = tool_input_raw if isinstance(tool_input_raw, dict) else {}
+                    tool_input = (
+                        tool_input_raw if isinstance(tool_input_raw, dict) else {}
+                    )
             else:
                 # Gemini format: top-level tool_name and parameters
                 tool_name = event.get("tool_name", event.get("name", "unknown"))
@@ -493,14 +511,22 @@ class AIClient:
             self._display_tool_use(tool_name, tool_input)
             tool_log = self._format_tool_use_for_log(tool_name, tool_input)
             full_log_parts.append(tool_log)
-        
+
         elif event_type == "tool_result":
             # Gemini format: top-level tool_result event
             status = event.get("status", "")
             output = event.get("output", "")
             error_info = event.get("error", {})
-            is_error = (status == "error")
-            content = output if output else (error_info.get("message", "") if isinstance(error_info, dict) else str(error_info))
+            is_error = status == "error"
+            content = (
+                output
+                if output
+                else (
+                    error_info.get("message", "")
+                    if isinstance(error_info, dict)
+                    else str(error_info)
+                )
+            )
             if content:
                 preview = content[:500]
                 if len(content) > 500:
@@ -517,7 +543,7 @@ class AIClient:
                 full_log_parts.append(
                     f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
                 )
-        
+
         elif event_type == "user":
             # CodeBuddy/Claude format: user message containing tool_result
             message = event.get("message", {})
@@ -543,7 +569,7 @@ class AIClient:
                             full_log_parts.append(
                                 f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
                             )
-        
+
         elif event_type == "result":
             # Final result — supports both CodeBuddy/Claude and Gemini formats
             result_text = event.get("result", "")
@@ -563,7 +589,7 @@ class AIClient:
             is_error = event.get("is_error", False)
             duration_ms = event.get("duration_ms", 0)
             num_turns = event.get("num_turns", 0)
-            
+
             # Gemini fields (fallback)
             if not is_error and event.get("status") == "error":
                 is_error = True
@@ -572,9 +598,11 @@ class AIClient:
                 duration_ms = stats.get("duration_ms", 0)
             if num_turns == 0 and isinstance(stats, dict):
                 num_turns = stats.get("tool_calls", 0)
-            
+
             status = "❌ Error" if is_error else "✅ Done"
-            summary = f"\n--- {status} ({num_turns} turns, {duration_ms/1000:.1f}s) ---\n"
+            summary = (
+                f"\n--- {status} ({num_turns} turns, {duration_ms / 1000:.1f}s) ---\n"
+            )
             if is_error:
                 sys.stdout.write(f"\033[31m{summary}\033[0m")
             else:
@@ -590,7 +618,7 @@ class AIClient:
                 if isinstance(error_detail, dict):
                     error_detail = error_detail.get("message", str(error_detail))
                 assistant_text_parts.append(f"[ERROR] {error_detail}")
-        
+
         elif event_type == "step_start":
             # OpenCode format: session start event — extract session ID
             # sessionID may be at top level or in data
@@ -614,7 +642,7 @@ class AIClient:
                 full_log_parts.append(text)
                 sys.stdout.write(text)
                 sys.stdout.flush()
-        
+
         elif event_type == "step_finish":
             # OpenCode format: step finished — extract token info from part
             part = event.get("part", {})
@@ -623,7 +651,81 @@ class AIClient:
             cost = part.get("cost", 0)
             reason = part.get("reason", "stop")
             status = "❌ Error" if reason == "error" else "✅ Done"
-            summary = f"\n--- {status} (tokens: {total_tokens}, cost: ${cost:.4f}) ---\n"
+            summary = (
+                f"\n--- {status} (tokens: {total_tokens}, cost: ${cost:.4f}) ---\n"
+            )
+            sys.stdout.write(summary)
+            sys.stdout.flush()
+            full_log_parts.append(f"\n{summary}")
+
+        elif event_type == "thread.started":
+            # Codex format: session/thread start — capture thread_id as session_id
+            thread_id = event.get("thread_id", "")
+            if thread_id and thread_id != self._session_id:
+                self._session_id = thread_id
+                if self._on_session_id_changed:
+                    self._on_session_id_changed(thread_id)
+
+        elif event_type == "item.completed":
+            # Codex format: completed item (message, tool call, tool result)
+            item = event.get("item", {})
+            item_type = item.get("type", "")
+
+            if item_type == "agent_message":
+                # AI assistant text response
+                text = item.get("text", "")
+                if text:
+                    if assistant_text_parts and not assistant_text_parts[-1].endswith(
+                        "\n"
+                    ):
+                        assistant_text_parts.append("\n")
+                    assistant_text_parts.append(text)
+                    full_log_parts.append(text)
+                    sys.stdout.write(text)
+                    sys.stdout.flush()
+
+            elif item_type == "tool_call":
+                # Tool invocation
+                tool_name = item.get("name", item.get("tool_name", "unknown"))
+                tool_input = item.get("arguments", item.get("input", {}))
+                if isinstance(tool_input, str):
+                    try:
+                        tool_input = json.loads(tool_input)
+                    except json.JSONDecodeError:
+                        tool_input = {"raw": tool_input}
+                self._display_tool_use(tool_name, tool_input)
+                tool_log = self._format_tool_use_for_log(tool_name, tool_input)
+                full_log_parts.append(tool_log)
+
+            elif item_type == "tool_call_output":
+                # Tool result
+                output = item.get("output", item.get("result", ""))
+                is_error = item.get("is_error", False)
+                if isinstance(output, str) and output:
+                    preview = output[:500]
+                    if len(output) > 500:
+                        preview += f"... ({len(output)} chars total)"
+                    if is_error:
+                        sys.stdout.write(f"\033[31m   ↳ {preview}\033[0m\n")
+                    else:
+                        sys.stdout.write(f"   ↳ {preview}\n")
+                    sys.stdout.flush()
+                    error_marker = " ❌" if is_error else ""
+                    log_content = output[:2000]
+                    if len(output) > 2000:
+                        log_content += f"\n... ({len(output)} chars total)"
+                    full_log_parts.append(
+                        f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
+                    )
+
+        elif event_type == "turn.completed":
+            # Codex format: turn finished — display summary
+            usage = event.get("usage", {})
+            input_tokens = usage.get("input_tokens", 0)
+            output_tokens = usage.get("output_tokens", 0)
+            total_tokens = input_tokens + output_tokens
+            status = "✅ Done"
+            summary = f"\n--- {status} (tokens: {total_tokens}) ---\n"
             sys.stdout.write(summary)
             sys.stdout.flush()
             full_log_parts.append(f"\n{summary}")
@@ -633,13 +735,13 @@ class AIClient:
     def _display_tool_use(self, tool_name: str, tool_input: dict):
         """Display a tool use event with a readable summary."""
         tool_name_lower = tool_name.lower()
-        if tool_name_lower == "bash":
+        if tool_name_lower in ("bash", "run_shell_command"):
             cmd = tool_input.get("command", "")
             sys.stdout.write(f"\n🔧 [{tool_name}] {cmd}\n")
-        elif tool_name_lower in ("edit", "write", "multiedit"):
+        elif tool_name_lower in ("edit", "write", "multiedit", "write_file"):
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             sys.stdout.write(f"\n📝 [{tool_name}] {path}\n")
-        elif tool_name_lower == "read":
+        elif tool_name_lower in ("read", "read_file"):
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             sys.stdout.write(f"\n📖 [{tool_name}] {path}\n")
         elif tool_name_lower in ("glob", "grep"):
@@ -652,16 +754,16 @@ class AIClient:
     def _format_tool_use_for_log(self, tool_name: str, tool_input: dict) -> str:
         """
         Format a tool use event as a Markdown string for the conversation log.
-        
+
         Args:
             tool_name: Tool name (e.g. "Bash", "Read", "Edit")
             tool_input: Tool input parameters
-            
+
         Returns:
             str: Formatted markdown string for the tool call
         """
         tool_name_lower = tool_name.lower()
-        if tool_name_lower == "bash":
+        if tool_name_lower in ("bash", "run_shell_command"):
             cmd = tool_input.get("command", "")
             return f"\n🔧 **[Bash]**\n```bash\n{cmd}\n```\n"
         elif tool_name_lower in ("edit", "write"):
@@ -679,7 +781,7 @@ class AIClient:
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             edits = tool_input.get("edits", [])
             return f"\n📝 **[MultiEdit]** `{path}` ({len(edits)} edits)\n"
-        elif tool_name_lower == "read":
+        elif tool_name_lower in ("read", "read_file"):
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             return f"\n📖 **[Read]** `{path}`\n"
         elif tool_name_lower in ("glob", "grep"):
@@ -722,7 +824,7 @@ class AIClient:
             return ("(empty error output)", None)
 
         # Try the full text first, then just the last line (stream-json)
-        for candidate in [text, text.rsplit('\n', 1)[-1].strip()]:
+        for candidate in [text, text.rsplit("\n", 1)[-1].strip()]:
             try:
                 data = json.loads(candidate)
             except (json.JSONDecodeError, ValueError):
@@ -740,7 +842,12 @@ class AIClient:
             if "message" in data:
                 return (
                     data["message"],
-                    data.get("type") or (data.get("error") if isinstance(data.get("error"), str) else None),
+                    data.get("type")
+                    or (
+                        data.get("error")
+                        if isinstance(data.get("error"), str)
+                        else None
+                    ),
                 )
 
         return (text, None)
@@ -748,16 +855,16 @@ class AIClient:
     def _parse_json_response(self, response: str) -> dict:
         """
         Extract and parse JSON from AI response.
-        
+
         The AI response might contain markdown code blocks or extra text
         surrounding the JSON. This method tries multiple strategies.
-        
+
         Args:
             response: Raw AI response text
-            
+
         Returns:
             dict: Parsed JSON object
-            
+
         Raises:
             AICallError: If JSON parsing fails
         """
@@ -766,11 +873,11 @@ class AIClient:
             return json.loads(response)
         except json.JSONDecodeError:
             pass
-        
+
         # Strategy 2: Extract JSON from markdown code block
         json_patterns = [
-            r'```json\s*\n(.*?)\n\s*```',
-            r'```\s*\n(.*?)\n\s*```',
+            r"```json\s*\n(.*?)\n\s*```",
+            r"```\s*\n(.*?)\n\s*```",
         ]
         for pattern in json_patterns:
             match = re.search(pattern, response, re.DOTALL)
@@ -779,23 +886,23 @@ class AIClient:
                     return json.loads(match.group(1))
                 except json.JSONDecodeError:
                     continue
-        
+
         # Strategy 3: Find the first { ... } block
         brace_depth = 0
         start_idx = None
         for i, char in enumerate(response):
-            if char == '{':
+            if char == "{":
                 if brace_depth == 0:
                     start_idx = i
                 brace_depth += 1
-            elif char == '}':
+            elif char == "}":
                 brace_depth -= 1
                 if brace_depth == 0 and start_idx is not None:
                     try:
-                        return json.loads(response[start_idx:i + 1])
+                        return json.loads(response[start_idx : i + 1])
                     except json.JSONDecodeError:
                         start_idx = None
-        
+
         raise AICallError(
             f"Failed to parse JSON from CodeBuddy response. "
             f"Response preview: {response[:500]}"
@@ -807,19 +914,17 @@ class AIClient:
         logger.info(f"[{self.context_id}] Session reset")
 
 
-
-
 class AIClientSDK:
     """
     AI client using the CodeBuddy Agent SDK (Python package) instead of CLI subprocess.
-    
+
     This provides the same ask() interface as AIClient, but calls the SDK's
     async query() function directly, avoiding shell/process overhead and
     platform-specific quirks (e.g. stdin piping, encoding issues on Windows).
-    
+
     Only works with the CodeBuddy provider. Other providers (Claude, Gemini)
     are not supported via SDK and should continue using AIClient.
-    
+
     Requires: pip install codebuddy-agent-sdk
     """
 
@@ -866,7 +971,7 @@ class AIClientSDK:
     def resume_session(self, session_id: str):
         """
         Resume a previous session by setting the session ID.
-        
+
         Args:
             session_id: The session ID to resume (e.g., from a previous run)
         """
@@ -884,12 +989,12 @@ class AIClientSDK:
     ) -> Union[str, dict]:
         """
         Send a prompt to CodeBuddy via SDK and get a response.
-        
+
         Session continuity is handled automatically via session_id:
         - If a session_id exists (from a previous call or resume_session()),
           the SDK will continue that session.
         - Otherwise, a new session is started.
-        
+
         Args:
             prompt: The prompt to send
             expect_json: Whether to parse the response as JSON
@@ -897,10 +1002,10 @@ class AIClientSDK:
             system_prompt: Optional system prompt.  The SDK does not
                 support a separate system prompt channel, so it is
                 appended to the user prompt.
-            
+
         Returns:
             str or dict: The AI response (parsed as JSON if expect_json=True)
-            
+
         Raises:
             AICallError: If the call fails
         """
@@ -921,7 +1026,9 @@ class AIClientSDK:
                 f"[{self.context_id}] Backoff: waiting {delay}s before retry "
                 f"(consecutive failures: {self._consecutive_failures})"
             )
-            print(f"   ⏳ Waiting {delay}s before retry (attempt after {self._consecutive_failures} consecutive failure(s))")
+            print(
+                f"   ⏳ Waiting {delay}s before retry (attempt after {self._consecutive_failures} consecutive failure(s))"
+            )
             time.sleep(delay)
 
         logger.info(
@@ -931,9 +1038,7 @@ class AIClientSDK:
         logger.debug(f"[{self.context_id}] Prompt: {prompt[:200]}...")
 
         try:
-            response, full_log = self._run_query(
-                prompt, effective_timeout
-            )
+            response, full_log = self._run_query(prompt, effective_timeout)
         except AICallError:
             self._consecutive_failures += 1
             raise
@@ -956,12 +1061,10 @@ class AIClientSDK:
             return self._parse_json_response(response)
         return response
 
-    def _run_query(
-        self, prompt: str, timeout: int
-    ) -> tuple:
+    def _run_query(self, prompt: str, timeout: int) -> tuple:
         """
         Run the SDK query in an asyncio event loop.
-        
+
         Returns:
             tuple: (response_text, full_log_text)
         """
@@ -1045,8 +1148,8 @@ class AIClientSDK:
                 _last_output_time = now
 
                 if isinstance(message, SystemMessage):
-                    if hasattr(message, 'data') and isinstance(message.data, dict):
-                        sid = message.data.get('session_id', '')
+                    if hasattr(message, "data") and isinstance(message.data, dict):
+                        sid = message.data.get("session_id", "")
                         if sid and sid != self._session_id:
                             self._session_id = sid
                             if self._on_session_id_changed:
@@ -1055,9 +1158,11 @@ class AIClientSDK:
 
                 if isinstance(message, AssistantMessage):
                     # Ensure newline between separate assistant messages
-                    if assistant_text_parts and not assistant_text_parts[-1].endswith("\n"):
+                    if assistant_text_parts and not assistant_text_parts[-1].endswith(
+                        "\n"
+                    ):
                         assistant_text_parts.append("\n")
-                    for block in (message.content or []):
+                    for block in message.content or []:
                         if isinstance(block, TextBlock):
                             text = block.text or ""
                             if text:
@@ -1079,7 +1184,9 @@ class AIClientSDK:
                             content = block.content or ""
                             if isinstance(content, list):
                                 content = " ".join(
-                                    str(c.get("text", "")) if isinstance(c, dict) else str(c)
+                                    str(c.get("text", ""))
+                                    if isinstance(c, dict)
+                                    else str(c)
                                     for c in content
                                 )
                             preview = str(content)[:500]
@@ -1110,7 +1217,7 @@ class AIClientSDK:
                     if is_error:
                         errors = message.errors or []
                         if errors:
-                            error_type = getattr(message, 'error_type', None) or ''
+                            error_type = getattr(message, "error_type", None) or ""
                             prefix = f"[{error_type}] " if error_type else ""
                             raise AICallError(
                                 f"CodeBuddy SDK error: {prefix}{'; '.join(str(e) for e in errors)}"
@@ -1148,13 +1255,13 @@ class AIClientSDK:
     def _display_tool_use(self, tool_name: str, tool_input: dict):
         """Display a tool use event with a readable summary."""
         tool_name_lower = tool_name.lower()
-        if tool_name_lower == "bash":
+        if tool_name_lower in ("bash", "run_shell_command"):
             cmd = tool_input.get("command", "")
             sys.stdout.write(f"\n🔧 [{tool_name}] {cmd}\n")
-        elif tool_name_lower in ("edit", "write", "multiEdit"):
+        elif tool_name_lower in ("edit", "write", "multiedit", "write_file"):
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             sys.stdout.write(f"\n📝 [{tool_name}] {path}\n")
-        elif tool_name_lower == "read":
+        elif tool_name_lower in ("read", "read_file"):
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             sys.stdout.write(f"\n📖 [{tool_name}] {path}\n")
         elif tool_name_lower in ("glob", "grep"):
@@ -1167,7 +1274,7 @@ class AIClientSDK:
     def _format_tool_use_for_log(self, tool_name: str, tool_input: dict) -> str:
         """Format a tool use event as a Markdown string for the conversation log."""
         tool_name_lower = tool_name.lower()
-        if tool_name_lower == "bash":
+        if tool_name_lower in ("bash", "run_shell_command"):
             cmd = tool_input.get("command", "")
             return f"\n🔧 **[Bash]**\n```bash\n{cmd}\n```\n"
         elif tool_name_lower in ("edit", "write"):
@@ -1184,7 +1291,7 @@ class AIClientSDK:
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             edits = tool_input.get("edits", [])
             return f"\n📝 **[MultiEdit]** `{path}` ({len(edits)} edits)\n"
-        elif tool_name_lower == "read":
+        elif tool_name_lower in ("read", "read_file"):
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             return f"\n📖 **[Read]** `{path}`\n"
         elif tool_name_lower in ("glob", "grep"):
@@ -1211,8 +1318,8 @@ class AIClientSDK:
 
         # Strategy 2: Extract JSON from markdown code block
         json_patterns = [
-            r'```json\s*\n(.*?)\n\s*```',
-            r'```\s*\n(.*?)\n\s*```',
+            r"```json\s*\n(.*?)\n\s*```",
+            r"```\s*\n(.*?)\n\s*```",
         ]
         for pattern in json_patterns:
             match = re.search(pattern, response, re.DOTALL)
@@ -1226,15 +1333,15 @@ class AIClientSDK:
         brace_depth = 0
         start_idx = None
         for i, char in enumerate(response):
-            if char == '{':
+            if char == "{":
                 if brace_depth == 0:
                     start_idx = i
                 brace_depth += 1
-            elif char == '}':
+            elif char == "}":
                 brace_depth -= 1
                 if brace_depth == 0 and start_idx is not None:
                     try:
-                        return json.loads(response[start_idx:i + 1])
+                        return json.loads(response[start_idx : i + 1])
                     except json.JSONDecodeError:
                         start_idx = None
 
@@ -1252,21 +1359,21 @@ class AIClientSDK:
 class AIClientTest:
     """
     Test client that returns pre-defined responses from a TestProvider.
-    
+
     This client does NOT call any real AI tool. Instead, it reads responses
     sequentially from the TestProvider's rules list. Each call to ask()
     consumes the next rule.
-    
+
     For long_running tasks, if the response contains an autoagent-exec
     command (e.g. ``autoagent-exec --cmd "sleep 3" --task-id 1.2``),
     the client will **actually execute** the command via autoagent_exec.py
     so that signal files are created and the orchestrator's polling logic
     works correctly.
-    
+
     This is useful for testing the orchestration logic (retry, looping,
     failure analysis, etc.) without incurring AI costs or requiring
     any AI CLI tool to be installed.
-    
+
     Usage:
         from ai_providers import TestProvider
         provider = TestProvider(test_rules_file="test_rules.txt")
@@ -1284,6 +1391,7 @@ class AIClientTest:
         context_id: str = None,
     ):
         from ai_providers import TestProvider
+
         if not isinstance(provider, TestProvider):
             raise ValueError(
                 f"AIClientTest requires a TestProvider, got {type(provider).__name__}"
@@ -1311,7 +1419,7 @@ class AIClientTest:
     def resume_session(self, session_id: str):
         """
         Resume a previous session by setting the session ID.
-        
+
         Args:
             session_id: The session ID to resume (e.g., from a previous run)
         """
@@ -1329,14 +1437,14 @@ class AIClientTest:
     ) -> Union[str, dict]:
         """
         Return the next pre-defined response from the test rules.
-        
+
         The prompt is logged but otherwise ignored — the response is
         determined entirely by the order of rules in the test file.
-        
+
         For long_running tasks: if the response contains an autoagent-exec
         command pattern, the actual command is extracted and executed via
         autoagent_exec.py so that signal files are created correctly.
-        
+
         Args:
             prompt: The prompt (used to extract exec_path/log_dir for
                     long_running tasks, otherwise logged only)
@@ -1344,7 +1452,7 @@ class AIClientTest:
             timeout: Ignored
             system_prompt: Optional system prompt (prepended to prompt
                 for logging purposes only; does not affect test responses)
-            
+
         Returns:
             str or dict: The next test response
         """
@@ -1359,7 +1467,9 @@ class AIClientTest:
         response = self.provider.get_next_response()
 
         # Display the response like a real client would
-        print(f"\n🧪 [TestProvider] Rule #{self.provider._rule_index}/{len(self.provider._rules)}")
+        print(
+            f"\n🧪 [TestProvider] Rule #{self.provider._rule_index}/{len(self.provider._rules)}"
+        )
         print(f"   Response: {response[:200]}{'...' if len(response) > 200 else ''}")
 
         # For long_running tasks: if the response contains an autoagent-exec
@@ -1375,22 +1485,22 @@ class AIClientTest:
     def _maybe_run_autoagent_exec(self, prompt: str, response: str) -> str:
         """
         If the response contains an autoagent-exec command, actually execute it.
-        
+
         The test_rules.txt uses a simplified format:
             autoagent-exec --cmd "<command>" --task-id <id>
-        
+
         This method extracts the command and task-id from the response,
         then extracts exec_path and log_dir from the prompt (which contains
         the full autoagent-exec usage template), and runs the real
         autoagent_exec.py script.
-        
+
         After execution, the original response text is returned unchanged
         so that the orchestrator can detect LONG_RUNNING_IN_PROGRESS.
-        
+
         Args:
             prompt: The prompt sent to the AI (contains exec_path and log_dir)
             response: The test response text
-            
+
         Returns:
             str: The original response (possibly with exec output appended)
         """
@@ -1444,7 +1554,7 @@ class AIClientTest:
                     log_dir = inner_match.group(2)
                 # Also extract --fast-fail-timeout if present
                 fft_match = re.search(
-                    r'--fast-fail-timeout\s+(\d+)',
+                    r"--fast-fail-timeout\s+(\d+)",
                     script_content,
                 )
                 fast_fail_timeout = int(fft_match.group(1)) if fft_match else 10
@@ -1470,7 +1580,9 @@ class AIClientTest:
                 )
                 return response
 
-        print(f"\n🧪 [TestProvider] Detected autoagent-exec command, executing for real:")
+        print(
+            f"\n🧪 [TestProvider] Detected autoagent-exec command, executing for real:"
+        )
         print(f"   exec_path: {exec_path}")
         print(f"   log_dir:   {log_dir}")
         print(f"   task_id:   {task_id}")
@@ -1480,11 +1592,16 @@ class AIClientTest:
         # Use --cmd to pass the entire command as a single shell string,
         # preserving shell operators (&&, |, ;, etc.) correctly.
         full_cmd = [
-            sys.executable, exec_path,
-            '--log-dir', log_dir,
-            '--task-id', task_id,
-            '--fast-fail-timeout', str(fast_fail_timeout),
-            '--cmd', cmd,
+            sys.executable,
+            exec_path,
+            "--log-dir",
+            log_dir,
+            "--task-id",
+            task_id,
+            "--fast-fail-timeout",
+            str(fast_fail_timeout),
+            "--cmd",
+            cmd,
         ]
 
         try:
@@ -1493,9 +1610,10 @@ class AIClientTest:
                 shell=False,
                 capture_output=True,
                 text=True,
-                encoding='utf-8',
-                errors='replace',
-                timeout=fast_fail_timeout + 20,  # autoagent-exec itself should return within fast_fail_timeout
+                encoding="utf-8",
+                errors="replace",
+                timeout=fast_fail_timeout
+                + 20,  # autoagent-exec itself should return within fast_fail_timeout
                 cwd=self.workspace,
             )
             exec_output = result.stdout.strip()
@@ -1512,14 +1630,11 @@ class AIClientTest:
 
         except subprocess.TimeoutExpired:
             logger.error(
-                f"[{self.context_id}] autoagent-exec timed out (30s) "
-                f"for task {task_id}"
+                f"[{self.context_id}] autoagent-exec timed out for task {task_id}"
             )
             print(f"   ❌ autoagent-exec timed out!")
         except Exception as e:
-            logger.error(
-                f"[{self.context_id}] Failed to run autoagent-exec: {e}"
-            )
+            logger.error(f"[{self.context_id}] Failed to run autoagent-exec: {e}")
             print(f"   ❌ Failed to run autoagent-exec: {e}")
 
         return response
@@ -1536,8 +1651,8 @@ class AIClientTest:
 
         # Strategy 2: Extract JSON from markdown code block
         json_patterns = [
-            r'```json\s*\n(.*?)\n\s*```',
-            r'```\s*\n(.*?)\n\s*```',
+            r"```json\s*\n(.*?)\n\s*```",
+            r"```\s*\n(.*?)\n\s*```",
         ]
         for pattern in json_patterns:
             match = _re.search(pattern, response, _re.DOTALL)
@@ -1551,15 +1666,15 @@ class AIClientTest:
         brace_depth = 0
         start_idx = None
         for i, char in enumerate(response):
-            if char == '{':
+            if char == "{":
                 if brace_depth == 0:
                     start_idx = i
                 brace_depth += 1
-            elif char == '}':
+            elif char == "}":
                 brace_depth -= 1
                 if brace_depth == 0 and start_idx is not None:
                     try:
-                        return json.loads(response[start_idx:i + 1])
+                        return json.loads(response[start_idx : i + 1])
                     except json.JSONDecodeError:
                         start_idx = None
 

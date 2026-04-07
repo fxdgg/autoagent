@@ -1,0 +1,63 @@
+# =============================================================================
+# Test 7: Subtask containing nested subtask (multi-level nesting)
+# =============================================================================
+# This configuration tests that a subtask of type "nested" works correctly
+# when it is itself a subtask of a parent nested task.
+#
+# Task structure:
+#   Task 1: nested (max_attempts=3)
+#     - 1.1: simple (setup)
+#     - 1.2: nested (max_attempts=2)  <-- subtask is itself nested!
+#       - 1.2.1: simple (inner step 1)
+#       - 1.2.2: simple (inner step 2, fails first time)
+#     - 1.3: simple (final validation)
+#
+# Expected behavior:
+#   - Subtask 1.2 is dispatched to NestedTaskExecutor via SubtaskExecutor
+#   - Inner subtask 1.2.2 fails on first attempt, triggering inner failure analysis
+#   - Inner retry succeeds, 1.2 completes
+#   - Outer task 1 evaluates and completes
+# =============================================================================
+
+tasks:
+  - id: 1
+    name: "Test nested subtask within nested task"
+    type: nested
+    max_attempts: 3
+    completion_criteria: |
+      All subtasks completed successfully including the inner nested subtask.
+      Final validation passed.
+    subtasks:
+      - id: 1.1
+        name: "Initial setup"
+        type: simple
+        completion_criteria: |
+          Setup completed successfully.
+        initial_hint: |
+          Perform initial setup steps.
+
+      - id: 1.2
+        name: "Multi-step processing"
+        type: nested
+        max_attempts: 2
+        completion_criteria: |
+          Both inner processing steps completed successfully.
+        subtasks:
+          - id: 1.2.1
+            name: "Inner step 1 - prepare data"
+            type: simple
+            completion_criteria: |
+              Data preparation completed.
+
+          - id: 1.2.2
+            name: "Inner step 2 - process data"
+            type: simple
+            max_attempts: 1
+            completion_criteria: |
+              Data processing completed with correct output.
+
+      - id: 1.3
+        name: "Final validation"
+        type: simple
+        completion_criteria: |
+          All results validated successfully.

@@ -1,0 +1,748 @@
+# =============================================================================
+# Test Rules 10 - Comprehensive Path Coverage
+# =============================================================================
+# Exercises EVERY prompt-building path and recently-fixed feature in both
+# NestedTaskExecutor and LoopingTaskExecutor.  The generated conversation
+# logs are compared file-by-file against a reference snapshot to catch any
+# prompt regressions.
+#
+# ---- Task 1 (nested) ----
+#   Rule 1:  Subtask 1.1 (simple_once)          → ✅ completed
+#   Rule 2:  Subtask 1.2 (long_running_once)     → autoagent-exec + ⏳ LR_IN_PROGRESS
+#   Rule 3:  Subtask 1.2 callback                → ✅ completed
+#   Rule 4:  Subtask 1.3 attempt #1              → ❌ not completed (failure_analysis #1)
+#   Rule 5:  Failure analysis #1 (DP1)           → retry_from=1.1, suggested_fix
+#            (1.1 & 1.2 are _once → skipped → _fix_carried to 1.3)
+#   Rule 6:  Subtask 1.3 attempt #1 (retry)     → ✅ completed (has Guidance from Previous Failure)
+#   Rule 7:  Subtask 1.4 attempt #1              → ❌ not completed (failure_analysis #2)
+#   Rule 8:  Failure analysis #2 (DP1)           → retry_from=1.4, suggested_fix
+#   Rule 9:  Subtask 1.4 attempt #1 (2nd retry)  → ❌ not completed (failure_analysis #3)
+#   Rule 10: Failure analysis #3 (DP1)           → retry_from=1.4, suggested_fix
+#            (has "Previous Failure Analyses" showing analysis #2)
+#   Rule 11: Subtask 1.4 attempt #1 (3rd retry)  → autoagent-exec + ⏳ (LR-in-simple)
+#   Rule 12: Subtask 1.4 LR callback             → no marker (triggers nudge)
+#   Rule 13: Subtask 1.4 nudge                   → ✅ completed
+#   Rule 14: Subtask 1.5 attempt #1              → ✅ completed
+#   Rule 15: Main task eval #1                   → not completed, retry_from=1.3
+#   Rule 16: Subtask 1.3 attempt #1 (round 2)   → ✅ completed
+#   Rule 17: Subtask 1.4 attempt #1 (round 2)   → ✅ completed
+#   Rule 18: Subtask 1.5 attempt #1 (round 2)   → ✅ completed
+#   Rule 19: Main task eval #2                   → completed (Previous Evaluations: Round 1)
+#
+# ---- Task 2 (looping, repeat_count=2) ----
+#   Rule 20: Loop 1, Subtask 2.1 (simple_once)   → ✅ completed
+#   Rule 21: Loop 1, Subtask 2.2 attempt #1      → ❌ not completed (FA #1)
+#   Rule 22: Failure analysis #1 (loop)           → retry_from=2.1 (_fix_carried test)
+#   Rule 23: Loop 1, Subtask 2.2 (retry)         → ❌ not completed (FA #2)
+#   Rule 24: Failure analysis #2 (loop)           → retry_from=2.2
+#            (has "Previous Failure Analyses" showing FA #1)
+#   Rule 25: Loop 1, Subtask 2.2 (2nd retry)     → ✅ completed
+#   Rule 26: Loop 1, Subtask 2.3                  → ✅ completed
+#   Rule 27: Loop 2, Subtask 2.2 (2.1 skipped)   → ✅ completed
+#   Rule 28: Loop 2, Subtask 2.3                  → ✅ completed
+# =============================================================================
+
+# --- Rule 1: Subtask 1.1 (simple_once) - COMPLETED ---
+I have set up the environment:
+- Installed Python 3.11 with all required packages
+- Configured CUDA toolkit paths
+- Created output directories
+
+✅ completed
+---RULE---
+# --- Rule 2: Subtask 1.2 (long_running_once) - LR submission ---
+I'll run the data preparation pipeline in the background:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.2
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 3: Subtask 1.2 callback - COMPLETED ---
+The data preparation pipeline completed successfully.
+
+Output files generated:
+- prepared_data.parquet (800MB)
+- feature_index.json
+- schema_metadata.yaml
+
+All data quality checks passed. 15,000 records processed.
+
+✅ completed
+---RULE---
+# --- Rule 4: Subtask 1.3 attempt #1 - NOT COMPLETED ---
+I attempted to run the core processing pipeline but hit an error:
+
+Error: ConfigurationError - processing parameters do not match
+the prepared data schema. Field 'timestamp' expected datetime64
+but got string type.
+
+The config file needs to be updated to match the new data format.
+
+❌ not completed: Configuration mismatch with prepared data schema
+---RULE---
+# --- Rule 5: Failure analysis #1 (DP1) - retry_from=1.1 ---
+# Tests: _fix_carried through 1.1 AND 1.2 (both _once, skipped).
+{
+    "analysis": "Subtask 1.3 failed because the processing config does not match the data schema produced by the preparation step. The timestamp field type mismatch needs to be fixed in the config.",
+    "retry_from": "1.1",
+    "reasoning": "Retrying from the beginning to re-evaluate the full pipeline, though setup and data prep should not need re-running.",
+    "suggested_fix": "Update config.yaml to set timestamp_format='datetime64' and add a type coercion step for string-to-datetime conversion in the processing pipeline.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 6: Subtask 1.3 (after retry) - COMPLETED ---
+# Has "Guidance from Previous Failure" (carried through skipped 1.1, 1.2).
+I fixed the configuration and re-ran the processing:
+- Updated config.yaml with timestamp_format='datetime64'
+- Added type coercion step for string fields
+- Processing completed successfully
+- Output: results.json with 15,000 processed records
+
+✅ completed
+---RULE---
+# --- Rule 7: Subtask 1.4 attempt #1 - NOT COMPLETED ---
+# First failure of 1.4. Triggers failure_analysis #2.
+I attempted to run the benchmark but the binary crashed:
+
+Error: Segmentation fault (core dumped) during benchmark run.
+The optimized code path has a null pointer dereference when
+processing records with empty optional fields.
+
+❌ not completed: Segfault during benchmark - null pointer in optional field handling
+---RULE---
+# --- Rule 8: Failure analysis #2 (DP1) - retry_from=1.4 ---
+# This is the first failure_analysis for subtask 1.4.
+# No "Previous Failure Analyses" section since this is the first FA
+# in this sub-round sequence for 1.4.
+{
+    "analysis": "Subtask 1.4 failed with a segfault due to null pointer dereference when processing records with empty optional fields. The benchmark code needs null checks for optional fields.",
+    "retry_from": "1.4",
+    "reasoning": "The processing itself succeeded; only the benchmark runner crashes. Retry from 1.4 with a fix.",
+    "suggested_fix": "Add null checks for optional fields in the benchmark runner before accessing field values. Use std::optional or check for nullptr before dereferencing.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 9: Subtask 1.4 attempt #1 (2nd retry) - NOT COMPLETED ---
+# Second failure of 1.4. Has "Guidance from Previous Failure" from FA #2.
+# Triggers failure_analysis #3.
+I added null checks but the benchmark still fails:
+
+Error: AssertionError - benchmark results show negative throughput
+values for batch sizes > 1000. The null check fix introduced a
+logic error that skips valid records.
+
+❌ not completed: Negative throughput values for large batch sizes
+---RULE---
+# --- Rule 10: Failure analysis #3 (DP1) - retry_from=1.4 ---
+# CRITICAL TEST: This failure_analysis prompt must have
+# "Previous Failure Analyses" section showing FA #2's decision.
+{
+    "analysis": "Subtask 1.4 failed again. The first fix (null checks) introduced a logic error that skips valid records, causing negative throughput. Need to fix the conditional logic to only skip truly null records.",
+    "retry_from": "1.4",
+    "reasoning": "The null check implementation was too aggressive. Need a more precise fix.",
+    "suggested_fix": "Replace the broad null check with a targeted check: only skip records where the optional field pointer is nullptr, not where the field value is zero or empty string. Use field.has_value() instead of field != nullptr.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 11: Subtask 1.4 attempt #1 (3rd retry) - LR-in-simple ---
+# Tests: Simple task using autoagent-exec → LONG_RUNNING_IN_PROGRESS.
+# Has "Guidance from Previous Failure" from FA #3.
+I'll run the full benchmark suite using autoagent-exec to avoid timeout:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.4
+
+The benchmark has been submitted.
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 12: Subtask 1.4 LR callback - NO MARKER ---
+# Tests: Callback response omits completion marker → nudge fires.
+I analyzed the benchmark output log.
+
+Results:
+- Throughput: 1200 records/sec (baseline: 800 records/sec)
+- Correctness: 100% (all assertions passed)
+- Memory usage: 2.1GB peak (within limits)
+
+The benchmark shows a 50% improvement over baseline.
+---RULE---
+# --- Rule 13: Subtask 1.4 nudge - COMPLETED ---
+Based on the benchmark results above, the validation is successful:
+- 50% throughput improvement
+- 100% correctness maintained
+- Memory within limits
+
+✅ completed
+---RULE---
+# --- Rule 14: Subtask 1.5 attempt #1 - COMPLETED ---
+I committed the results:
+
+git add -A
+git commit -m "perf: optimize processing pipeline - 50% throughput gain"
+
+Results committed successfully.
+
+✅ completed
+---RULE---
+# --- Rule 15: Main task eval #1 - NOT COMPLETED ---
+# Tests: round numbering (stored as round=1).
+{
+    "main_task_completed": false,
+    "analysis": "All subtasks completed but the throughput improvement of 50% may not be reliable. The benchmark was run only once and results may vary. Need to run at least 3 iterations and report the median.",
+    "retry_from": "1.3",
+    "next_strategy": "Re-run processing with 3 benchmark iterations and report median throughput. Also add p95 latency metric.",
+    "suggested_improvements": ["Run 3 benchmark iterations", "Add p95 latency metric"],
+    "confidence": "medium"
+}
+---RULE---
+# --- Rule 16: Subtask 1.3 (round 2) - COMPLETED ---
+I re-ran the processing with enhanced parameters:
+- Set benchmark_iterations=3
+- Added p95 latency tracking
+- Processing completed in 3 runs: median throughput 1150 records/sec
+
+All 3 runs produced consistent results (std < 2%).
+
+✅ completed
+---RULE---
+# --- Rule 17: Subtask 1.4 (round 2) - COMPLETED ---
+Benchmark results (3 iterations, median):
+- Throughput: 1150 records/sec (baseline: 800, improvement: 43.75%)
+- p95 latency: 12ms (baseline: 28ms, improvement: 57.1%)
+- Correctness: 100% across all runs
+- Memory: 2.0GB peak (stable across runs)
+
+Results written to benchmark_report.txt.
+
+✅ completed
+---RULE---
+# --- Rule 18: Subtask 1.5 (round 2) - COMPLETED ---
+I committed the improved results:
+
+git add -A
+git commit -m "perf: optimize pipeline - 43.75% throughput, 57.1% latency gain (median of 3 runs)"
+
+Results committed successfully.
+
+✅ completed
+---RULE---
+# --- Rule 19: Main task eval #2 - COMPLETED ---
+# Tests: Previous Evaluations shows "Round 1: not completed".
+{
+    "main_task_completed": true,
+    "analysis": "All subtasks completed successfully. Processing pipeline achieves 43.75% throughput improvement and 57.1% p95 latency improvement (median of 3 runs). Results are consistent with std < 2%. All correctness checks pass at 100%.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 20: Loop 1, Subtask 2.1 (simple_once) - COMPLETED ---
+I initialized the iteration environment:
+- Created working directory for iteration 1
+- Loaded configuration from config.yaml
+- Connected to data source
+
+✅ completed
+---RULE---
+# --- Rule 21: Loop 1, Subtask 2.2 attempt #1 - NOT COMPLETED ---
+# Tests: Failure in looping task triggers failure_analysis with loop_info.
+I attempted to process the data but encountered an error:
+
+Error: DataFormatError - input records contain null values in
+required field 'user_id'. 342 of 5000 records affected.
+
+The null values need to be handled before processing.
+
+❌ not completed: Null values in required field 'user_id'
+---RULE---
+# --- Rule 22: Failure analysis #1 (loop) - retry_from=2.1 ---
+# Tests: _fix_carried in looping executor (2.1 is once, skipped).
+{
+    "analysis": "Subtask 2.2 failed because the input data contains null values in the user_id field. This needs a preprocessing step to filter or impute null values.",
+    "retry_from": "2.1",
+    "reasoning": "Retrying from setup to add a null-handling configuration.",
+    "suggested_fix": "Add null_handling='drop' parameter to the processing config, or add a preprocessing filter that removes records with null user_id before the main processing step.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 23: Loop 1, Subtask 2.2 (retry) - NOT COMPLETED ---
+# Has "Guidance from Previous Failure" from FA #1 (carried from skipped 2.1).
+# Fails again → triggers failure_analysis #2.
+I added the null handling filter but a new error appeared:
+
+Error: SchemaValidationError - field 'email' contains malformed
+entries. 89 records have invalid email format after null filtering.
+
+❌ not completed: Malformed email entries after null filtering
+---RULE---
+# --- Rule 24: Failure analysis #2 (loop) - retry_from=2.2 ---
+# CRITICAL TEST: Must have "Previous Failure Analyses" section showing FA #1.
+{
+    "analysis": "After fixing null user_id values, a second issue appeared: malformed email entries. The data cleaning needs to handle both null values and malformed emails.",
+    "retry_from": "2.2",
+    "reasoning": "The setup is fine; only the processing step needs additional data validation.",
+    "suggested_fix": "Add email validation regex to the preprocessing filter alongside the null handling. Use re.match(r'^[^@]+@[^@]+\\.[^@]+$', email) and drop records that fail validation.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 25: Loop 1, Subtask 2.2 (2nd retry) - COMPLETED ---
+# Has "Guidance from Previous Failure" from FA #2.
+I added both null handling and email validation:
+- Filtered 342 null user_id records
+- Filtered 89 malformed email records
+- Processing completed on 4569 valid records
+
+Output: iteration_1_results.csv with 4569 records.
+
+✅ completed
+---RULE---
+# --- Rule 26: Loop 1, Subtask 2.3 - COMPLETED ---
+Verification of iteration 1 output:
+- Record count: 4569 (matches processed count)
+- Data integrity: all checksums valid
+- Output format: correct schema
+- No duplicate records found
+
+Iteration 1 complete.
+
+✅ completed
+---RULE---
+# --- Rule 27: Loop 2, Subtask 2.2 (2.1 skipped - once) - COMPLETED ---
+# In loop 2, 2.1 is skipped (simple_once). No Guidance from Previous Failure.
+I processed the data for iteration 2:
+- Applied same null handling and email validation filters
+- Processing completed on 4890 valid records (out of 5100)
+
+Output: iteration_2_results.csv with 4890 records.
+
+✅ completed
+---RULE---
+# --- Rule 28: Loop 2, Subtask 2.3 - COMPLETED ---
+Verification of iteration 2 output:
+- Record count: 4890 (matches processed count)
+- Data integrity: all checksums valid
+- Output format: correct schema
+- No duplicate records found
+
+Both iterations completed successfully.
+
+✅ completed
+---RULE---
+# =============================================================================
+# Task 3 (nested) — Edge case coverage
+# =============================================================================
+# Tests: long_running (non-once), FA without previous_context, LR retry with
+#        Previous Attempts + history, non-once LR re-execution on retry,
+#        project_description in prompts.
+#
+# Subtask 3.1 is long_running (not _once), so it runs via
+# _execute_long_running_subtask with the LR prompt builder.
+# On retry it runs again (unlike _once types which are skipped).
+
+# --- Rule 29: Subtask 3.1 (long_running) - LR submission ---
+I'll build the artifacts using autoagent-exec:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 3.1
+
+Build pipeline submitted.
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 30: Subtask 3.1 LR callback - COMPLETED ---
+The build pipeline completed successfully.
+
+Artifacts generated:
+- app.wasm (12MB)
+- app.js (340KB)
+- sourcemaps/
+
+All compilation checks passed. Zero warnings.
+
+✅ completed
+---RULE---
+# --- Rule 31: Subtask 3.2 attempt #1 - NOT COMPLETED ---
+# Tests: simple task failure that triggers FA.
+# When FA is called, 3.2 is the FIRST to fail after 3.1 succeeded.
+# But FA will retry_from=3.1, and 3.1 is the first subtask so
+# the FA prompt will have NO "Previous Step Context" section.
+I ran the integration tests but 3 of 47 tests failed:
+
+FAIL: test_auth_flow - Expected 200, got 401
+FAIL: test_data_sync - Timeout after 30s
+FAIL: test_webhook_delivery - Missing signature header
+
+❌ not completed: 3 integration tests failed
+---RULE---
+# --- Rule 32: Failure analysis #1 (DP1) - retry_from=3.1 ---
+# CRITICAL TEST: FA prompt for 3.2 should NOT have "Previous Step Context"
+# because retry_from=3.1 is the first subtask — there is no subtask before it.
+{
+    "analysis": "Integration tests failed because the build artifacts were compiled without the auth module enabled. The build config needs AUTH_ENABLED=true.",
+    "retry_from": "3.1",
+    "reasoning": "The build step needs to be re-run with correct flags, then tests re-run.",
+    "suggested_fix": "Re-run the build with AUTH_ENABLED=true in the build configuration and add a type coercion step for the auth token fields.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 33: Subtask 3.1 LR submission (retry, not _once) ---
+# Tests: long_running non-once re-executes on retry (not skipped).
+# Has "Guidance from Previous Failure" from FA #1.
+I'll rebuild with the auth module enabled:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 3.1
+
+Rebuild submitted with AUTH_ENABLED=true.
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 34: Subtask 3.1 LR callback (retry) - COMPLETED ---
+Rebuild completed successfully with auth module:
+
+Artifacts generated:
+- app.wasm (13.2MB, +1.2MB from auth module)
+- app.js (355KB)
+- auth_tokens.json
+- sourcemaps/
+
+All compilation checks passed. Auth module linked.
+
+✅ completed
+---RULE---
+# --- Rule 35: Subtask 3.2 (after retry) - COMPLETED ---
+# Has "Guidance from Previous Failure" from FA #1.
+I re-ran the integration tests against the rebuilt artifacts:
+
+All 47 tests passed:
+- test_auth_flow: PASS (200 OK, token validated)
+- test_data_sync: PASS (completed in 2.3s)
+- test_webhook_delivery: PASS (signature verified)
+
+✅ completed
+---RULE---
+# --- Rule 36: Subtask 3.3 (long_running) attempt #1 - LR submission ---
+# Tests: long_running subtask with max_attempts=2.
+I'll deploy to staging using autoagent-exec:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 3.3
+
+Deployment submitted.
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 37: Subtask 3.3 LR callback attempt #1 - NOT COMPLETED ---
+# Tests: LR callback returns ❌, causing internal retry (attempt 2).
+# This adds a history entry so attempt 2's prompt has Previous Attempts.
+The deployment to staging completed but health checks are failing:
+
+Error: 3 of 5 pods are in CrashLoopBackOff state.
+Container logs show: "FATAL: database connection pool exhausted"
+
+The connection pool size needs to be increased in the staging config.
+
+❌ not completed: Health checks failing - database connection pool exhausted
+---RULE---
+# --- Rule 38: Subtask 3.3 (long_running) attempt #2 - LR submission ---
+# CRITICAL TEST: This prompt must have "## Previous Attempts" section
+# showing attempt 1 as not_completed, because max_attempts=2 on this
+# subtask and attempt 1 failed internally (not via FA).
+I'll redeploy with increased connection pool:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 3.3
+
+Redeployment submitted with DB_POOL_SIZE=50.
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 39: Subtask 3.3 LR callback attempt #2 - COMPLETED ---
+Redeployment completed and health checks pass:
+
+- All 5 pods running
+- Health endpoint: 200 OK
+- Average response time: 45ms
+- Database connections: 12/50 active
+
+Staging environment is healthy.
+
+✅ completed
+---RULE---
+# --- Rule 40: Subtask 3.4 attempt #1 - COMPLETED ---
+I ran the smoke tests against staging:
+
+All 12 smoke tests passed:
+- Login flow: PASS
+- Data CRUD operations: PASS
+- File upload/download: PASS
+- Search functionality: PASS
+- Webhook integration: PASS
+
+Staging environment fully validated.
+
+✅ completed
+---RULE---
+# --- Rule 41: Main task eval #1 - COMPLETED ---
+{
+    "main_task_completed": true,
+    "analysis": "All subtasks completed successfully. Build artifacts generated with auth module, all 47 integration tests pass, staging deployment healthy with proper connection pool sizing, and all 12 smoke tests pass.",
+    "confidence": "high"
+}
+---RULE---
+# =============================================================================
+# Task 4 (looping) — max_attempts exhaustion with long_running
+# =============================================================================
+# Tests: long_running subtask in looping context, max_attempts_per_loop
+#        exhaustion, looping FA with Previous Failure Analyses.
+#
+# max_attempts_per_loop=2, so after 2 failures the iteration fails
+# and the entire task fails.
+
+# --- Rule 42: Loop 1, Subtask 4.1 (long_running) - LR submission ---
+I'll generate the report using autoagent-exec:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 4.1
+
+Report generation submitted.
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 43: Loop 1, Subtask 4.1 LR callback - COMPLETED ---
+Report generation completed:
+
+- report_q1.pdf (45 pages)
+- report_data.json (raw data)
+- charts/ (12 PNG files)
+
+All data sources queried successfully. 50,000 records processed.
+
+✅ completed
+---RULE---
+# --- Rule 44: Loop 1, Subtask 4.2 attempt #1 - NOT COMPLETED ---
+# Tests: simple task failure in looping context with LR subtask.
+I validated the report but found discrepancies:
+
+Error: Revenue figures in Section 3 don't match the raw data.
+Expected total: $1,234,567 but report shows $1,234,000.
+The rounding in the aggregation query is dropping cents.
+
+❌ not completed: Revenue figures mismatch due to rounding error
+---RULE---
+# --- Rule 45: Failure analysis #1 (loop) - retry_from=4.1 ---
+# Tests: FA in looping context with long_running subtask.
+{
+    "analysis": "Report validation failed because the revenue aggregation query rounds to nearest thousand instead of keeping cent precision. The report generation needs to use DECIMAL type instead of INTEGER for monetary values.",
+    "retry_from": "4.1",
+    "reasoning": "The report generation step needs to be re-run with correct precision settings.",
+    "suggested_fix": "Update the SQL aggregation to use CAST(SUM(amount) AS DECIMAL(12,2)) instead of CAST(SUM(amount) AS INTEGER) in the revenue report query.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 46: Loop 1, Subtask 4.1 LR submission (retry) ---
+# Tests: non-once LR subtask re-executes in looping context.
+# Has "Guidance from Previous Failure" from FA #1.
+I'll regenerate with decimal precision:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 4.1
+
+Report regeneration submitted with DECIMAL precision.
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 47: Loop 1, Subtask 4.1 LR callback (retry) - COMPLETED ---
+Report regenerated with correct precision:
+
+- report_q1.pdf (45 pages, updated)
+- report_data.json (raw data with decimal values)
+- charts/ (12 PNG files, updated)
+
+Revenue total now shows $1,234,567.89 (correct).
+
+✅ completed
+---RULE---
+# --- Rule 48: Loop 1, Subtask 4.2 attempt #1 (2nd retry) - NOT COMPLETED ---
+# Has "Guidance from Previous Failure" from FA #1.
+# This is the second attempt at 4.2. It fails again.
+I re-validated the report with decimal precision:
+
+Revenue figures now match ($1,234,567.89), but a new issue:
+
+Error: Chart 7 (quarterly comparison) shows negative growth for Q4
+but the raw data shows positive growth. The chart generation script
+has a sign error in the YoY comparison formula.
+
+❌ not completed: Chart 7 YoY comparison has sign error
+---RULE---
+# --- Rule 49: Failure analysis #2 (loop) - retry_from=4.2 ---
+# CRITICAL TEST: Must have "Previous Failure Analyses" section showing FA #1.
+# After this FA, max_attempts_per_loop=2 is exhausted → iteration fails.
+{
+    "analysis": "Report validation failed again due to a sign error in the YoY chart generation. The formula subtracts current from previous instead of previous from current.",
+    "retry_from": "4.2",
+    "reasoning": "Only the chart generation needs fixing, not the data itself.",
+    "suggested_fix": "Fix the YoY comparison formula in chart_generator.py: change (prev_quarter - curr_quarter) to (curr_quarter - prev_quarter) for growth calculation.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 50: Task 5, Subtask 5.1 - COMPLETED ---
+I prepared the fallback scenario inputs:
+- generated fragile_input.json
+- recorded baseline schema expectations
+- enabled fallback audit logging
+
+✅ completed
+---RULE---
+# --- Rule 51: Task 5, Subtask 5.2 attempt #1 - NOT COMPLETED ---
+I ran the fragile transformation and it failed:
+
+Error: TransformSpecError - the normalization map omitted the "region"
+field for 17 records, so the output payload does not satisfy the target
+schema. The mapping logic needs a targeted correction.
+
+❌ not completed: Missing region field in normalized payload
+---RULE---
+# --- Rule 52: Task 5 failure analysis - INVALID JSON ---
+# Tests: invalid JSON fallback in failure_analysis. The system should
+# retry from 5.2 using the built-in safe fallback.
+The transform failed because the mapping table omitted the region field.
+Retry from the failed subtask after adding a default region mapping.
+I am intentionally returning prose instead of JSON here.
+---RULE---
+# --- Rule 53: Task 5, Subtask 5.2 retry - COMPLETED ---
+I corrected the normalization map and re-ran the transformation:
+- added region fallback = "unknown"
+- regenerated transformed_payload.json
+- validated 500/500 records against the target schema
+
+✅ completed
+---RULE---
+# --- Rule 54: Task 5, Subtask 5.3 - COMPLETED ---
+Verification succeeded:
+- transformed_payload.json matches the schema
+- fallback_audit.log contains the 17 corrected records
+- no unexpected null fields remain
+
+✅ completed
+---RULE---
+# --- Rule 55: Task 5 main task evaluation #1 - INVALID JSON ---
+# Tests: invalid JSON fallback in main_task_evaluation.
+All visible checks look good, but I am not returning JSON.
+Please consider this an intentionally malformed evaluation response.
+---RULE---
+# --- Rule 56: Task 5, Subtask 5.1 (round 2) - COMPLETED ---
+I re-prepared the fallback scenario with stricter checks:
+- refreshed fragile_input.json
+- enabled extra schema assertions
+- reset the fallback audit log
+
+✅ completed
+---RULE---
+# --- Rule 57: Task 5, Subtask 5.2 (round 2) - COMPLETED ---
+I re-ran the transformation with the corrected mapping:
+- region fallback applied correctly
+- transformed_payload_round2.json generated
+- all 500 records passed schema validation
+
+✅ completed
+---RULE---
+# --- Rule 58: Task 5, Subtask 5.3 (round 2) - COMPLETED ---
+Round 2 verification succeeded:
+- transformed_payload_round2.json matches the schema
+- fallback_audit.log contains only expected corrections
+- regression checks all passed
+
+✅ completed
+---RULE---
+# --- Rule 59: Task 5 main task evaluation #2 - COMPLETED ---
+{
+    "main_task_completed": true,
+    "analysis": "Fallback handling works correctly. The malformed failure-analysis and evaluation responses both triggered safe defaults, and the transformation plus verification steps completed successfully in the second pass.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 60: Task 6, Subtask 6.1 - COMPLETED (oversized output) ---
+I generated the oversized diagnostic note for truncation testing.
+
+BLOCK 01: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A001 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 02: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A002 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 03: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A003 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 04: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A004 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 05: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A005 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 06: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A006 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 07: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A007 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 08: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A008 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 09: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A009 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 10: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A010 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 11: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A011 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 12: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A012 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 13: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A013 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 14: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A014 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 15: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A015 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 16: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A016 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 17: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A017 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 18: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A018 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 19: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A019 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 20: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A020 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 21: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A021 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 22: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A022 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 23: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A023 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 24: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A024 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 25: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A025 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 26: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A026 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 27: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A027 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 28: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A028 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 29: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A029 detail=repeatable context line for prompt snapshot coverage.
+BLOCK 30: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipeline=truncation-check checksum=A030 detail=repeatable context line for prompt snapshot coverage.
+
+✅ completed
+---RULE---
+# --- Rule 61: Task 6, Subtask 6.2 attempt #1 - NOT COMPLETED ---
+I used the diagnostic note but the retry is still blocked.
+
+DETAIL 01: retry-stage=first-pass issue=parser-state drift=high observation=the oversized note included stale offsets and the reconciliation cursor stopped before the final checkpoint.
+DETAIL 02: retry-stage=first-pass issue=parser-state drift=high observation=the oversized note included stale offsets and the reconciliation cursor stopped before the final checkpoint.
+DETAIL 03: retry-stage=first-pass issue=parser-state drift=high observation=the oversized note included stale offsets and the reconciliation cursor stopped before the final checkpoint.
+DETAIL 04: retry-stage=first-pass issue=parser-state drift=high observation=the oversized note included stale offsets and the reconciliation cursor stopped before the final checkpoint.
+DETAIL 05: retry-stage=first-pass issue=parser-state drift=high observation=the oversized note included stale offsets and the reconciliation cursor stopped before the final checkpoint.
+DETAIL 06: retry-stage=first-pass issue=parser-state drift=high observation=the oversized note included stale offsets and the reconciliation cursor stopped before the final checkpoint.
+
+❌ not completed: Reconciliation cursor stopped before final checkpoint
+---RULE---
+# --- Rule 62: Task 6, Subtask 6.2 attempt #2 - NOT COMPLETED ---
+I adjusted the cursor handling but another issue remains.
+
+DETAIL 07: retry-stage=second-pass issue=validation-window overlap=unexpected observation=the replay buffer still applies a stale offset when the final checkpoint is reconstructed from partial context.
+DETAIL 08: retry-stage=second-pass issue=validation-window overlap=unexpected observation=the replay buffer still applies a stale offset when the final checkpoint is reconstructed from partial context.
+DETAIL 09: retry-stage=second-pass issue=validation-window overlap=unexpected observation=the replay buffer still applies a stale offset when the final checkpoint is reconstructed from partial context.
+DETAIL 10: retry-stage=second-pass issue=validation-window overlap=unexpected observation=the replay buffer still applies a stale offset when the final checkpoint is reconstructed from partial context.
+DETAIL 11: retry-stage=second-pass issue=validation-window overlap=unexpected observation=the replay buffer still applies a stale offset when the final checkpoint is reconstructed from partial context.
+DETAIL 12: retry-stage=second-pass issue=validation-window overlap=unexpected observation=the replay buffer still applies a stale offset when the final checkpoint is reconstructed from partial context.
+
+❌ not completed: Replay buffer still applies stale offset
+---RULE---
+# --- Rule 63: Task 6 failure analysis - VALID JSON ---
+{
+    "analysis": "The retry failed because the checkpoint replay logic mixes stale offsets with the reconstructed final checkpoint. The next attempt should ignore stale offsets and rebuild the final checkpoint from the latest validated cursor only.",
+    "retry_from": "6.2",
+    "reasoning": "The oversized diagnostic note is still useful; only the retry logic needs a more targeted fix.",
+    "suggested_fix": "Reset the replay buffer before reconstructing the final checkpoint, then rebuild the checkpoint exclusively from the latest validated cursor snapshot instead of mixing in stale offsets.",
+    "confidence": "high"
+}
+---RULE---
+# --- Rule 64: Task 6, Subtask 6.2 retry after failure analysis - COMPLETED ---
+I reset the replay buffer and rebuilt the final checkpoint from the latest validated cursor only:
+- stale offsets ignored
+- final checkpoint reconstructed successfully
+- reconciliation completed without drift
+
+✅ completed
+---RULE---
+# --- Rule 65: Task 6, Subtask 6.3 - COMPLETED ---
+Final truncation validation succeeded:
+- oversized prior context was consumed safely
+- retry history was preserved for analysis
+- final checkpoint report written to truncation_validation.txt
+
+✅ completed
+---RULE---
+# --- Rule 66: Task 6 main task evaluation - COMPLETED ---
+{
+    "main_task_completed": true,
+    "analysis": "Oversized context was truncated safely in downstream prompts, retry analysis remained actionable, and the final checkpoint reconstruction plus validation completed successfully.",
+    "confidence": "high"
+}

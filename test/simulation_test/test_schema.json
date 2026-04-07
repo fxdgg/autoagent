@@ -129,5 +129,42 @@
             "1.4": {"status": "completed"},
             "1.5": {"status": "completed"}
         }
+    },
+    {
+        "name": "Comprehensive path coverage (log-level verification)",
+        "project_root": "comprehensive_test",
+        "test_rules": "test_rules_10.txt",
+        "extra_args": [],
+        "expected_exit_code": 1,
+        "expected_tasks": {
+            "1":   {"status": "completed"},
+            "1.1": {"status": "completed", "max_history_len": 1},
+            "1.2": {"status": "completed"},
+            "1.3": {"status": "completed"},
+            "1.4": {"status": "completed"},
+            "1.5": {"status": "completed"},
+            "2":   {"status": "completed"},
+            "2.1": {"status": "completed", "max_history_len": 1},
+            "2.2": {"status": "completed", "has_not_completed": true},
+            "2.3": {"status": "completed"},
+            "3":   {"status": "completed"},
+            "3.1": {"status": "completed"},
+            "3.2": {"status": "completed"},
+            "3.3": {"status": "completed"},
+            "3.4": {"status": "completed"},
+            "4":   {"status": "failed"},
+            "4.1": {"status": "completed"},
+            "4.2": {"status": "pending", "has_not_completed": true},
+            "5":   {"status": "completed"},
+            "5.1": {"status": "completed"},
+            "5.2": {"status": "completed", "has_not_completed": true},
+            "5.3": {"status": "completed"},
+            "6":   {"status": "completed"},
+            "6.1": {"status": "completed"},
+            "6.2": {"status": "completed", "has_not_completed": true},
+            "6.3": {"status": "completed"}
+        },
+        "compare_logs": true,
+        "compare_state": true
     }
 ]

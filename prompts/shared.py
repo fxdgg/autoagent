@@ -356,10 +356,12 @@ def build_previous_subtask_section(parent_context: dict) -> str:
     summary = parent_context.get('previous_subtask_summary', '')
     if not summary:
         return ""
+    prev_id = parent_context.get('previous_subtask_id', '')
+    header = f"Previous Step ({prev_id}) Result" if prev_id else "Previous Step Result"
     max_len = limits.get('previous_subtask_summary')
     if len(summary) > max_len:
         summary = "...(truncated)\n" + summary[-max_len:]
-    return f"=== Previous Step Result ===\n{summary}\n============================"
+    return f"=== {header} ===\n{summary}\n============================"
 
 
 def build_previous_attempt_output_section(output: str) -> str:

@@ -1255,7 +1255,7 @@ def main():
 Examples:
   python orchestrator.py                                # Run all tasks (CodeBuddy default)
   python orchestrator.py --provider claude               # Use Claude Code
-  python orchestrator.py --provider gemini --model gemini-2.5-pro  # Use Gemini CLI
+  python orchestrator.py --provider gemini --model gemini-3-flash  # Use Gemini CLI
   python orchestrator.py --config my_tasks.yaml          # Use custom config
   python orchestrator.py --task 2                        # Run only task 2
   python orchestrator.py --status                        # Show current status

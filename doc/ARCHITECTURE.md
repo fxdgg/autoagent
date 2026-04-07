@@ -151,7 +151,7 @@ class TodoOrchestrator:
 - `AIProvider` — 抽象基类，定义 `build_command()` 和 `get_stdin_command()` 接口
 - `CodeBuddyProvider` — CodeBuddy CLI（默认 provider，默认模型从 `config.yaml` 的 `default_model` 加载，回退到 `deepseek-v3.2`）
 - `ClaudeCodeProvider` — Claude Code CLI（默认模型 `claude-sonnet-4-6`）
-- `GeminiCLIProvider` — Gemini Cli（默认模型 `gemini-2.5-pro`）
+- `GeminiCLIProvider` — Gemini Cli（默认模型 `gemini-3-flash`）
 - `OpenCodeProvider` — OpenCode CLI（https://opencode.ai，不设默认模型，使用 opencode 自身配置）
 
 **工厂函数**：
@@ -169,7 +169,7 @@ type prompt.txt | codebuddy --debug --verbose --print --output-format stream-jso
 type prompt.txt | claude --verbose --print --output-format stream-json --model claude-sonnet-4-6 --dangerously-skip-permissions -
 
 # GeminiCLIProvider
-type prompt.txt | gemini --output-format stream-json --model gemini-2.5-pro --yolo -p -
+type prompt.txt | gemini --output-format stream-json --model gemini-3-flash --yolo -p -
 
 # OpenCodeProvider
 type prompt.txt | opencode run --format json -m <model>
@@ -1692,7 +1692,7 @@ preset:
     ideas: ${workspace}/my_ideas.md
     config: ${workspace}/my_todos.yaml
     provider: gemini
-    model: gemini-2.5-pro
+    model: gemini-3-flash
     verbose: true
 ```
 

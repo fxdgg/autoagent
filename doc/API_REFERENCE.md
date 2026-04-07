@@ -299,7 +299,7 @@ type prompt.txt | claude --verbose --print --output-format stream-json [--resume
 |------|----|
 | `name` | `"gemini"` |
 | `default_executable` | `"gemini"` |
-| `default_model` | `"gemini-2.5-pro"` |
+| `default_model` | `"gemini-3-flash"` |
 | `supports_system_prompt` | `False` |
 
 **命令模式**：
@@ -1421,7 +1421,7 @@ python orchestrator.py
 python orchestrator.py --provider claude --task 2
 
 # 使用 Gemini CLI 并指定模型
-python orchestrator.py --provider gemini --model gemini-2.5-pro
+python orchestrator.py --provider gemini --model gemini-3-flash
 
 # 使用 OpenCode
 python orchestrator.py --provider opencode

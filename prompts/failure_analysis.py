@@ -24,7 +24,8 @@ def build_failure_analysis_prompt(
     prev_decisions_text: str,
     loop_info: Optional[Tuple[int, int]] = None,
     previous_context: str = "",
-    failed_task_summary: str = "",
+    failed_subtask_history: str = "",
+    previous_subtask_id: str = "",
 ) -> str:
     """Build the failure-analysis prompt for both *nested* and *looping* tasks.
 
@@ -41,9 +42,11 @@ def build_failure_analysis_prompt(
         previous_context: Summary from the previous (successful) subtask,
             providing context about the state of the project before the
             failure occurred.  May be empty.
-        failed_task_summary: A concise summary / reasoning of the failed
-            subtask itself (e.g. ``state['ai_reasoning']``).  Complements
-            *error_text* which contains the raw AI output.  May be empty.
+        failed_subtask_history: Pre-formatted per-attempt history of the
+            failed subtask, showing what was tried and why each attempt
+            failed.  May be empty.
+        previous_subtask_id: ID of the previous (successful) subtask whose
+            summary is in *previous_context*.  May be empty.
     """
     failed_id = str(failed_subtask['id'])
     available_ids = [str(s['id']) for s in all_subtasks]
@@ -72,15 +75,16 @@ Failed Subtask:
 
     # -- ## Previous Step Context (conditional) --
     if previous_context:
-        parts.append(f"## Previous Step Context\n\n{previous_context}")
-
-    # -- ## Failed Subtask Summary (conditional) --
-    if failed_task_summary:
-        parts.append(f"## Failed Subtask Summary\n\n{failed_task_summary}")
+        prev_label = f"Previous Step ({previous_subtask_id}) Context" if previous_subtask_id else "Previous Step Context"
+        parts.append(f"## {prev_label}\n\n{previous_context}")
 
     # -- ## Failed Subtask Output --
     if error_text and error_text != "(no error output)":
-        parts.append(f"## Failed Subtask Output\n\n{error_text}")
+        parts.append(f"## Failed Subtask ({failed_id}) Output\n\n{error_text}")
+
+    # -- ## Failed Subtask Attempt History (conditional) --
+    if failed_subtask_history:
+        parts.append(f"## Failed Subtask ({failed_id}) Attempt History\n\n{failed_subtask_history}")
 
     # -- ## All Subtasks Status --
     parts.append(f"## All Subtasks Status\n\n{task_history_text}")

@@ -59,7 +59,7 @@ python orchestrator.py --provider codebuddy
 python orchestrator.py --provider claude --model claude-sonnet-4-6
 
 # Gemini
-python orchestrator.py --provider gemini --model gemini-2.5-pro
+python orchestrator.py --provider gemini --model gemini-3-flash
 
 # OpenCode
 python orchestrator.py --provider opencode
