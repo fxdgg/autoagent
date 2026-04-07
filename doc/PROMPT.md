@@ -292,11 +292,10 @@ commands, and analyze code and outputs.
 <idea_content>
 </original_idea>
 
-<generated_tasks_yaml>
-```yaml
-<tasks_yaml>
-```
-</generated_tasks_yaml>
+The generated tasks have been saved to the following file:
+  <temp_tasks_path>
+
+Please read this file to review the tasks.
 
 The following guide describes how AutoAgent executes tasks at runtime. Use it as
 the authoritative reference for task types, schema, hierarchy rules, and best
@@ -327,11 +326,10 @@ If the tasks need improvement:
 在人工反馈后，要求 AI 重新修订任务。
 
 ```
-<updated_tasks_edited_by_human>
-```yaml
-<current_tasks_yaml>
-```
-</updated_tasks_edited_by_human>
+The current tasks are saved in the following file:
+  <temp_tasks_path>
+
+Please read this file to see the current tasks.
 
 <human_feedback>
 <human_feedback>

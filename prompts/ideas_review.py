@@ -14,7 +14,6 @@ from prompts.shared import (
 
 def build_ideas_review_prompt(
     idea_content: str,
-    tasks_yaml: str,
     temp_tasks_path: str,
 ) -> str:
     """Build the prompt that asks a reviewer AI to evaluate generated tasks.
@@ -24,7 +23,6 @@ def build_ideas_review_prompt(
 
     Args:
         idea_content: Raw idea text.
-        tasks_yaml: YAML-formatted task list string.
         temp_tasks_path: File path where corrected YAML should be written.
     """
     task_design_guide = load_task_design_guide()
@@ -44,10 +42,10 @@ commands, and analyze code and outputs.
 {idea_content[:limits.get('max')] + chr(10) + chr(10) + '(idea text truncated)' if len(idea_content) > limits.get('max') else idea_content}
 </original_idea>
 
-<generated_tasks_yaml>
-```yaml
-{tasks_yaml[:limits.get('max')] + chr(10) + '# (YAML truncated)' if len(tasks_yaml) > limits.get('max') else tasks_yaml}```
-</generated_tasks_yaml>
+The generated tasks have been saved to the following file:
+  {temp_tasks_path}
+
+Please read this file to review the tasks.
 
 The following guide describes how AutoAgent executes tasks at runtime. Use it as
 the authoritative reference for task types, schema, hierarchy rules, and best
@@ -99,31 +97,23 @@ If the tasks need improvement:
 def build_revision_prompt(
     temp_tasks_path: str,
     human_feedback: str = "",
-    current_tasks_yaml: str = "",
 ) -> str:
     """Build a revision prompt sent to the reviewer AI after human feedback.
 
     This prompt is sent to the **same reviewer** whose session context is
     preserved.  It optionally includes:
-    - The latest YAML (if the human edited the temp file)
     - Human text feedback (if the human provided any)
 
     Args:
         temp_tasks_path: File path where revised YAML should be written.
         human_feedback: Free-form feedback text from the human user (may be empty).
-        current_tasks_yaml: Updated YAML string if the human edited the file
-            (empty string means no file edits).
     """
     parts: list[str] = []
 
-    if current_tasks_yaml:
-        yaml_display = current_tasks_yaml[:limits.get('max')]
-        if len(current_tasks_yaml) > limits.get('max'):
-            yaml_display += '\n# (YAML truncated)'
-        parts.append(f"""<updated_tasks_edited_by_human>
-```yaml
-{yaml_display}```
-</updated_tasks_edited_by_human>""")
+    parts.append(f"""The current tasks are saved in the following file:
+  {temp_tasks_path}
+
+Please read this file to see the current tasks.""")
 
     if human_feedback:
         fb_display = human_feedback[:limits.get('max')]

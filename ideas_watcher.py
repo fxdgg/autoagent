@@ -966,7 +966,6 @@ class IdeasWatcher:
 
         review_prompt = build_ideas_review_prompt(
             idea_content=idea['content'],
-            tasks_yaml=tasks_yaml,
             temp_tasks_path=temp_tasks_path,
         )
 
