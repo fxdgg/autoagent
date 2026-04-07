@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Run fragile transformation
 Completion Criteria: Transformation completed with validated output.
 
 Initial Hint: Run the transformation step that may require fallback handling.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -60,14 +61,16 @@ I re-prepared the fallback scenario with stricter checks:
 
 ✅ completed
 ============================
+</context>
 
-## Guidance from Previous Failure
+<guidance_from_previous_failure>
 **AI Analysis from previous failure:**
 Retry the same subtask
 
 Strategy from previous evaluation: Retry all subtasks
 
 Please take this analysis into account and try a different approach.
+</guidance_from_previous_failure>
 ```
 
 ## Response

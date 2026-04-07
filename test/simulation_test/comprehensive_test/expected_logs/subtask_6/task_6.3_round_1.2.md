@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Finalize truncation validation
 Completion Criteria: Final validation recorded.
 
 Initial Hint: Summarize the truncation validation results.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -60,6 +61,7 @@ I reset the replay buffer and rebuilt the final checkpoint from the latest valid
 
 ✅ completed
 ============================
+</context>
 ```
 
 ## Response

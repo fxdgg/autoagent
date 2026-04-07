@@ -5,8 +5,7 @@
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
 
-## Failed Subtask
-
+<failed_subtask>
 Main Task: Looping max attempts exhaustion
 Completion Criteria: Both iterations completed with passing validation.
 
@@ -18,9 +17,9 @@ Failed Subtask:
   Type: simple
   Completion Criteria: Report validation passed.
 
+</failed_subtask>
 
-## Previous Step (4.1) Context
-
+<previous_step_4.1_context>
 Report generation completed:
 
 - report_q1.pdf (45 pages)
@@ -30,9 +29,9 @@ Report generation completed:
 All data sources queried successfully. 50,000 records processed.
 
 ✅ completed
+</previous_step_4.1_context>
 
-## Failed Subtask (4.2) Output
-
+<failed_subtask_output>
 I validated the report but found discrepancies:
 
 Error: Revenue figures in Section 3 don't match the raw data.
@@ -40,14 +39,14 @@ Expected total: $1,234,567 but report shows $1,234,000.
 The rounding in the aggregation query is dropping cents.
 
 ❌ not completed: Revenue figures mismatch due to rounding error
+</failed_subtask_output>
 
-## Failed Subtask (4.2) Attempt History
-
+<failed_subtask_attempt_history>
   - Attempt 1: not_completed
     Detail: ❌ not completed: Revenue figures mismatch due to rounding error
+</failed_subtask_attempt_history>
 
-## All Subtasks Status
-
+<all_subtasks_status>
   - 4.1 (Generate report): status=completed, attempts=1
     Criteria: Report generated with correct data.
 
@@ -55,9 +54,9 @@ The rounding in the aggregation query is dropping cents.
   - 4.2 (Validate report): status=failed, attempts=1
     Criteria: Report validation passed.
 
+</all_subtasks_status>
 
-## Instructions
-
+<instructions>
 ⚠️ Do NOT suggest the same fix that was already tried. Try a fundamentally different approach.
 
 Respond with a JSON object:
@@ -72,6 +71,7 @@ Respond with a JSON object:
 - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
 - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
 - Available subtask IDs: ['4.1', '4.2']
+</instructions>
 ```
 
 ## Response

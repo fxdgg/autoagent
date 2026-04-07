@@ -29,11 +29,9 @@ TODO tasks in YAML format.
 These tasks will be executed by an AI coding agent that can read/modify files, run shell
 commands, and analyze code and outputs. Design your tasks and completion criteria accordingly.
 
-## Idea
-
+<idea>
 {idea_content[:limits.get('max')] + chr(10) + chr(10) + '(idea text truncated)' if len(idea_content) > limits.get('max') else idea_content}
-
-## Task Design Guide
+</idea>
 
 The following guide describes how AutoAgent executes tasks at runtime. Understanding
 this is essential for designing effective tasks. Read it carefully before generating
@@ -43,8 +41,7 @@ your task decomposition.
 {task_design_guide}
 </task_design_guide>
 
-## Output Instructions
-
+<output_instructions>
 - Task IDs start from **{next_id}** (integer for top-level, dot notation for subtasks,
   e.g., {next_id}.1, {next_id}.2).
 - Write ONLY valid YAML (a list of tasks) into the following file:
@@ -109,4 +106,5 @@ Below are minimal examples covering the main task types:
       type: long_running
       completion_criteria: |
         Benchmark results saved to results/bench_latest.json.
+</output_instructions>
 """

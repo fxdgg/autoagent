@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: One-time environment setup
 Completion Criteria: Environment configured and dependencies installed.
 
 Initial Hint: Install dependencies and set up the build environment.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -54,6 +55,7 @@ This task is part of a larger workflow:
     1.3. Core processing
     1.4. Benchmark and validate
     1.5. Commit results
+</context>
 ```
 
 ## Response

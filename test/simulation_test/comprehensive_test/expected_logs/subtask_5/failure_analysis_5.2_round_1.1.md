@@ -5,8 +5,7 @@
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
 
-## Failed Subtask
-
+<failed_subtask>
 Main Task: Nested invalid JSON fallback coverage
 Completion Criteria: All subtasks completed and fallback handling validated.
 
@@ -17,18 +16,18 @@ Failed Subtask:
   Type: simple
   Completion Criteria: Transformation completed with validated output.
 
+</failed_subtask>
 
-## Previous Step (5.1) Context
-
+<previous_step_5.1_context>
 I prepared the fallback scenario inputs:
 - generated fragile_input.json
 - recorded baseline schema expectations
 - enabled fallback audit logging
 
 ✅ completed
+</previous_step_5.1_context>
 
-## Failed Subtask (5.2) Output
-
+<failed_subtask_output>
 I ran the fragile transformation and it failed:
 
 Error: TransformSpecError - the normalization map omitted the "region"
@@ -36,14 +35,14 @@ field for 17 records, so the output payload does not satisfy the target
 schema. The mapping logic needs a targeted correction.
 
 ❌ not completed: Missing region field in normalized payload
+</failed_subtask_output>
 
-## Failed Subtask (5.2) Attempt History
-
+<failed_subtask_attempt_history>
   - Attempt 1: not_completed
     Detail: ❌ not completed: Missing region field in normalized payload
+</failed_subtask_attempt_history>
 
-## All Subtasks Status
-
+<all_subtasks_status>
   - 5.1 (Prepare fallback scenario): status=completed, attempts=1
     Criteria: Fallback test inputs prepared.
 
@@ -54,9 +53,9 @@ schema. The mapping logic needs a targeted correction.
   - 5.3 (Verify fallback output): status=pending, attempts=0
     Criteria: Verification completed successfully.
 
+</all_subtasks_status>
 
-## Instructions
-
+<instructions>
 ⚠️ Do NOT suggest the same fix that was already tried. Try a fundamentally different approach.
 
 Respond with a JSON object:
@@ -71,5 +70,6 @@ Respond with a JSON object:
 - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
 - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
 - Available subtask IDs: ['5.1', '5.2', '5.3']
+</instructions>
 ```
 

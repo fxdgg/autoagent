@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Build artifacts
 Completion Criteria: Build artifacts generated successfully.
 
 Initial Hint: Run the build pipeline using autoagent-exec.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -64,11 +65,13 @@ Both iterations completed successfully.
 
 ✅ completed
 ============================
+</context>
 
-## Constraints
+<constraints>
 **⚠️ Long-Running Task:** You MUST use `autoagent-exec` to run your command. Do NOT run it directly in Bash. Example:
   "<autoagent-exec>" "cd build && cmake .. && make -j8"
 See system instructions for full details.
+</constraints>
 ```
 
 ## Response

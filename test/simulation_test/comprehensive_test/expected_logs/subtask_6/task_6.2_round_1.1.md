@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Retry with truncated context
 Completion Criteria: Retry succeeds after analyzing truncated context.
 
 Initial Hint: Use the oversized context to debug and complete the task.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -80,6 +81,7 @@ BLOCK 30: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipe
 
 ✅ completed
 ============================
+</context>
 ```
 
 ## Response
@@ -128,14 +130,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Retry with truncated context
 Completion Criteria: Retry succeeds after analyzing truncated context.
 
 Initial Hint: Use the oversized context to debug and complete the task.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -175,8 +178,9 @@ BLOCK 30: alpha-context-segment=oversized-note diagnostic-window=2026-04-05 pipe
 
 ✅ completed
 ============================
+</context>
 
-## Previous Attempts
+<previous_attempts>
 === Previous Attempt Output ===
 I used the diagnostic note but the retry is still blocked.
 
@@ -195,6 +199,7 @@ Previous Attempts:
     Summary: ❌ not completed: Reconciliation cursor stopped before final checkpoint
 
 Please analyze what went wrong and try a different approach.
+</previous_attempts>
 ```
 
 ## Response

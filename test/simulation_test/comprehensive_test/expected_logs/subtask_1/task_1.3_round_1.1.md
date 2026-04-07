@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Core processing
 Completion Criteria: Processing completed with correct output.
 
 Initial Hint: Run the core processing pipeline.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -67,6 +68,7 @@ All data quality checks passed. 15,000 records processed.
 
 ✅ completed
 ============================
+</context>
 ```
 
 ## Response

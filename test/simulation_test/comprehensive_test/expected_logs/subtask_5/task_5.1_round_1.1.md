@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Prepare fallback scenario
 Completion Criteria: Fallback test inputs prepared.
 
 Initial Hint: Prepare the fallback validation scenario.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -63,6 +64,7 @@ Revenue total now shows $1,234,567.89 (correct).
 
 ✅ completed
 ============================
+</context>
 ```
 
 ## Response

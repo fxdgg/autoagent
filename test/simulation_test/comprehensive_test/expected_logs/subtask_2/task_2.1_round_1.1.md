@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Iteration setup
 Completion Criteria: Setup completed for this iteration.
 
 Initial Hint: Initialize the iteration environment.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -62,6 +63,7 @@ Results committed successfully.
 
 ✅ completed
 ============================
+</context>
 ```
 
 ## Response

@@ -5,14 +5,13 @@
 ```
 You are a task evaluation expert. Evaluate whether the main task's completion criteria have been fully met based on the execution results.
 
-## Evaluation Context
-
+<evaluation_context>
 Main Task: Nested invalid JSON fallback coverage
 Completion Criteria: All subtasks completed and fallback handling validated.
 
+</evaluation_context>
 
-## Execution Results
-
+<execution_results>
   - 5.1 (Prepare fallback scenario): status=completed, attempts=1
     Criteria: Fallback test inputs prepared.
 
@@ -25,9 +24,9 @@ Completion Criteria: All subtasks completed and fallback handling validated.
     Criteria: Verification completed successfully.
 
     Result: ✅ completed
+</execution_results>
 
-## Instructions
-
+<instructions>
 Evaluate whether ALL completion criteria are met based on the execution results above.
 
 Respond with a JSON object:
@@ -43,5 +42,6 @@ Respond with a JSON object:
 - `retry_from` and `next_strategy`: Only required when `main_task_completed` is false.
 - `next_strategy`: Will be passed to the AI executing the next round — be specific and actionable.
 - Available subtask IDs: ['5.1', '5.2', '5.3']
+</instructions>
 ```
 

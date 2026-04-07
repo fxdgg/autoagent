@@ -40,16 +40,14 @@ for quality, completeness, and correctness.
 These tasks will be executed by an AI coding agent that can read/modify files, run shell
 commands, and analyze code and outputs.
 
-## Original Idea
-
+<original_idea>
 {idea_content[:limits.get('max')] + chr(10) + chr(10) + '(idea text truncated)' if len(idea_content) > limits.get('max') else idea_content}
+</original_idea>
 
-## Generated Tasks (YAML)
-
+<generated_tasks_yaml>
 ```yaml
 {tasks_yaml[:limits.get('max')] + chr(10) + '# (YAML truncated)' if len(tasks_yaml) > limits.get('max') else tasks_yaml}```
-
-## Task Design Guide
+</generated_tasks_yaml>
 
 The following guide describes how AutoAgent executes tasks at runtime. Use it as
 the authoritative reference for task types, schema, hierarchy rules, and best
@@ -59,8 +57,7 @@ practices when reviewing the generated tasks.
 {task_design_guide}
 </task_design_guide>
 
-## Review Criteria
-
+<review_criteria>
 Evaluate the generated tasks against these criteria:
 
 1. **Schema correctness**: Does every task have the required fields for its type?
@@ -83,9 +80,9 @@ Evaluate the generated tasks against these criteria:
    model name string. Tasks requiring complex reasoning should use `"default"`;
    straightforward tasks can use `"lite"`. The `model` field is valid on ALL task types
    (including `long_running` and `long_running_once`).
+</review_criteria>
 
-## Instructions
-
+<instructions>
 If the tasks pass ALL criteria, respond with EXACTLY:
 \u2705 completed
 
@@ -95,6 +92,7 @@ If the tasks need improvement:
    Write the corrected full task list into that file.
    Do NOT include markdown code fences or any extra text in the file.
 2. After modifying the file, respond with: \u274c not completed
+</instructions>
 """
 
 
@@ -122,23 +120,25 @@ def build_revision_prompt(
         yaml_display = current_tasks_yaml[:limits.get('max')]
         if len(current_tasks_yaml) > limits.get('max'):
             yaml_display += '\n# (YAML truncated)'
-        parts.append(f"""## Updated Tasks (edited by human)
-
+        parts.append(f"""<updated_tasks_edited_by_human>
 ```yaml
-{yaml_display}```""")
+{yaml_display}```
+</updated_tasks_edited_by_human>""")
 
     if human_feedback:
         fb_display = human_feedback[:limits.get('max')]
         if len(human_feedback) > limits.get('max'):
             fb_display += '\n\n(feedback truncated)'
-        parts.append(f"""## Human Feedback
+        parts.append(f"""<human_feedback>
+{fb_display}
+</human_feedback>""")
 
-{fb_display}""")
-
-    parts.append(f"""Please revise the task decomposition based on the information above.
+    parts.append(f"""<instructions>
+Please revise the task decomposition based on the information above.
 Write ONLY valid YAML (a list of tasks) into the following file:
   {temp_tasks_path}
 
-Do NOT include markdown code fences or any extra text in the file.""")
+Do NOT include markdown code fences or any extra text in the file.
+</instructions>""")
 
     return '\n\n'.join(parts) + '\n'

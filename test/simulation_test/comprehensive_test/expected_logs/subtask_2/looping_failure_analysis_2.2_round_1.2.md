@@ -5,8 +5,7 @@
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
 
-## Failed Subtask
-
+<failed_subtask>
 Main Task: Looping comprehensive coverage
 Completion Criteria: Both iterations completed successfully with correct output.
 
@@ -18,27 +17,27 @@ Failed Subtask:
   Type: simple
   Completion Criteria: Data processed correctly.
 
+</failed_subtask>
 
-## Previous Step (2.1) Context
-
+<previous_step_2.1_context>
 ✅ completed
+</previous_step_2.1_context>
 
-## Failed Subtask (2.2) Output
-
+<failed_subtask_output>
 I added the null handling filter but a new error appeared:
 
 Error: SchemaValidationError - field 'email' contains malformed
 entries. 89 records have invalid email format after null filtering.
 
 ❌ not completed: Malformed email entries after null filtering
+</failed_subtask_output>
 
-## Failed Subtask (2.2) Attempt History
-
+<failed_subtask_attempt_history>
   - Attempt 1: not_completed
     Detail: ❌ not completed: Malformed email entries after null filtering
+</failed_subtask_attempt_history>
 
-## All Subtasks Status
-
+<all_subtasks_status>
   - 2.1 (Iteration setup): status=completed, attempts=1
     Criteria: Setup completed for this iteration.
 
@@ -49,14 +48,14 @@ entries. 89 records have invalid email format after null filtering.
   - 2.3 (Verify output): status=pending, attempts=0
     Criteria: Output verified and saved.
 
+</all_subtasks_status>
 
-## Previous Failure Analyses
-
+<previous_failure_analyses>
   - Loop 1: failed at 2.2, retried from 2.1
     Fix attempted: Add null_handling='drop' parameter to the processing config, or add a preprocessing filter that removes records with null user_id before the main processing step.
+</previous_failure_analyses>
 
-## Instructions
-
+<instructions>
 ⚠️ Do NOT suggest the same fix that was already tried. Try a fundamentally different approach.
 
 Respond with a JSON object:
@@ -71,6 +70,7 @@ Respond with a JSON object:
 - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
 - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
 - Available subtask IDs: ['2.1', '2.2', '2.3']
+</instructions>
 ```
 
 ## Response

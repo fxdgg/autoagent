@@ -5,8 +5,7 @@
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
 
-## Failed Subtask
-
+<failed_subtask>
 Main Task: Nested comprehensive coverage
 Completion Criteria: All subtasks completed with optimized performance.
 Processing pipeline produces correct output.
@@ -18,13 +17,13 @@ Failed Subtask:
   Type: simple
   Completion Criteria: Benchmark results recorded and correctness validated.
 
+</failed_subtask>
 
-## Previous Step (1.3) Context
-
+<previous_step_1.3_context>
 ✅ completed
+</previous_step_1.3_context>
 
-## Failed Subtask (1.4) Output
-
+<failed_subtask_output>
 I added null checks but the benchmark still fails:
 
 Error: AssertionError - benchmark results show negative throughput
@@ -32,16 +31,16 @@ values for batch sizes > 1000. The null check fix introduced a
 logic error that skips valid records.
 
 ❌ not completed: Negative throughput values for large batch sizes
+</failed_subtask_output>
 
-## Failed Subtask (1.4) Attempt History
-
+<failed_subtask_attempt_history>
   - Attempt 1: not_completed
     Detail: ❌ not completed: Segfault during benchmark - null pointer in optional field handling
   - Attempt 1: not_completed
     Detail: ❌ not completed: Negative throughput values for large batch sizes
+</failed_subtask_attempt_history>
 
-## All Subtasks Status
-
+<all_subtasks_status>
   - 1.1 (One-time environment setup): status=completed, attempts=1
     Criteria: Environment configured and dependencies installed.
 
@@ -60,16 +59,16 @@ logic error that skips valid records.
   - 1.5 (Commit results): status=pending, attempts=0
     Criteria: Results committed to git.
 
+</all_subtasks_status>
 
-## Previous Failure Analyses
-
+<previous_failure_analyses>
   - Round 1: failed at 1.3, retried from 1.1
     Fix attempted: Update config.yaml to set timestamp_format='datetime64' and add a type coercion step for string-to-datetime conversion in the processing pipeline.
   - Round 2: failed at 1.4, retried from 1.4
     Fix attempted: Add null checks for optional fields in the benchmark runner before accessing field values. Use std::optional or check for nullptr before dereferencing.
+</previous_failure_analyses>
 
-## Instructions
-
+<instructions>
 ⚠️ Do NOT suggest the same fix that was already tried. Try a fundamentally different approach.
 
 Respond with a JSON object:
@@ -84,6 +83,7 @@ Respond with a JSON object:
 - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
 - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
 - Available subtask IDs: ['1.1', '1.2', '1.3', '1.4', '1.5']
+</instructions>
 ```
 
 ## Response

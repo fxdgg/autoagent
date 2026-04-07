@@ -5,8 +5,7 @@
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
 
-## Failed Subtask
-
+<failed_subtask>
 Main Task: Nested edge case coverage
 Completion Criteria: All subtasks completed with validated results.
 
@@ -17,9 +16,9 @@ Failed Subtask:
   Type: simple
   Completion Criteria: Integration tests passed.
 
+</failed_subtask>
 
-## Previous Step (3.1) Context
-
+<previous_step_3.1_context>
 The build pipeline completed successfully.
 
 Artifacts generated:
@@ -30,9 +29,9 @@ Artifacts generated:
 All compilation checks passed. Zero warnings.
 
 ✅ completed
+</previous_step_3.1_context>
 
-## Failed Subtask (3.2) Output
-
+<failed_subtask_output>
 I ran the integration tests but 3 of 47 tests failed:
 
 FAIL: test_auth_flow - Expected 200, got 401
@@ -40,14 +39,14 @@ FAIL: test_data_sync - Timeout after 30s
 FAIL: test_webhook_delivery - Missing signature header
 
 ❌ not completed: 3 integration tests failed
+</failed_subtask_output>
 
-## Failed Subtask (3.2) Attempt History
-
+<failed_subtask_attempt_history>
   - Attempt 1: not_completed
     Detail: ❌ not completed: 3 integration tests failed
+</failed_subtask_attempt_history>
 
-## All Subtasks Status
-
+<all_subtasks_status>
   - 3.1 (Build artifacts): status=completed, attempts=1
     Criteria: Build artifacts generated successfully.
 
@@ -61,9 +60,9 @@ FAIL: test_webhook_delivery - Missing signature header
   - 3.4 (Smoke test staging): status=pending, attempts=0
     Criteria: Smoke tests passed on staging.
 
+</all_subtasks_status>
 
-## Instructions
-
+<instructions>
 ⚠️ Do NOT suggest the same fix that was already tried. Try a fundamentally different approach.
 
 Respond with a JSON object:
@@ -78,6 +77,7 @@ Respond with a JSON object:
 - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
 - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
 - Available subtask IDs: ['3.1', '3.2', '3.3', '3.4']
+</instructions>
 ```
 
 ## Response

@@ -5,15 +5,14 @@
 ```
 You are a task evaluation expert. Evaluate whether the main task's completion criteria have been fully met based on the execution results.
 
-## Evaluation Context
-
+<evaluation_context>
 Main Task: Nested comprehensive coverage
 Completion Criteria: All subtasks completed with optimized performance.
 Processing pipeline produces correct output.
 
+</evaluation_context>
 
-## Execution Results
-
+<execution_results>
   - 1.1 (One-time environment setup): status=completed, attempts=1
     Criteria: Environment configured and dependencies installed.
 
@@ -34,9 +33,9 @@ Processing pipeline produces correct output.
     Criteria: Results committed to git.
 
     Result: ✅ completed
+</execution_results>
 
-## Instructions
-
+<instructions>
 Evaluate whether ALL completion criteria are met based on the execution results above.
 
 Respond with a JSON object:
@@ -52,6 +51,7 @@ Respond with a JSON object:
 - `retry_from` and `next_strategy`: Only required when `main_task_completed` is false.
 - `next_strategy`: Will be passed to the AI executing the next round — be specific and actionable.
 - Available subtask IDs: ['1.1', '1.2', '1.3', '1.4', '1.5']
+</instructions>
 ```
 
 ## Response

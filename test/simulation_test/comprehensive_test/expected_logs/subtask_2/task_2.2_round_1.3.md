@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Process data
 Completion Criteria: Data processed correctly.
 
 Initial Hint: Run the data processing step.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -55,12 +56,14 @@ This task is part of a larger workflow:
 === Previous Step (2.1) Result ===
 ✅ completed
 ============================
+</context>
 
-## Guidance from Previous Failure
+<guidance_from_previous_failure>
 **AI Analysis from previous failure:**
 Add email validation regex to the preprocessing filter alongside the null handling. Use re.match(r'^[^@]+@[^@]+/.[^@]+$', email) and drop records that fail validation.
 
 Please take this analysis into account and try a different approach.
+</guidance_from_previous_failure>
 ```
 
 ## Response

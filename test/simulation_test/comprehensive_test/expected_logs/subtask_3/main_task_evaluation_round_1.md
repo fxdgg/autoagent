@@ -5,14 +5,13 @@
 ```
 You are a task evaluation expert. Evaluate whether the main task's completion criteria have been fully met based on the execution results.
 
-## Evaluation Context
-
+<evaluation_context>
 Main Task: Nested edge case coverage
 Completion Criteria: All subtasks completed with validated results.
 
+</evaluation_context>
 
-## Execution Results
-
+<execution_results>
   - 3.1 (Build artifacts): status=completed, attempts=1
     Criteria: Build artifacts generated successfully.
 
@@ -29,9 +28,9 @@ Completion Criteria: All subtasks completed with validated results.
     Criteria: Smoke tests passed on staging.
 
     Result: ✅ completed
+</execution_results>
 
-## Instructions
-
+<instructions>
 Evaluate whether ALL completion criteria are met based on the execution results above.
 
 Respond with a JSON object:
@@ -47,6 +46,7 @@ Respond with a JSON object:
 - `retry_from` and `next_strategy`: Only required when `main_task_completed` is false.
 - `next_strategy`: Will be passed to the AI executing the next round — be specific and actionable.
 - Available subtask IDs: ['3.1', '3.2', '3.3', '3.4']
+</instructions>
 ```
 
 ## Response

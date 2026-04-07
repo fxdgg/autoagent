@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Verify fallback output
 Completion Criteria: Verification completed successfully.
 
 Initial Hint: Verify the transformed output.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -60,6 +61,7 @@ I corrected the normalization map and re-ran the transformation:
 
 ✅ completed
 ============================
+</context>
 ```
 
 ## Response

@@ -54,8 +54,7 @@ def build_failure_analysis_prompt(
     parts = [ROLE_FAILURE_ANALYST]
 
     # -- ## Failed Subtask --
-    failed_section = f"""## Failed Subtask
-
+    failed_section = f"""<failed_subtask>
 Main Task: {task['name']}
 Completion Criteria: {task['completion_criteria']}"""
 
@@ -69,33 +68,33 @@ Failed Subtask:
   ID: {failed_id}
   Name: {failed_subtask['name']}
   Type: {failed_subtask['type']}
-  Completion Criteria: {failed_subtask.get('completion_criteria', 'N/A')}"""
+  Completion Criteria: {failed_subtask.get('completion_criteria', 'N/A')}
+</failed_subtask>"""
 
     parts.append(failed_section)
 
     # -- ## Previous Step Context (conditional) --
     if previous_context:
         prev_label = f"Previous Step ({previous_subtask_id}) Context" if previous_subtask_id else "Previous Step Context"
-        parts.append(f"## {prev_label}\n\n{previous_context}")
+        parts.append(f"<{prev_label.replace(' ', '_').replace('(', '').replace(')', '').lower()}>\n{previous_context}\n</{prev_label.replace(' ', '_').replace('(', '').replace(')', '').lower()}>")
 
     # -- ## Failed Subtask Output --
     if error_text and error_text != "(no error output)":
-        parts.append(f"## Failed Subtask ({failed_id}) Output\n\n{error_text}")
+        parts.append(f"<failed_subtask_output>\n{error_text}\n</failed_subtask_output>")
 
     # -- ## Failed Subtask Attempt History (conditional) --
     if failed_subtask_history:
-        parts.append(f"## Failed Subtask ({failed_id}) Attempt History\n\n{failed_subtask_history}")
+        parts.append(f"<failed_subtask_attempt_history>\n{failed_subtask_history}\n</failed_subtask_attempt_history>")
 
     # -- ## All Subtasks Status --
-    parts.append(f"## All Subtasks Status\n\n{task_history_text}")
+    parts.append(f"<all_subtasks_status>\n{task_history_text}\n</all_subtasks_status>")
 
     # -- ## Previous Failure Analyses (conditional) --
     if prev_decisions_text:
-        parts.append(f"## Previous Failure Analyses\n\n{prev_decisions_text}")
+        parts.append(f"<previous_failure_analyses>\n{prev_decisions_text}\n</previous_failure_analyses>")
 
     # -- ## Instructions --
-    parts.append(f"""## Instructions
-
+    parts.append(f"""<instructions>
 ⚠️ Do NOT suggest the same fix that was already tried. Try a fundamentally different approach.
 
 Respond with a JSON object:
@@ -109,7 +108,8 @@ Respond with a JSON object:
 
 - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
 - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
-- Available subtask IDs: {available_ids}""")
+- Available subtask IDs: {available_ids}
+</instructions>""")
 
     return "\n\n".join(parts)
 

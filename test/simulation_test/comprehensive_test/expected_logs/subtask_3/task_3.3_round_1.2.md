@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Deploy staging
 Completion Criteria: Staging deployment verified and healthy.
 
 Initial Hint: Deploy to staging environment using autoagent-exec.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -63,11 +64,13 @@ All 47 tests passed:
 
 ✅ completed
 ============================
+</context>
 
-## Constraints
+<constraints>
 **⚠️ Long-Running Task:** You MUST use `autoagent-exec` to run your command. Do NOT run it directly in Bash. Example:
   "<autoagent-exec>" "cd build && cmake .. && make -j8"
 See system instructions for full details.
+</constraints>
 ```
 
 ## Response
@@ -140,14 +143,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Deploy staging
 Completion Criteria: Staging deployment verified and healthy.
 
 Initial Hint: Deploy to staging environment using autoagent-exec.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -170,18 +174,21 @@ All 47 tests passed:
 
 ✅ completed
 ============================
+</context>
 
-## Previous Attempts
+<previous_attempts>
 Previous Attempts:
   - Attempt 1: not_completed
     Summary: ❌ not completed: Health checks failing - database connection pool exhausted
 
 The previous attempt failed. Please analyze what went wrong and adjust your command or approach.
+</previous_attempts>
 
-## Constraints
+<constraints>
 **⚠️ Long-Running Task:** You MUST use `autoagent-exec` to run your command. Do NOT run it directly in Bash. Example:
   "<autoagent-exec>" "cd build && cmake .. && make -j8"
 See system instructions for full details.
+</constraints>
 ```
 
 ## Response

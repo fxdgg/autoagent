@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Benchmark and validate
 Completion Criteria: Benchmark results recorded and correctness validated.
 
 Initial Hint: Run benchmarks and validation checks.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -65,14 +66,16 @@ All 3 runs produced consistent results (std < 2%).
 
 ✅ completed
 ============================
+</context>
 
-## Guidance from Previous Failure
+<guidance_from_previous_failure>
 **AI Analysis from previous failure:**
 Replace the broad null check with a targeted check: only skip records where the optional field pointer is nullptr, not where the field value is zero or empty string. Use field.has_value() instead of field != nullptr.
 
 Strategy from previous evaluation: Re-run processing with 3 benchmark iterations and report median throughput. Also add p95 latency metric.
 
 Please take this analysis into account and try a different approach.
+</guidance_from_previous_failure>
 ```
 
 ## Response

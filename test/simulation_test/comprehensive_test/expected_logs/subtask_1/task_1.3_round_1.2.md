@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Core processing
 Completion Criteria: Processing completed with correct output.
 
 Initial Hint: Run the core processing pipeline.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -58,12 +59,14 @@ This task is part of a larger workflow:
 === Previous Step (1.2) Result ===
 ✅ completed
 ============================
+</context>
 
-## Guidance from Previous Failure
+<guidance_from_previous_failure>
 **AI Analysis from previous failure:**
 Update config.yaml to set timestamp_format='datetime64' and add a type coercion step for string-to-datetime conversion in the processing pipeline.
 
 Please take this analysis into account and try a different approach.
+</guidance_from_previous_failure>
 ```
 
 ## Response

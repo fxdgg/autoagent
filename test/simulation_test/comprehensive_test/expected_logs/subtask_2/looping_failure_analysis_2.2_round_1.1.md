@@ -5,8 +5,7 @@
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
 
-## Failed Subtask
-
+<failed_subtask>
 Main Task: Looping comprehensive coverage
 Completion Criteria: Both iterations completed successfully with correct output.
 
@@ -18,18 +17,18 @@ Failed Subtask:
   Type: simple
   Completion Criteria: Data processed correctly.
 
+</failed_subtask>
 
-## Previous Step (2.1) Context
-
+<previous_step_2.1_context>
 I initialized the iteration environment:
 - Created working directory for iteration 1
 - Loaded configuration from config.yaml
 - Connected to data source
 
 ✅ completed
+</previous_step_2.1_context>
 
-## Failed Subtask (2.2) Output
-
+<failed_subtask_output>
 I attempted to process the data but encountered an error:
 
 Error: DataFormatError - input records contain null values in
@@ -38,14 +37,14 @@ required field 'user_id'. 342 of 5000 records affected.
 The null values need to be handled before processing.
 
 ❌ not completed: Null values in required field 'user_id'
+</failed_subtask_output>
 
-## Failed Subtask (2.2) Attempt History
-
+<failed_subtask_attempt_history>
   - Attempt 1: not_completed
     Detail: ❌ not completed: Null values in required field 'user_id'
+</failed_subtask_attempt_history>
 
-## All Subtasks Status
-
+<all_subtasks_status>
   - 2.1 (Iteration setup): status=completed, attempts=1
     Criteria: Setup completed for this iteration.
 
@@ -56,9 +55,9 @@ The null values need to be handled before processing.
   - 2.3 (Verify output): status=pending, attempts=0
     Criteria: Output verified and saved.
 
+</all_subtasks_status>
 
-## Instructions
-
+<instructions>
 ⚠️ Do NOT suggest the same fix that was already tried. Try a fundamentally different approach.
 
 Respond with a JSON object:
@@ -73,6 +72,7 @@ Respond with a JSON object:
 - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
 - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
 - Available subtask IDs: ['2.1', '2.2', '2.3']
+</instructions>
 ```
 
 ## Response

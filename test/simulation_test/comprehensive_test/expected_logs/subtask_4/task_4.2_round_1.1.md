@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Validate report
 Completion Criteria: Report validation passed.
 
 Initial Hint: Validate the generated report.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -62,6 +63,7 @@ All data sources queried successfully. 50,000 records processed.
 
 ✅ completed
 ============================
+</context>
 ```
 
 ## Response

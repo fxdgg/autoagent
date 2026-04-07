@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Benchmark and validate
 Completion Criteria: Benchmark results recorded and correctness validated.
 
 Initial Hint: Run benchmarks and validation checks.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -64,6 +65,7 @@ I fixed the configuration and re-ran the processing:
 
 ✅ completed
 ============================
+</context>
 ```
 
 ## Response

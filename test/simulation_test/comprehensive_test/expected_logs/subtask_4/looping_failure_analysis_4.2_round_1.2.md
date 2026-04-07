@@ -5,8 +5,7 @@
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
 
-## Failed Subtask
-
+<failed_subtask>
 Main Task: Looping max attempts exhaustion
 Completion Criteria: Both iterations completed with passing validation.
 
@@ -18,9 +17,9 @@ Failed Subtask:
   Type: simple
   Completion Criteria: Report validation passed.
 
+</failed_subtask>
 
-## Previous Step (4.1) Context
-
+<previous_step_4.1_context>
 Report regenerated with correct precision:
 
 - report_q1.pdf (45 pages, updated)
@@ -30,9 +29,9 @@ Report regenerated with correct precision:
 Revenue total now shows $1,234,567.89 (correct).
 
 ✅ completed
+</previous_step_4.1_context>
 
-## Failed Subtask (4.2) Output
-
+<failed_subtask_output>
 I re-validated the report with decimal precision:
 
 Revenue figures now match ($1,234,567.89), but a new issue:
@@ -42,14 +41,14 @@ but the raw data shows positive growth. The chart generation script
 has a sign error in the YoY comparison formula.
 
 ❌ not completed: Chart 7 YoY comparison has sign error
+</failed_subtask_output>
 
-## Failed Subtask (4.2) Attempt History
-
+<failed_subtask_attempt_history>
   - Attempt 1: not_completed
     Detail: ❌ not completed: Chart 7 YoY comparison has sign error
+</failed_subtask_attempt_history>
 
-## All Subtasks Status
-
+<all_subtasks_status>
   - 4.1 (Generate report): status=completed, attempts=1
     Criteria: Report generated with correct data.
 
@@ -57,14 +56,14 @@ has a sign error in the YoY comparison formula.
   - 4.2 (Validate report): status=failed, attempts=1
     Criteria: Report validation passed.
 
+</all_subtasks_status>
 
-## Previous Failure Analyses
-
+<previous_failure_analyses>
   - Loop 1: failed at 4.2, retried from 4.1
     Fix attempted: Update the SQL aggregation to use CAST(SUM(amount) AS DECIMAL(12,2)) instead of CAST(SUM(amount) AS INTEGER) in the revenue report query.
+</previous_failure_analyses>
 
-## Instructions
-
+<instructions>
 ⚠️ Do NOT suggest the same fix that was already tried. Try a fundamentally different approach.
 
 Respond with a JSON object:
@@ -79,6 +78,7 @@ Respond with a JSON object:
 - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
 - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
 - Available subtask IDs: ['4.1', '4.2']
+</instructions>
 ```
 
 ## Response

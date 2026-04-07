@@ -63,12 +63,13 @@ def build_simple_task_prompt(
 
     # ── Section 1: Task ──────────────────────────────────────────────
     task_lines = [
-        "## Task",
+        "<task>",
         f"Task: {task['name']}",
         f"Completion Criteria: {task['completion_criteria']}",
     ]
     if task.get('initial_hint'):
         task_lines.append(f"Initial Hint: {task['initial_hint']}")
+    task_lines.append("</task>")
     parts.append("\n".join(task_lines))
 
     # ── Section 2: Context ───────────────────────────────────────────
@@ -88,7 +89,7 @@ def build_simple_task_prompt(
         context_lines.append(prev_section)
 
     if context_lines:
-        parts.append("## Context\n" + "\n\n".join(context_lines))
+        parts.append("<context>\n" + "\n\n".join(context_lines) + "\n</context>")
 
     # ── Section 3: Previous Attempts (retry only) ────────────────────
     if attempt > 1:
@@ -108,7 +109,7 @@ def build_simple_task_prompt(
             "Please analyze what went wrong and try a different approach."
         )
 
-        parts.append("## Previous Attempts\n" + "\n\n".join(retry_lines))
+        parts.append("<previous_attempts>\n" + "\n\n".join(retry_lines) + "\n</previous_attempts>")
 
     # ── Section 3b: Failure Guidance (always show when available) ──
     # suggested_fix comes from the parent's failure_analysis or
@@ -117,7 +118,7 @@ def build_simple_task_prompt(
     # new round_label, resetting the attempt counter to 1.
     fix_section = build_suggested_fix_section(parent_context, fallback_msg="")
     if fix_section:
-        parts.append("## Guidance from Previous Failure\n" + fix_section)
+        parts.append("<guidance_from_previous_failure>\n" + fix_section + "\n</guidance_from_previous_failure>")
 
     # ── Section 4: Constraints ───────────────────────────────────────
     constraint_lines = []
@@ -131,6 +132,6 @@ def build_simple_task_prompt(
             constraint_lines.append(guidance)
 
     if constraint_lines:
-        parts.append("## Constraints\n" + "\n\n".join(constraint_lines))
+        parts.append("<constraints>\n" + "\n\n".join(constraint_lines) + "\n</constraints>")
 
     return "\n\n".join(parts)

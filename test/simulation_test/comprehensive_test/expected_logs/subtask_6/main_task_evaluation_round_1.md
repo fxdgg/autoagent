@@ -5,14 +5,13 @@
 ```
 You are a task evaluation expert. Evaluate whether the main task's completion criteria have been fully met based on the execution results.
 
-## Evaluation Context
-
+<evaluation_context>
 Main Task: Prompt truncation coverage
 Completion Criteria: Oversized context handled safely and final output validated.
 
+</evaluation_context>
 
-## Execution Results
-
+<execution_results>
   - 6.1 (Generate oversized prior context): status=completed, attempts=1
     Criteria: Oversized diagnostic context generated.
 
@@ -25,9 +24,9 @@ Completion Criteria: Oversized context handled safely and final output validated
     Criteria: Final validation recorded.
 
     Result: ✅ completed
+</execution_results>
 
-## Instructions
-
+<instructions>
 Evaluate whether ALL completion criteria are met based on the execution results above.
 
 Respond with a JSON object:
@@ -43,6 +42,7 @@ Respond with a JSON object:
 - `retry_from` and `next_strategy`: Only required when `main_task_completed` is false.
 - `next_strategy`: Will be passed to the AI executing the next round — be specific and actionable.
 - Available subtask IDs: ['6.1', '6.2', '6.3']
+</instructions>
 ```
 
 ## Response

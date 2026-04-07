@@ -5,8 +5,7 @@
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
 
-## Failed Subtask
-
+<failed_subtask>
 Main Task: Nested comprehensive coverage
 Completion Criteria: All subtasks completed with optimized performance.
 Processing pipeline produces correct output.
@@ -18,9 +17,9 @@ Failed Subtask:
   Type: simple
   Completion Criteria: Processing completed with correct output.
 
+</failed_subtask>
 
-## Previous Step (1.2) Context
-
+<previous_step_1.2_context>
 The data preparation pipeline completed successfully.
 
 Output files generated:
@@ -31,9 +30,9 @@ Output files generated:
 All data quality checks passed. 15,000 records processed.
 
 ✅ completed
+</previous_step_1.2_context>
 
-## Failed Subtask (1.3) Output
-
+<failed_subtask_output>
 I attempted to run the core processing pipeline but hit an error:
 
 Error: ConfigurationError - processing parameters do not match
@@ -43,14 +42,14 @@ but got string type.
 The config file needs to be updated to match the new data format.
 
 ❌ not completed: Configuration mismatch with prepared data schema
+</failed_subtask_output>
 
-## Failed Subtask (1.3) Attempt History
-
+<failed_subtask_attempt_history>
   - Attempt 1: not_completed
     Detail: ❌ not completed: Configuration mismatch with prepared data schema
+</failed_subtask_attempt_history>
 
-## All Subtasks Status
-
+<all_subtasks_status>
   - 1.1 (One-time environment setup): status=completed, attempts=1
     Criteria: Environment configured and dependencies installed.
 
@@ -68,9 +67,9 @@ The config file needs to be updated to match the new data format.
   - 1.5 (Commit results): status=pending, attempts=0
     Criteria: Results committed to git.
 
+</all_subtasks_status>
 
-## Instructions
-
+<instructions>
 ⚠️ Do NOT suggest the same fix that was already tried. Try a fundamentally different approach.
 
 Respond with a JSON object:
@@ -85,6 +84,7 @@ Respond with a JSON object:
 - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
 - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
 - Available subtask IDs: ['1.1', '1.2', '1.3', '1.4', '1.5']
+</instructions>
 ```
 
 ## Response

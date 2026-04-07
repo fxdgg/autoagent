@@ -33,14 +33,15 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 
-## Task
+<task>
 Task: Retry with truncated context
 Completion Criteria: Retry succeeds after analyzing truncated context.
 
 Initial Hint: Use the oversized context to debug and complete the task.
 
+</task>
 
-## Context
+<context>
 Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
 
 
@@ -55,12 +56,14 @@ This task is part of a larger workflow:
 === Previous Step (6.1) Result ===
 ✅ completed
 ============================
+</context>
 
-## Guidance from Previous Failure
+<guidance_from_previous_failure>
 **AI Analysis from previous failure:**
 Reset the replay buffer before reconstructing the final checkpoint, then rebuild the checkpoint exclusively from the latest validated cursor snapshot instead of mixing in stale offsets.
 
 Please take this analysis into account and try a different approach.
+</guidance_from_previous_failure>
 ```
 
 ## Response

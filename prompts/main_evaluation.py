@@ -35,21 +35,20 @@ def build_main_evaluation_prompt(
     parts = [ROLE_MAIN_EVALUATOR]
 
     # -- ## Evaluation Context --
-    parts.append(f"""## Evaluation Context
-
+    parts.append(f"""<evaluation_context>
 Main Task: {task['name']}
-Completion Criteria: {task['completion_criteria']}""")
+Completion Criteria: {task['completion_criteria']}
+</evaluation_context>""")
 
     # -- ## Execution Results --
-    parts.append(f"## Execution Results\n\n{execution_results_text}")
+    parts.append(f"<execution_results>\n{execution_results_text}\n</execution_results>")
 
     # -- ## Previous Evaluations (conditional) --
     if prev_eval_section:
-        parts.append(f"## Previous Evaluations\n\n{prev_eval_section}")
+        parts.append(f"<previous_evaluations>\n{prev_eval_section}\n</previous_evaluations>")
 
     # -- ## Instructions --
-    parts.append(f"""## Instructions
-
+    parts.append(f"""<instructions>
 Evaluate whether ALL completion criteria are met based on the execution results above.
 
 Respond with a JSON object:
@@ -64,6 +63,7 @@ Respond with a JSON object:
 
 - `retry_from` and `next_strategy`: Only required when `main_task_completed` is false.
 - `next_strategy`: Will be passed to the AI executing the next round — be specific and actionable.
-- Available subtask IDs: {available_ids}""")
+- Available subtask IDs: {available_ids}
+</instructions>""")
 
     return "\n\n".join(parts)
