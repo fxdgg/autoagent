@@ -135,7 +135,7 @@ def build_revision_prompt(
 
     parts.append(f"""<instructions>
 Please revise the task decomposition based on the information above.
-Write ONLY valid YAML (a list of tasks) into the following file:
+Write ONLY valid YAML (a dictionary containing a `description` string and a `tasks` list) into the following file:
   {temp_tasks_path}
 
 Do NOT include markdown code fences or any extra text in the file.

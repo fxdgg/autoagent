@@ -164,7 +164,7 @@ class IdeasWatcher:
         idea: dict,
         status: str,
         task_ids: Optional[List[int]] = None,
-        plan_tasks: Optional[List[dict]] = None,
+        plan_data: Optional[dict] = None,
     ):
         """Record or update an idea's state in plans_state.yaml.
 
@@ -172,7 +172,7 @@ class IdeasWatcher:
             idea: Idea dict with 'hash', 'content', 'title' fields.
             status: One of 'in_progress', 'completed'.
             task_ids: List of generated task IDs (for completed ideas).
-            plan_tasks: Intermediate plan output (task dicts) saved after
+            plan_data: Intermediate plan output (dict with tasks and description) saved after
                 the plan phase completes so that a resumed run can skip
                 directly to the review phase.
         """
@@ -187,9 +187,12 @@ class IdeasWatcher:
         entry["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         if status == "completed" and task_ids is not None:
             entry["task_ids"] = task_ids
-        if plan_tasks is not None:
-            entry["plan_tasks"] = plan_tasks
-        # Clear plan_tasks when the idea reaches a terminal state
+        if plan_data is not None:
+            entry["plan_data"] = plan_data
+        # Clear plan_data when the idea reaches a terminal state
+        if status in ("completed", "failed") and "plan_data" in entry:
+            del entry["plan_data"]
+        # Also clear legacy plan_tasks
         if status in ("completed", "failed") and "plan_tasks" in entry:
             del entry["plan_tasks"]
         self._plans_state["ideas"][idea_hash] = entry
@@ -390,7 +393,7 @@ class IdeasWatcher:
             self._watcher_stop.set()
             self._watcher_thread.join(timeout=2)
 
-    def _read_tasks_from_temp_file(self) -> Optional[List[dict]]:
+    def _read_tasks_from_temp_file(self) -> Optional[dict]:
         """Try to read and parse tasks from the temporary YAML file.
 
         First stops the watcher thread (joining it ensures the cache is
@@ -400,7 +403,7 @@ class IdeasWatcher:
         in-memory cache populated by the background watcher thread.
 
         Returns:
-            List[dict] if a valid YAML list is found, None otherwise.
+            dict containing 'tasks' and 'description' if valid YAML is found, None otherwise.
             The caller is responsible for cleaning up the temp file via
             ``_cleanup_temp_file()`` when appropriate.
         """
@@ -446,13 +449,13 @@ class IdeasWatcher:
             parsed = yaml.safe_load(content)
             if isinstance(parsed, list) and len(parsed) > 0:
                 logger.info(f"Successfully read {len(parsed)} task(s) from temp file {temp_path}")
-                return parsed
+                return {"tasks": parsed, "description": ""}
             # AI might have written a dict with a "tasks" key
             if isinstance(parsed, dict) and isinstance(parsed.get('tasks'), list):
                 tasks_list = parsed['tasks']
                 if tasks_list:
                     logger.info(f"Extracted {len(tasks_list)} task(s) from dict wrapper in temp file")
-                    return tasks_list
+                    return {"tasks": tasks_list, "description": parsed.get("description", "")}
             logger.warning(
                 f"Temp file YAML parsed but not a valid task list: "
                 f"type={type(parsed).__name__}, "
@@ -475,7 +478,12 @@ class IdeasWatcher:
                 parsed = yaml.safe_load(stripped)
                 if isinstance(parsed, list) and len(parsed) > 0:
                     logger.info(f"Successfully read {len(parsed)} task(s) after stripping code fences")
-                    return parsed
+                    return {"tasks": parsed, "description": ""}
+                if isinstance(parsed, dict) and isinstance(parsed.get('tasks'), list):
+                    tasks_list = parsed['tasks']
+                    if tasks_list:
+                        logger.info(f"Extracted {len(tasks_list)} task(s) from dict wrapper after stripping code fences")
+                        return {"tasks": tasks_list, "description": parsed.get("description", "")}
             except Exception:
                 pass
         return None
@@ -558,15 +566,27 @@ class IdeasWatcher:
         return errors
 
     @staticmethod
-    def _validate_tasks_schema(tasks: List[dict]) -> tuple:
-        """Validate the schema of a list of tasks.
+    def _validate_tasks_schema(parsed_data: dict) -> tuple:
+        """Validate the schema of the parsed YAML data (tasks and description).
 
         Returns:
             (valid: bool, errors: List[str])
         """
         all_errors: List[str] = []
+        
+        description = parsed_data.get('description')
+        if description is None or not str(description).strip():
+            all_errors.append("Root-level 'description' field is missing or empty")
+        elif not isinstance(description, str):
+            all_errors.append("'description' must be a string")
+            
+        tasks = parsed_data.get('tasks', [])
+        if not tasks:
+            all_errors.append("No tasks found")
+            
         for task in tasks:
             all_errors.extend(IdeasWatcher._validate_task_schema(task, is_subtask=False))
+            
         return (len(all_errors) == 0, all_errors)
 
     def process_new_ideas(
@@ -609,15 +629,16 @@ class IdeasWatcher:
             print(f"\n   💡 Processing idea: {idea['title']}")
             self._record_idea_state(idea, "in_progress")
             try:
-                new_tasks = self._decompose_idea_to_tasks(
+                parsed_data = self._decompose_idea_to_tasks(
                     client, idea,
                     review_client=review_client,
                     conv_logger=conv_logger,
                     idea_index=processed_count + 1,
                     human_review=human_review,
                 )
-                if new_tasks:
-                    self._append_tasks_to_todos(new_tasks)
+                if parsed_data and parsed_data.get('tasks'):
+                    new_tasks = parsed_data['tasks']
+                    self._append_tasks_to_todos(parsed_data)
                     task_ids = [t.get('id') for t in new_tasks if t.get('id') is not None]
                     self._record_idea_state(idea, "completed", task_ids=task_ids)
                     print(f"   ✅ Added {len(new_tasks)} task(s) from idea: {idea['title']}")
@@ -646,7 +667,7 @@ class IdeasWatcher:
         conv_logger: ConversationLogger = None,
         idea_index: int = 1,
         human_review: bool = False,
-    ) -> List[dict]:
+    ) -> dict:
         """
         Call AI to decompose an idea into structured TODO tasks.
         
@@ -668,7 +689,7 @@ class IdeasWatcher:
             human_review: If True, pause for human approval after AI review passes
             
         Returns:
-            List[dict]: List of task configurations compatible with todos.yaml format
+            dict: Parsed data containing 'tasks' and 'description'
         """
         # Load existing tasks to determine the next available task ID
         existing_tasks = self._load_existing_tasks()
@@ -685,18 +706,24 @@ class IdeasWatcher:
         self._cleanup_temp_file()
 
         # ── Resume checkpoint: skip plan phase if tasks already generated ──
-        saved_plan = self._plans_state.get("ideas", {}).get(idea['hash'], {}).get("plan_tasks")
-        if saved_plan and isinstance(saved_plan, list) and len(saved_plan) > 0:
+        saved_plan = self._plans_state.get("ideas", {}).get(idea['hash'], {}).get("plan_data")
+        if not saved_plan:
+            # Fallback to legacy plan_tasks
+            legacy_plan = self._plans_state.get("ideas", {}).get(idea['hash'], {}).get("plan_tasks")
+            if legacy_plan and isinstance(legacy_plan, list) and len(legacy_plan) > 0:
+                saved_plan = {"tasks": legacy_plan, "description": ""}
+                
+        if saved_plan and isinstance(saved_plan, dict) and saved_plan.get('tasks'):
             print(f"   ♻️  Resuming from saved plan (skipping decomposition phase)")
-            logger.info(f"Resuming idea '{idea['title']}' from saved plan_tasks ({len(saved_plan)} tasks)")
-            tasks = saved_plan
-            result = yaml.dump(tasks, Dumper=_BlockStyleDumper, default_flow_style=False,
+            logger.info(f"Resuming idea '{idea['title']}' from saved plan_data ({len(saved_plan['tasks'])} tasks)")
+            parsed_data = saved_plan
+            result = yaml.dump(parsed_data, Dumper=_BlockStyleDumper, default_flow_style=False,
                                allow_unicode=True, sort_keys=False)
         else:
             # ── Plan phase with retry loop ──
             # Each attempt uses a fresh AI session (reset_session) to avoid
             # issues carried over from a previous failed session.
-            tasks = None
+            parsed_data = None
             result = ""
             for plan_attempt in range(1, self.max_plan_retries + 1):
                 prompt = build_ideas_decompose_prompt(
@@ -723,10 +750,10 @@ class IdeasWatcher:
                         conv_logger.log_ideas_response(result)
 
                     # Parse the YAML: prefer temp file, fall back to response text
-                    tasks = self._read_tasks_from_temp_file()
-                    if tasks is None:
+                    parsed_data = self._read_tasks_from_temp_file()
+                    if parsed_data is None:
                         logger.info("Temp file yielded no valid tasks, falling back to response text parsing")
-                        tasks = self._extract_yaml_tasks(result)
+                        parsed_data = self._extract_yaml_tasks(result)
                     self._cleanup_temp_file()
 
                 except AICallError as e:
@@ -737,7 +764,7 @@ class IdeasWatcher:
                     print(f"   ❌ Plan attempt {plan_attempt} failed: {e}")
                     continue
 
-                if tasks:
+                if parsed_data and parsed_data.get('tasks'):
                     if plan_attempt > 1:
                         print(f"   ✅ Plan succeeded on attempt {plan_attempt}")
                     break
@@ -749,20 +776,20 @@ class IdeasWatcher:
                         print(f"   ❌ Plan failed after {self.max_plan_retries} attempts, skipping idea")
 
             # Save plan output as checkpoint so a resumed run can skip to review
-            if tasks:
-                self._record_idea_state(idea, "in_progress", plan_tasks=tasks)
+            if parsed_data and parsed_data.get('tasks'):
+                self._record_idea_state(idea, "in_progress", plan_data=parsed_data)
 
         # Review + validation loop
-        if tasks:
-            tasks, result = self._review_and_validate_loop(
-                client, review_client, idea, tasks, result,
+        if parsed_data and parsed_data.get('tasks'):
+            parsed_data, result = self._review_and_validate_loop(
+                client, review_client, idea, parsed_data, result,
                 conv_logger=conv_logger,
             )
 
         # Human review loop: after AI review + validation passes, pause for human approval
-        if human_review and tasks:
-            tasks = self._human_review_loop(
-                client, review_client, idea, tasks, result,
+        if human_review and parsed_data and parsed_data.get('tasks'):
+            parsed_data = self._human_review_loop(
+                client, review_client, idea, parsed_data, result,
                 conv_logger=conv_logger,
             )
 
@@ -770,14 +797,14 @@ class IdeasWatcher:
         if conv_logger:
             conv_logger.log_ideas_section_end()
 
-        return tasks
+        return parsed_data or {}
 
     def _review_and_validate_loop(
         self,
         client: AIClient,
         review_client: AIClient,
         idea: dict,
-        tasks: List[dict],
+        parsed_data: dict,
         raw_yaml_response: str,
         conv_logger: ConversationLogger = None,
     ) -> tuple:
@@ -792,23 +819,23 @@ class IdeasWatcher:
             client: Original AIClient (with existing context)
             review_client: Optional AIClient for AI review
             idea: Original idea dict
-            tasks: Current parsed task list
+            parsed_data: Current parsed data containing tasks and description
             raw_yaml_response: Raw response from the last AI call
             conv_logger: Optional ConversationLogger
 
         Returns:
-            (tasks, raw_yaml_response) — the final validated task list and
+            (parsed_data, raw_yaml_response) — the final validated data and
             the last raw AI response.
         """
         result = raw_yaml_response
 
         for validation_attempt in range(1, self.max_validation_retries + 2):
             # --- AI review loop ---
-            if review_client and tasks:
+            if review_client and parsed_data and parsed_data.get('tasks'):
                 last_feedback = ""
                 for review_round in range(1, self.max_review_rounds + 1):
-                    review_passed, review_feedback, revised_tasks = self._review_tasks(
-                        review_client, idea, tasks, result,
+                    review_passed, review_feedback, revised_data = self._review_tasks(
+                        review_client, idea, parsed_data, result,
                         conv_logger=conv_logger,
                         review_round=review_round,
                         last_feedback=last_feedback,
@@ -818,9 +845,9 @@ class IdeasWatcher:
                         break
                     else:
                         last_feedback = review_feedback
-                        if revised_tasks:
+                        if revised_data:
                             print(f"   🔧 Reviewer directly revised tasks (round {review_round})")
-                            tasks = revised_tasks
+                            parsed_data = revised_data
                         else:
                             print(f"   🔄 Review rejected (round {review_round}), but reviewer did not provide revised tasks.")
                             # Reviewer didn't write a corrected file — accept current tasks
@@ -833,10 +860,10 @@ class IdeasWatcher:
                     )
 
             # --- Schema validation ("compile") ---
-            if not tasks:
+            if not parsed_data or not parsed_data.get('tasks'):
                 break
 
-            valid, errors = self._validate_tasks_schema(tasks)
+            valid, errors = self._validate_tasks_schema(parsed_data)
             if valid:
                 print(f"   ✅ Schema validation passed")
                 break
@@ -874,10 +901,10 @@ class IdeasWatcher:
                     revision_result = review_client.ask(revision_prompt)
                     if conv_logger:
                         conv_logger.log_ideas_revision_response(revision_result)
-                    tasks = self._read_tasks_from_temp_file()
-                    if tasks is None:
+                    parsed_data = self._read_tasks_from_temp_file()
+                    if parsed_data is None:
                         logger.info("Temp file not found after validation-retry revision, falling back to response text parsing")
-                        tasks = self._extract_yaml_tasks(revision_result)
+                        parsed_data = self._extract_yaml_tasks(revision_result)
                     self._cleanup_temp_file()
                     result = revision_result
                 except AICallError as e:
@@ -886,13 +913,13 @@ class IdeasWatcher:
                     break
                 # Loop back to AI review + validation
 
-        return tasks, result
+        return parsed_data, result
 
     def _review_tasks(
         self,
         review_client: AIClient,
         idea: dict,
-        tasks: List[dict],
+        parsed_data: dict,
         raw_yaml_response: str,
         conv_logger: ConversationLogger = None,
         review_round: int = 1,
@@ -909,16 +936,16 @@ class IdeasWatcher:
         Args:
             review_client: AIClient with fresh context
             idea: Original idea dict
-            tasks: Parsed task list
+            parsed_data: Parsed data containing tasks and description
             raw_yaml_response: Raw YAML response from the decomposition AI
             conv_logger: Optional ConversationLogger
             review_round: 1-based review round number
             last_feedback: Feedback from the previous review round (if any)
             
         Returns:
-            tuple: (passed: bool, feedback: str, revised_tasks: Optional[List[dict]])
+            tuple: (passed: bool, feedback: str, revised_data: Optional[dict])
                    passed=True if review approves, feedback contains reviewer comments,
-                   revised_tasks contains reviewer's corrected tasks if it rejected and
+                   revised_data contains reviewer's corrected data if it rejected and
                    directly modified the file (None otherwise).
         """
         # Reset reviewer session so each review round starts with a fresh context.
@@ -926,7 +953,7 @@ class IdeasWatcher:
         # from previous review rounds, which pollutes its judgment.
         review_client.reset_session()
 
-        tasks_yaml = yaml.dump(tasks, Dumper=_BlockStyleDumper, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        tasks_yaml = yaml.dump(parsed_data, Dumper=_BlockStyleDumper, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
         temp_tasks_path = self._get_temp_tasks_path()
         # Write current tasks to temp file so reviewer can modify it in-place
@@ -955,15 +982,15 @@ class IdeasWatcher:
 
             passed = self._check_review_passed(review_result)
 
-            revised_tasks = None
+            revised_data = None
             if not passed:
                 # Try to read reviewer's corrected tasks from temp file
-                revised_tasks = self._read_tasks_from_temp_file()
-                if revised_tasks:
-                    logger.info(f"Reviewer directly revised {len(revised_tasks)} task(s) in temp file")
+                revised_data = self._read_tasks_from_temp_file()
+                if revised_data and revised_data.get('tasks'):
+                    logger.info(f"Reviewer directly revised {len(revised_data['tasks'])} task(s) in temp file")
             self._cleanup_temp_file()
 
-            return passed, review_result, revised_tasks
+            return passed, review_result, revised_data
 
         except AICallError as e:
             logger.error(f"AI call failed for idea review: {e}")
@@ -1011,12 +1038,12 @@ class IdeasWatcher:
         client: AIClient,
         review_client: AIClient,
         idea: dict,
-        tasks: List[dict],
+        parsed_data: dict,
         raw_yaml_response: str,
         conv_logger: ConversationLogger = None,
-    ) -> List[dict]:
+    ) -> dict:
         """
-        Pause for human review after AI review passes.
+        Pause for human approval of the generated tasks.
         
         Flow when human rejects:
         1. Human provides feedback and/or edits the temp YAML file
@@ -1026,59 +1053,45 @@ class IdeasWatcher:
         5. Human reviews again
         
         Args:
-            client: Original AIClient (with existing context)
+            client: Original AIClient
             review_client: AIClient for AI review
             idea: Original idea dict
-            tasks: Current parsed task list
-            raw_yaml_response: Raw YAML response from the last AI call
+            parsed_data: Current parsed data containing tasks and description
+            raw_yaml_response: Raw response from the last AI call
             conv_logger: Optional ConversationLogger
             
         Returns:
-            List[dict]: Final approved task list
+            dict: The final approved parsed data
         """
-        revision_counter = 0
-        result = raw_yaml_response
-        temp_tasks_path = self._get_temp_tasks_path()
-
         while True:
-            # Write current tasks to temp file so human can edit directly
-            tasks_yaml = yaml.dump(
-                tasks, Dumper=_BlockStyleDumper, default_flow_style=False,
-                allow_unicode=True, sort_keys=False,
-            )
+            print(f"\n   👀 Human Review Required for idea: {idea['title']}")
+            print(f"   The generated tasks have been saved to: {self._get_temp_tasks_path()}")
+            print(f"   You can review and edit this file directly.")
+            
+            # Write current tasks to temp file for human to review/edit
+            tasks_yaml = yaml.dump(parsed_data, Dumper=_BlockStyleDumper, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            self._cleanup_temp_file()
             try:
-                with open(temp_tasks_path, 'w', encoding='utf-8') as f:
+                with open(self._get_temp_tasks_path(), 'w', encoding='utf-8') as f:
                     f.write(tasks_yaml)
             except OSError as e:
                 logger.warning(f"Failed to write temp file for human review: {e}")
 
-            print(f"\n{'─' * 60}")
-            print(f"   👤 Human Review Required")
-            print(f"{'─' * 60}")
-            print(f"   Idea: {idea['title']}")
-            print(f"\n   Generated Tasks:")
-            print(f"{'─' * 40}")
-            for line in tasks_yaml.split('\n'):
-                print(f"   {line}")
-            print(f"{'─' * 40}")
-            print(f"\n   📝 You can also edit the tasks directly in:")
-            print(f"      {temp_tasks_path}")
-
-            # Wait for human input
-            try:
-                choice = input("\n   Accept these tasks? (y/n): ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print("\n   ⚠️  Input interrupted, accepting current tasks.")
-                break
-
+            print(f"\n   Options:")
+            print(f"   [y] Accept tasks (and any edits you made to the file)")
+            print(f"   [n] Reject and provide feedback for AI to revise")
+            print(f"   [s] Skip this idea for now")
+            
+            choice = input("   Your choice [y/n/s]: ").strip().lower()
+            
             if choice == 'y':
                 # Check if human edited the temp file
-                edited_tasks = self._read_tasks_from_temp_file()
-                if edited_tasks is not None:
+                edited_data = self._read_tasks_from_temp_file()
+                if edited_data is not None:
                     # Validate the human-edited tasks
-                    valid, errors = self._validate_tasks_schema(edited_tasks)
+                    valid, errors = self._validate_tasks_schema(edited_data)
                     if valid:
-                        tasks = edited_tasks
+                        parsed_data = edited_data
                         print(f"   ✅ Human approved the tasks (loaded from temp file).")
                     else:
                         print(f"   ⚠️  Temp file has schema errors:")
@@ -1089,26 +1102,8 @@ class IdeasWatcher:
                 else:
                     print(f"   ✅ Human approved the tasks.")
                 break
+                
             elif choice == 'n':
-                # Check if human already edited the temp file
-                edited_tasks = self._read_tasks_from_temp_file()
-                human_edited_yaml = ""
-                if edited_tasks is not None:
-                    # Human edited the file — validate it
-                    valid, errors = self._validate_tasks_schema(edited_tasks)
-                    if valid:
-                        tasks = edited_tasks
-                        human_edited_yaml = yaml.dump(
-                            tasks, Dumper=_BlockStyleDumper, default_flow_style=False,
-                            allow_unicode=True, sort_keys=False,
-                        )
-                        print(f"   📝 Loaded human-edited tasks from temp file.")
-                    else:
-                        print(f"   ⚠️  Temp file has schema errors:")
-                        for e in errors:
-                            print(f"      • {e}")
-                        print(f"   Please fix the errors and try again, or provide text feedback below.")
-
                 # Get human text feedback
                 print(f"   Please provide your feedback for AI reviewer (end with an empty line, or leave empty to skip):")
                 feedback_lines = []
@@ -1124,74 +1119,67 @@ class IdeasWatcher:
 
                 human_feedback = '\n'.join(feedback_lines) if feedback_lines else ''
 
-                if not human_feedback and not human_edited_yaml:
-                    print(f"   ⚠️  No feedback provided and no file edits detected, please try again.")
+                if not human_feedback:
+                    print(f"   ⚠️  No feedback provided, please try again.")
                     continue
-
-                revision_counter += 1
 
                 # Log human feedback
                 if conv_logger:
-                    log_parts = []
-                    if human_edited_yaml:
-                        log_parts.append(f"[Human edited YAML]")
-                    if human_feedback:
-                        log_parts.append(f"[Human Feedback]\n{human_feedback}")
                     conv_logger.log_ideas_revision_prompt(
-                        revision_counter,
-                        '\n'.join(log_parts),
+                        1,
+                        f"[Human Feedback]\n{human_feedback}",
                     )
 
-                # Step 3-4: Send revision prompt to the SAME reviewer
+                # Send revision prompt to the SAME reviewer
                 # NOTE: Do NOT delete the temp file here — the AI may try to
                 # read it before writing.  It will be overwritten by the AI
                 # and cleaned up after we read the result.
                 print(f"   🔄 Sending human feedback to reviewer for revision...")
 
                 revision_prompt = build_revision_prompt(
-                    temp_tasks_path=temp_tasks_path,
+                    temp_tasks_path=self._get_temp_tasks_path(),
                     human_feedback=human_feedback,
-                    current_tasks_yaml=human_edited_yaml,
                 )
                 try:
-                    self._start_temp_file_watcher()
-                    result = review_client.ask(revision_prompt)
-
                     if conv_logger:
-                        conv_logger.log_ideas_revision_response(result)
-
-                    tasks = self._read_tasks_from_temp_file()
-                    if tasks is None:
-                        logger.info("Temp file not found after reviewer revision, falling back to response text parsing")
-                        tasks = self._extract_yaml_tasks(result)
+                        conv_logger.log_ideas_revision_prompt(1, revision_prompt)
+                    self._start_temp_file_watcher()
+                    revision_result = review_client.ask(revision_prompt)
+                    if conv_logger:
+                        conv_logger.log_ideas_revision_response(revision_result)
+                    
+                    new_parsed_data = self._read_tasks_from_temp_file()
+                    if new_parsed_data is None:
+                        logger.info("Temp file not found after human-feedback revision, falling back to response text parsing")
+                        new_parsed_data = self._extract_yaml_tasks(revision_result)
                     self._cleanup_temp_file()
-
-                    if not tasks:
-                        print(f"   ⚠️  Reviewer revision produced no valid tasks, keeping previous version.")
-                        continue
-
+                    
+                    if new_parsed_data and new_parsed_data.get('tasks'):
+                        parsed_data = new_parsed_data
+                        # Run validation on the new tasks
+                        valid, errors = self._validate_tasks_schema(parsed_data)
+                        if not valid:
+                            print(f"   ⚠️  AI revision has schema errors:")
+                            for e in errors:
+                                print(f"      • {e}")
+                            print(f"   You can fix these manually in the temp file.")
+                    else:
+                        print(f"   ❌ AI failed to generate valid tasks from feedback.")
+                        
                 except AICallError as e:
                     self._stop_temp_file_watcher()
-                    logger.error(f"AI call failed during reviewer revision: {e}")
-                    print(f"   ❌ Reviewer revision failed: {e}")
-                    print(f"   Keeping previous version.")
-                    continue
-
-                # Step 5: New reviewer reviews the revised tasks
-                tasks, result = self._review_and_validate_loop(
-                    client, review_client, idea, tasks, result,
-                    conv_logger=conv_logger,
-                )
-
-                # Loop back to human review with updated tasks
+                    logger.error(f"AI call failed during human-feedback revision: {e}")
+                    print(f"   ❌ AI call failed: {e}")
+                    
+            elif choice == 's':
+                print(f"   ⏭️  Skipping idea.")
+                return {}
             else:
-                print(f"   ⚠️  Invalid input. Please enter 'y' or 'n'.")
+                print(f"   Invalid choice. Please enter y, n, or s.")
+                
+        return parsed_data
 
-        # Clean up temp file when leaving the human review loop
-        self._cleanup_temp_file()
-        return tasks
-
-    def _extract_yaml_tasks(self, response: str) -> List[dict]:
+    def _extract_yaml_tasks(self, response: str) -> dict:
         """
         Extract YAML task definitions from AI response.
         
@@ -1199,13 +1187,15 @@ class IdeasWatcher:
             response: Raw AI response text
             
         Returns:
-            List[dict]: Parsed task list
+            dict: Parsed task list and description
         """
         # Strategy 1: Try parsing the entire response as YAML
         try:
             parsed = yaml.safe_load(response)
             if isinstance(parsed, list):
-                return parsed
+                return {"tasks": parsed, "description": ""}
+            if isinstance(parsed, dict) and isinstance(parsed.get('tasks'), list):
+                return {"tasks": parsed['tasks'], "description": parsed.get("description", "")}
         except yaml.YAMLError:
             pass
 
@@ -1220,7 +1210,9 @@ class IdeasWatcher:
                 try:
                     parsed = yaml.safe_load(match.group(1))
                     if isinstance(parsed, list):
-                        return parsed
+                        return {"tasks": parsed, "description": ""}
+                    if isinstance(parsed, dict) and isinstance(parsed.get('tasks'), list):
+                        return {"tasks": parsed['tasks'], "description": parsed.get("description", "")}
                 except yaml.YAMLError:
                     continue
 
@@ -1241,12 +1233,12 @@ class IdeasWatcher:
             try:
                 parsed = yaml.safe_load('\n'.join(yaml_lines))
                 if isinstance(parsed, list):
-                    return parsed
+                    return {"tasks": parsed, "description": ""}
             except yaml.YAMLError:
                 pass
 
         logger.warning(f"Failed to extract YAML tasks from AI response: {response[:500]}")
-        return []
+        return {}
 
     def _load_existing_tasks(self) -> list:
         """Load existing tasks from todos.yaml."""
@@ -1261,7 +1253,7 @@ class IdeasWatcher:
             logger.error(f"Failed to load todos file: {e}")
         return []
 
-    def _append_tasks_to_todos(self, new_tasks: List[dict]):
+    def _append_tasks_to_todos(self, parsed_data: dict):
         """
         Append new tasks to todos.yaml.
         
@@ -1269,8 +1261,10 @@ class IdeasWatcher:
         If it exists, reads existing tasks and appends new ones.
         
         Args:
-            new_tasks: List of task configurations to append
+            parsed_data: dict containing 'tasks' and 'description'
         """
+        new_tasks = parsed_data.get('tasks', [])
+        new_description = parsed_data.get('description', '')
         if not new_tasks:
             return
 
@@ -1291,6 +1285,10 @@ class IdeasWatcher:
 
         # Append new tasks
         config['tasks'].extend(new_tasks)
+        
+        # Overwrite description if provided
+        if new_description:
+            config['description'] = new_description
 
         # Write back
         try:

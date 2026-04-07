@@ -268,10 +268,10 @@ your task decomposition.
 <output_instructions>
 - Task IDs start from **<next_id>** (integer for top-level, dot notation for subtasks,
   e.g., <next_id>.1, <next_id>.2).
-- Write ONLY valid YAML (a list of tasks) into the following file:
+- Write ONLY valid YAML into the following file:
     <temp_tasks_path>
 - Do NOT include markdown code fences or any extra text in the file.
-- The file content must be a YAML list of task objects.
+- The file content must be a YAML dictionary containing a `description` string and a `tasks` list.
 
 ### Output Examples
 ... (示例内容)
@@ -339,7 +339,7 @@ If the tasks need improvement:
 
 <instructions>
 Please revise the task decomposition based on the information above.
-Write ONLY valid YAML (a list of tasks) into the following file:
+Write ONLY valid YAML (a dictionary containing a `description` string and a `tasks` list) into the following file:
   <temp_tasks_path>
 
 Do NOT include markdown code fences or any extra text in the file.
