@@ -17,9 +17,9 @@ These markers are MANDATORY. Your response MUST end with one of them.
 
 ## Note on long-running commands
 If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "<your entire command>"
+  "<autoagent-exec>" "<your entire command>"
 Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "cd build && cmake .. && make -j8"
+  "<autoagent-exec>" "cd build && cmake .. && make -j8"
 The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS
 
 ## ⚠️ IMPORTANT
@@ -77,7 +77,7 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 I'll run the full benchmark suite using autoagent-exec to avoid timeout:
 
-autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.4
+autoagent-exec --cmd "python -c /"import time; time.sleep(1)/"" --task-id 1.4
 
 The benchmark has been submitted.
 
@@ -85,7 +85,7 @@ The benchmark has been submitted.
 
 [autoagent-exec] Starting command (watching for 10s)...
    Command: python -c "import time; time.sleep(1)"
-   PID: 57276
+   PID: <PID>
 
 [OK] Command finished quickly (exit code 0).
    (no output captured)
@@ -96,7 +96,7 @@ The benchmark has been submitted.
 You previously launched this task using autoagent-exec:
     Command: python -c "import time; time.sleep(1)"
 The task has now finished. Output has been saved to:
-    D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/lr_tasks/lr_1.4_output.log
+logs/<SESSION>/lr_tasks/lr_1.4_output.log
 ```
 
 ## Response

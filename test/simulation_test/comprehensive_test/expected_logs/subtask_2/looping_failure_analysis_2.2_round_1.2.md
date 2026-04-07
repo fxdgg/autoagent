@@ -72,7 +72,7 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     "analysis": "After fixing null user_id values, a second issue appeared: malformed email entries. The data cleaning needs to handle both null values and malformed emails.",
     "retry_from": "2.2",
     "reasoning": "The setup is fine; only the processing step needs additional data validation.",
-    "suggested_fix": "Add email validation regex to the preprocessing filter alongside the null handling. Use re.match(r'^[^@]+@[^@]+\\.[^@]+$', email) and drop records that fail validation.",
+    "suggested_fix": "Add email validation regex to the preprocessing filter alongside the null handling. Use re.match(r'^[^@]+@[^@]+//.[^@]+$', email) and drop records that fail validation.",
     "confidence": "high"
 }
 

@@ -17,9 +17,9 @@ These markers are MANDATORY. Your response MUST end with one of them.
 
 ## Note on long-running commands
 If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "<your entire command>"
+  "<autoagent-exec>" "<your entire command>"
 Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "cd build && cmake .. && make -j8"
+  "<autoagent-exec>" "cd build && cmake .. && make -j8"
 The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS
 
 ## ⚠️ IMPORTANT
@@ -72,7 +72,7 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 <constraints>
     ⚠️ Long-Running Task: You MUST use `autoagent-exec` to run your command. Do NOT run it directly in Bash. Example:
-      "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "cd build && cmake .. && make -j8"
+      "<autoagent-exec>" "cd build && cmake .. && make -j8"
     See system instructions for full details.
 </constraints>
 ```
@@ -81,7 +81,7 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 I'll rebuild with the auth module enabled:
 
-autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 3.1
+autoagent-exec --cmd "python -c /"import time; time.sleep(1)/"" --task-id 3.1
 
 Rebuild submitted with AUTH_ENABLED=true.
 
@@ -89,7 +89,7 @@ Rebuild submitted with AUTH_ENABLED=true.
 
 [autoagent-exec] Starting command (watching for 60s)...
    Command: python -c "import time; time.sleep(1)"
-   PID: 60592
+   PID: <PID>
 
 [OK] Command finished quickly (exit code 0).
    (no output captured)
@@ -100,7 +100,7 @@ Rebuild submitted with AUTH_ENABLED=true.
 You previously launched this task using autoagent-exec:
     Command: python -c "import time; time.sleep(1)"
 The task has now finished. Output has been saved to:
-    D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/lr_tasks/lr_3.1_output.log
+logs/<SESSION>/lr_tasks/lr_3.1_output.log
 ```
 
 ## Response
