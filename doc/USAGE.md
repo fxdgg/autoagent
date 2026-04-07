@@ -49,6 +49,9 @@ gemini --version
 
 # OpenCode
 opencode --version
+
+# OpenAI Codex
+codex --version
 ```
 
 ### 4. 配置 Preset（可选）
@@ -508,6 +511,9 @@ python orchestrator.py --provider gemini
 
 # OpenCode（使用 opencode 自身配置的默认模型）
 python orchestrator.py --provider opencode
+
+# OpenAI Codex（默认模型 gpt-5.4-mini）
+python orchestrator.py --provider codex
 
 # 指定模型
 python orchestrator.py --provider codebuddy --model deepseek-v3.2

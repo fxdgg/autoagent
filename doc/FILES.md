@@ -233,6 +233,7 @@ autoagent/
   - `ClaudeCodeProvider`：Claude Code（默认模型 `claude-sonnet-4-6`）
   - `GeminiCLIProvider`：Gemini Cli（默认模型 `gemini-3-flash`）
   - `OpenCodeProvider`：OpenCode CLI（使用自身配置默认模型）
+  - `CodexProvider`：OpenAI Codex CLI（默认模型 `gpt-5.4-mini`）
   - `TestProvider`：测试用 Provider（从规则文件读取预定义响应）
 - **核心函数**：
   - `get_provider(name, model)`：工厂函数，根据名称创建 provider 实例

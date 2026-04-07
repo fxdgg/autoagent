@@ -58,7 +58,7 @@
 │  - AIProvider 抽象基类                   │  ← 多 Provider 支持
 │  - CodeBuddyProvider / ClaudeCodeProvider│
 │  - GeminiCLIProvider / OpenCodeProvider  │
-│  - TestProvider                          │
+│  - CodexProvider / TestProvider          │
 │  - 提示词构造器                         │
 │  - 响应解析器（stream-json）             │  ← 实时解析 stream-json 输出
 │  - Context 管理（session_id 自动续接）   │  ← 保持对话上下文连续性
@@ -94,6 +94,7 @@ orchestrator.py
     │   ├── ClaudeCodeProvider
     │   ├── GeminiCLIProvider
     │   ├── OpenCodeProvider
+    │   ├── CodexProvider
     │   └── TestProvider
     ├── task_executor.py (任务执行)
     │   ├── codebuddy_client.py → AIClient (AI 能力)
@@ -153,6 +154,7 @@ class TodoOrchestrator:
 - `ClaudeCodeProvider` — Claude Code CLI（默认模型 `claude-sonnet-4-6`）
 - `GeminiCLIProvider` — Gemini Cli（默认模型 `gemini-3-flash`）
 - `OpenCodeProvider` — OpenCode CLI（https://opencode.ai，不设默认模型，使用 opencode 自身配置）
+- `CodexProvider` — OpenAI Codex CLI（默认模型 `gpt-5.4-mini`）
 
 **工厂函数**：
 
@@ -173,6 +175,9 @@ type prompt.txt | gemini --output-format stream-json --model gemini-3-flash --yo
 
 # OpenCodeProvider
 type prompt.txt | opencode run --format json -m <model>
+
+# CodexProvider
+type prompt.txt | codex exec --json --dangerously-bypass-approvals-and-sandbox -s danger-full-access -m <model> -
 ```
 
 **Provider 注册表与别名**：
@@ -183,6 +188,7 @@ PROVIDERS = {
     "claude": ClaudeCodeProvider,
     "gemini": GeminiCLIProvider,
     "opencode": OpenCodeProvider,
+    "codex": CodexProvider,
     "test": TestProvider,
 }
 
@@ -509,6 +515,19 @@ SimpleTaskExecutor 根据失败类型决定是否重置 session：
 | 其他 `AICallError` | ✅ | 传递到 prompt | API 错误 |
 
 当 session 被 reset 时，上一轮 AI 的完整输出（截断到 4000 字符）会注入到下一轮 prompt 的 "Previous Attempt Output" section 中，让 AI 知道上次做到了哪一步。当 session 不 reset 时（BashTimeoutError），AI 的上下文完整保留，只需发送轻量级的 in-session follow-up。
+
+**重试 prompt 信息传递**：
+
+子任务重试时 prompt 中的信息 section：
+
+| Section | 触发条件 | 说明 |
+|---------|----------|------|
+| `## Previous Attempts` | `attempt > 1`（同一 round 内重试） | 包含 Previous Attempt Output（截断的上次 AI 输出）和 history（逐次尝试记录） |
+| `## Guidance from Previous Failure` | `suggested_fix` 非空（来自 failure_analysis 或 main_task_evaluation） | **独立于 `attempt > 1`**——failure_analysis 创建新 round 后 attempt 重置为 1，但 fix 仍会显示 |
+
+history 中的特殊过滤：
+- `interrupted` 条目（Ctrl+C 中断）会显示，告知 AI 上次是用户主动中断
+- `not_completed` 条目中 summary 包含 "Cannot find" 的条目会被过滤（纯标记缺失噪音，无指导意义）
 
 **完成检测三层策略**：
 
@@ -1808,13 +1827,15 @@ prompts/  task_executor.py  ideas_watcher.py
 1. **失败分析**（决策点1）：
    - 分析子任务失败原因
    - 识别根本原因（是当前子任务的问题，还是前面子任务的问题）
-   - 评估历史尝试记录
-   - 检查错误日志和相关文件
+   - 评估历史尝试记录（当前 round 内的 per-attempt history）
+   - 参考上一个成功子任务的输出上下文（Previous Step Context）
+   - 参考失败子任务的 AI 输出（Failed Subtask Output）
 
 2. **重试决策**（决策点1）：
    - 决定从哪个子任务开始重试（`retry_from`字段）
-   - 提出具体的修复方案（`suggested_fix`字段）——**仅传递给 `retry_from` 指定的子任务**，
-     后续子任务不会看到此修复建议（因为修复建议针对的是特定子任务的问题）
+   - 提出具体的修复方案（`suggested_fix`字段）——**仅传递给 `retry_from` 指定的子任务**；
+     如果该子任务是 `*_once` 类型且被跳过，fix 会 carry forward 到下一个实际执行的子任务
+   - Previous Failure Analyses 仅包含**当前 round** 的历史（Nested 按 `_main_round` 过滤，Looping 按 `loop_idx` 过滤）
    - 给出分析（`analysis`字段）
 
 3. **完成判断**（决策点2）：
