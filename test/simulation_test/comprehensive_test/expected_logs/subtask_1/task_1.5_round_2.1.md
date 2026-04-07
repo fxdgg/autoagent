@@ -17,9 +17,9 @@ These markers are MANDATORY. Your response MUST end with one of them.
 
 ## Note on long-running commands
 If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "<autoagent-exec>" "<your entire command>"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "<your entire command>"
 Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "<autoagent-exec>" "cd build && cmake .. && make -j8"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "cd build && cmake .. && make -j8"
 The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS
 
 ## ⚠️ IMPORTANT
@@ -34,39 +34,48 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
-Task: Commit results
-Completion Criteria: Results committed to git.
+    <task_name>
+        Commit results
+    </task_name>
 
-Initial Hint: Git add and commit the results.
+    <completion_criteria>
+        Results committed to git.
+    </completion_criteria>
 
+    <initial_hint>
+        Git add and commit the results.
+    </initial_hint>
 </task>
 
 <context>
-Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
 
+    <subtask_goal>
+        All subtasks completed with optimized performance.
+        Processing pipeline produces correct output.
+    </subtask_goal>
 
-Subtask Goal: All subtasks completed with optimized performance.
-Processing pipeline produces correct output.
+    <workflow>
+        1.1. One-time environment setup
+          1.2. One-time data preparation
+          1.3. Core processing
+          1.4. Benchmark and validate
+        → 1.5. Commit results
+    </workflow>
 
+    <previous_step_result (1.4)>
+        Benchmark results (3 iterations, median):
+        - Throughput: 1150 records/sec (baseline: 800, improvement: 43.75%)
+        - p95 latency: 12ms (baseline: 28ms, improvement: 57.1%)
+        - Correctness: 100% across all runs
+        - Memory: 2.0GB peak (stable across runs)
 
-This task is part of a larger workflow:
-    1.1. One-time environment setup
-    1.2. One-time data preparation
-    1.3. Core processing
-    1.4. Benchmark and validate
-  → 1.5. Commit results
+        Results written to benchmark_report.txt.
 
-=== Previous Step (1.4) Result ===
-Benchmark results (3 iterations, median):
-- Throughput: 1150 records/sec (baseline: 800, improvement: 43.75%)
-- p95 latency: 12ms (baseline: 28ms, improvement: 57.1%)
-- Correctness: 100% across all runs
-- Memory: 2.0GB peak (stable across runs)
-
-Results written to benchmark_report.txt.
-
-✅ completed
-============================
+        ✅ completed
+    </previous_step_result>
 </context>
 ```
 

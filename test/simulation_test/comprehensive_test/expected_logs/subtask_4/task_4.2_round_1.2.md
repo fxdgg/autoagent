@@ -17,9 +17,9 @@ These markers are MANDATORY. Your response MUST end with one of them.
 
 ## Note on long-running commands
 If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "<autoagent-exec>" "<your entire command>"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "<your entire command>"
 Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "<autoagent-exec>" "cd build && cmake .. && make -j8"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "cd build && cmake .. && make -j8"
 The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS
 
 ## ⚠️ IMPORTANT
@@ -34,35 +34,44 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
-Task: Validate report
-Completion Criteria: Report validation passed.
+    <task_name>
+        Validate report
+    </task_name>
 
-Initial Hint: Validate the generated report.
+    <completion_criteria>
+        Report validation passed.
+    </completion_criteria>
 
+    <initial_hint>
+        Validate the generated report.
+    </initial_hint>
 </task>
 
 <context>
-Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
 
+    <subtask_goal>
+        Both iterations completed with passing validation.
+    </subtask_goal>
 
-Subtask Goal: Both iterations completed with passing validation.
+    <workflow>
+        4.1. Generate report
+        → 4.2. Validate report
+    </workflow>
 
+    <previous_step_result (4.1)>
+        Report regenerated with correct precision:
 
-This task is part of a larger workflow:
-    4.1. Generate report
-  → 4.2. Validate report
+        - report_q1.pdf (45 pages, updated)
+        - report_data.json (raw data with decimal values)
+        - charts/ (12 PNG files, updated)
 
-=== Previous Step (4.1) Result ===
-Report regenerated with correct precision:
+        Revenue total now shows $1,234,567.89 (correct).
 
-- report_q1.pdf (45 pages, updated)
-- report_data.json (raw data with decimal values)
-- charts/ (12 PNG files, updated)
-
-Revenue total now shows $1,234,567.89 (correct).
-
-✅ completed
-============================
+        ✅ completed
+    </previous_step_result>
 </context>
 ```
 

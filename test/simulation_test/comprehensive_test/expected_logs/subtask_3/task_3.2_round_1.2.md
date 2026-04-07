@@ -17,9 +17,9 @@ These markers are MANDATORY. Your response MUST end with one of them.
 
 ## Note on long-running commands
 If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "<autoagent-exec>" "<your entire command>"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "<your entire command>"
 Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "<autoagent-exec>" "cd build && cmake .. && make -j8"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "cd build && cmake .. && make -j8"
 The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS
 
 ## ⚠️ IMPORTANT
@@ -34,39 +34,48 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
-Task: Run integration tests
-Completion Criteria: Integration tests passed.
+    <task_name>
+        Run integration tests
+    </task_name>
 
-Initial Hint: Execute the integration test suite.
+    <completion_criteria>
+        Integration tests passed.
+    </completion_criteria>
 
+    <initial_hint>
+        Execute the integration test suite.
+    </initial_hint>
 </task>
 
 <context>
-Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
 
+    <subtask_goal>
+        All subtasks completed with validated results.
+    </subtask_goal>
 
-Subtask Goal: All subtasks completed with validated results.
+    <workflow>
+        3.1. Build artifacts
+        → 3.2. Run integration tests
+          3.3. Deploy staging
+          3.4. Smoke test staging
+    </workflow>
 
+    <previous_step_result (3.1)>
+        Rebuild completed successfully with auth module:
 
-This task is part of a larger workflow:
-    3.1. Build artifacts
-  → 3.2. Run integration tests
-    3.3. Deploy staging
-    3.4. Smoke test staging
+        Artifacts generated:
+        - app.wasm (13.2MB, +1.2MB from auth module)
+        - app.js (355KB)
+        - auth_tokens.json
+        - sourcemaps/
 
-=== Previous Step (3.1) Result ===
-Rebuild completed successfully with auth module:
+        All compilation checks passed. Auth module linked.
 
-Artifacts generated:
-- app.wasm (13.2MB, +1.2MB from auth module)
-- app.js (355KB)
-- auth_tokens.json
-- sourcemaps/
-
-All compilation checks passed. Auth module linked.
-
-✅ completed
-============================
+        ✅ completed
+    </previous_step_result>
 </context>
 ```
 

@@ -17,9 +17,9 @@ These markers are MANDATORY. Your response MUST end with one of them.
 
 ## Note on long-running commands
 If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "<autoagent-exec>" "<your entire command>"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "<your entire command>"
 Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "<autoagent-exec>" "cd build && cmake .. && make -j8"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "cd build && cmake .. && make -j8"
 The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS
 
 ## ⚠️ IMPORTANT
@@ -34,40 +34,49 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
-Task: Core processing
-Completion Criteria: Processing completed with correct output.
+    <task_name>
+        Core processing
+    </task_name>
 
-Initial Hint: Run the core processing pipeline.
+    <completion_criteria>
+        Processing completed with correct output.
+    </completion_criteria>
 
+    <initial_hint>
+        Run the core processing pipeline.
+    </initial_hint>
 </task>
 
 <context>
-Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
 
+    <subtask_goal>
+        All subtasks completed with optimized performance.
+        Processing pipeline produces correct output.
+    </subtask_goal>
 
-Subtask Goal: All subtasks completed with optimized performance.
-Processing pipeline produces correct output.
+    <workflow>
+        1.1. One-time environment setup
+          1.2. One-time data preparation
+        → 1.3. Core processing
+          1.4. Benchmark and validate
+          1.5. Commit results
+    </workflow>
 
+    <previous_step_result (1.2)>
+        The data preparation pipeline completed successfully.
 
-This task is part of a larger workflow:
-    1.1. One-time environment setup
-    1.2. One-time data preparation
-  → 1.3. Core processing
-    1.4. Benchmark and validate
-    1.5. Commit results
+        Output files generated:
+        - prepared_data.parquet (800MB)
+        - feature_index.json
+        - schema_metadata.yaml
 
-=== Previous Step (1.2) Result ===
-The data preparation pipeline completed successfully.
+        All data quality checks passed. 15,000 records processed.
 
-Output files generated:
-- prepared_data.parquet (800MB)
-- feature_index.json
-- schema_metadata.yaml
-
-All data quality checks passed. 15,000 records processed.
-
-✅ completed
-============================
+        ✅ completed
+    </previous_step_result>
 </context>
 ```
 

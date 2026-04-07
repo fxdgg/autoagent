@@ -17,9 +17,9 @@ These markers are MANDATORY. Your response MUST end with one of them.
 
 ## Note on long-running commands
 If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "<autoagent-exec>" "<your entire command>"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "<your entire command>"
 Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "<autoagent-exec>" "cd build && cmake .. && make -j8"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "cd build && cmake .. && make -j8"
 The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS
 
 ## ⚠️ IMPORTANT
@@ -34,36 +34,33 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
-Task: Prepare fallback scenario
-Completion Criteria: Fallback test inputs prepared.
+    <task_name>
+        Prepare fallback scenario
+    </task_name>
 
-Initial Hint: Prepare the fallback validation scenario.
+    <completion_criteria>
+        Fallback test inputs prepared.
+    </completion_criteria>
 
+    <initial_hint>
+        Prepare the fallback validation scenario.
+    </initial_hint>
 </task>
 
 <context>
-Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
 
+    <subtask_goal>
+        All subtasks completed and fallback handling validated.
+    </subtask_goal>
 
-Subtask Goal: All subtasks completed and fallback handling validated.
-
-
-This task is part of a larger workflow:
-  → 5.1. Prepare fallback scenario
-    5.2. Run fragile transformation
-    5.3. Verify fallback output
-
-=== Previous Step Result ===
-Report regenerated with correct precision:
-
-- report_q1.pdf (45 pages, updated)
-- report_data.json (raw data with decimal values)
-- charts/ (12 PNG files, updated)
-
-Revenue total now shows $1,234,567.89 (correct).
-
-✅ completed
-============================
+    <workflow>
+        → 5.1. Prepare fallback scenario
+          5.2. Run fragile transformation
+          5.3. Verify fallback output
+    </workflow>
 </context>
 ```
 

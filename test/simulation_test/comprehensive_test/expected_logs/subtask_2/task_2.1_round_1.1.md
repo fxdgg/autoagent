@@ -17,9 +17,9 @@ These markers are MANDATORY. Your response MUST end with one of them.
 
 ## Note on long-running commands
 If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "<autoagent-exec>" "<your entire command>"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "<your entire command>"
 Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "<autoagent-exec>" "cd build && cmake .. && make -j8"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "cd build && cmake .. && make -j8"
 The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS
 
 ## ⚠️ IMPORTANT
@@ -34,35 +34,33 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
-Task: Iteration setup
-Completion Criteria: Setup completed for this iteration.
+    <task_name>
+        Iteration setup
+    </task_name>
 
-Initial Hint: Initialize the iteration environment.
+    <completion_criteria>
+        Setup completed for this iteration.
+    </completion_criteria>
 
+    <initial_hint>
+        Initialize the iteration environment.
+    </initial_hint>
 </task>
 
 <context>
-Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
 
+    <subtask_goal>
+        Both iterations completed successfully with correct output.
+    </subtask_goal>
 
-Subtask Goal: Both iterations completed successfully with correct output.
-
-
-This task is part of a larger workflow:
-  → 2.1. Iteration setup
-    2.2. Process data
-    2.3. Verify output
-
-=== Previous Step Result ===
-I committed the improved results:
-
-git add -A
-git commit -m "perf: optimize pipeline - 43.75% throughput, 57.1% latency gain (median of 3 runs)"
-
-Results committed successfully.
-
-✅ completed
-============================
+    <workflow>
+        → 2.1. Iteration setup
+          2.2. Process data
+          2.3. Verify output
+    </workflow>
 </context>
 ```
 

@@ -17,9 +17,9 @@ These markers are MANDATORY. Your response MUST end with one of them.
 
 ## Note on long-running commands
 If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "<autoagent-exec>" "<your entire command>"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "<your entire command>"
 Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "<autoagent-exec>" "cd build && cmake .. && make -j8"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "cd build && cmake .. && make -j8"
 The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS
 
 ## ⚠️ IMPORTANT
@@ -34,35 +34,39 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
-Task: Run fragile transformation
-Completion Criteria: Transformation completed with validated output.
+    <task_name>
+        Run fragile transformation
+    </task_name>
 
-Initial Hint: Run the transformation step that may require fallback handling.
+    <completion_criteria>
+        Transformation completed with validated output.
+    </completion_criteria>
 
+    <initial_hint>
+        Run the transformation step that may require fallback handling.
+    </initial_hint>
 </task>
 
 <context>
-Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
 
+    <subtask_goal>
+        All subtasks completed and fallback handling validated.
+    </subtask_goal>
 
-Subtask Goal: All subtasks completed and fallback handling validated.
-
-
-This task is part of a larger workflow:
-    5.1. Prepare fallback scenario
-  → 5.2. Run fragile transformation
-    5.3. Verify fallback output
-
-=== Previous Step (5.1) Result ===
-✅ completed
-============================
+    <workflow>
+        5.1. Prepare fallback scenario
+        → 5.2. Run fragile transformation
+          5.3. Verify fallback output
+    </workflow>
 </context>
 
 <guidance_from_previous_failure>
-**AI Analysis from previous failure:**
-Retry the same subtask
+    Retry the same subtask
 
-Please take this analysis into account and try a different approach.
+    Please take this analysis into account and try a different approach.
 </guidance_from_previous_failure>
 ```
 

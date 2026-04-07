@@ -17,9 +17,9 @@ These markers are MANDATORY. Your response MUST end with one of them.
 
 ## Note on long-running commands
 If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "<autoagent-exec>" "<your entire command>"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "<your entire command>"
 Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "<autoagent-exec>" "cd build && cmake .. && make -j8"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "cd build && cmake .. && make -j8"
 The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS
 
 ## ⚠️ IMPORTANT
@@ -34,35 +34,39 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
-Task: Retry with truncated context
-Completion Criteria: Retry succeeds after analyzing truncated context.
+    <task_name>
+        Retry with truncated context
+    </task_name>
 
-Initial Hint: Use the oversized context to debug and complete the task.
+    <completion_criteria>
+        Retry succeeds after analyzing truncated context.
+    </completion_criteria>
 
+    <initial_hint>
+        Use the oversized context to debug and complete the task.
+    </initial_hint>
 </task>
 
 <context>
-Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
 
+    <subtask_goal>
+        Oversized context handled safely and final output validated.
+    </subtask_goal>
 
-Subtask Goal: Oversized context handled safely and final output validated.
-
-
-This task is part of a larger workflow:
-    6.1. Generate oversized prior context
-  → 6.2. Retry with truncated context
-    6.3. Finalize truncation validation
-
-=== Previous Step (6.1) Result ===
-✅ completed
-============================
+    <workflow>
+        6.1. Generate oversized prior context
+        → 6.2. Retry with truncated context
+          6.3. Finalize truncation validation
+    </workflow>
 </context>
 
 <guidance_from_previous_failure>
-**AI Analysis from previous failure:**
-Reset the replay buffer before reconstructing the final checkpoint, then rebuild the checkpoint exclusively from the latest validated cursor snapshot instead of mixing in stale offsets.
+    Reset the replay buffer before reconstructing the final checkpoint, then rebuild the checkpoint exclusively from the latest validated cursor snapshot instead of mixing in stale offsets.
 
-Please take this analysis into account and try a different approach.
+    Please take this analysis into account and try a different approach.
 </guidance_from_previous_failure>
 ```
 

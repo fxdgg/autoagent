@@ -17,9 +17,9 @@ These markers are MANDATORY. Your response MUST end with one of them.
 
 ## Note on long-running commands
 If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "<autoagent-exec>" "<your entire command>"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "<your entire command>"
 Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "<autoagent-exec>" "cd build && cmake .. && make -j8"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "cd build && cmake .. && make -j8"
 The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS
 
 ## ⚠️ IMPORTANT
@@ -34,33 +34,33 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
-Task: Generate oversized prior context
-Completion Criteria: Oversized diagnostic context generated.
+    <task_name>
+        Generate oversized prior context
+    </task_name>
 
-Initial Hint: Generate a deliberately oversized diagnostic note for downstream truncation tests.
+    <completion_criteria>
+        Oversized diagnostic context generated.
+    </completion_criteria>
 
+    <initial_hint>
+        Generate a deliberately oversized diagnostic note for downstream truncation tests.
+    </initial_hint>
 </task>
 
 <context>
-Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
 
+    <subtask_goal>
+        Oversized context handled safely and final output validated.
+    </subtask_goal>
 
-Subtask Goal: Oversized context handled safely and final output validated.
-
-
-This task is part of a larger workflow:
-  → 6.1. Generate oversized prior context
-    6.2. Retry with truncated context
-    6.3. Finalize truncation validation
-
-=== Previous Step Result ===
-Round 2 verification succeeded:
-- transformed_payload_round2.json matches the schema
-- fallback_audit.log contains only expected corrections
-- regression checks all passed
-
-✅ completed
-============================
+    <workflow>
+        → 6.1. Generate oversized prior context
+          6.2. Retry with truncated context
+          6.3. Finalize truncation validation
+    </workflow>
 </context>
 ```
 

@@ -17,9 +17,9 @@ These markers are MANDATORY. Your response MUST end with one of them.
 
 ## Note on long-running commands
 If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "<autoagent-exec>" "<your entire command>"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "<your entire command>"
 Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "<autoagent-exec>" "cd build && cmake .. && make -j8"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "cd build && cmake .. && make -j8"
 The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS
 
 ## ⚠️ IMPORTANT
@@ -34,37 +34,46 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
-Task: Benchmark and validate
-Completion Criteria: Benchmark results recorded and correctness validated.
+    <task_name>
+        Benchmark and validate
+    </task_name>
 
-Initial Hint: Run benchmarks and validation checks.
+    <completion_criteria>
+        Benchmark results recorded and correctness validated.
+    </completion_criteria>
 
+    <initial_hint>
+        Run benchmarks and validation checks.
+    </initial_hint>
 </task>
 
 <context>
-Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
 
+    <subtask_goal>
+        All subtasks completed with optimized performance.
+        Processing pipeline produces correct output.
+    </subtask_goal>
 
-Subtask Goal: All subtasks completed with optimized performance.
-Processing pipeline produces correct output.
+    <workflow>
+        1.1. One-time environment setup
+          1.2. One-time data preparation
+          1.3. Core processing
+        → 1.4. Benchmark and validate
+          1.5. Commit results
+    </workflow>
 
+    <previous_step_result (1.3)>
+        I fixed the configuration and re-ran the processing:
+        - Updated config.yaml with timestamp_format='datetime64'
+        - Added type coercion step for string fields
+        - Processing completed successfully
+        - Output: results.json with 15,000 processed records
 
-This task is part of a larger workflow:
-    1.1. One-time environment setup
-    1.2. One-time data preparation
-    1.3. Core processing
-  → 1.4. Benchmark and validate
-    1.5. Commit results
-
-=== Previous Step (1.3) Result ===
-I fixed the configuration and re-ran the processing:
-- Updated config.yaml with timestamp_format='datetime64'
-- Added type coercion step for string fields
-- Processing completed successfully
-- Output: results.json with 15,000 processed records
-
-✅ completed
-============================
+        ✅ completed
+    </previous_step_result>
 </context>
 ```
 

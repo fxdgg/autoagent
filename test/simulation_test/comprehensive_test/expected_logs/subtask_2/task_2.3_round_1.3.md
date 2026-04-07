@@ -17,9 +17,9 @@ These markers are MANDATORY. Your response MUST end with one of them.
 
 ## Note on long-running commands
 If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "<autoagent-exec>" "<your entire command>"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "<your entire command>"
 Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "<autoagent-exec>" "cd build && cmake .. && make -j8"
+  "D:/silasshen/autoagent/autoagent/test/simulation_test/logs/comprehensive_test_jpzxj717/scripts/autoagent-exec.bat" "cd build && cmake .. && make -j8"
 The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS
 
 ## ⚠️ IMPORTANT
@@ -34,35 +34,44 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
-Task: Verify output
-Completion Criteria: Output verified and saved.
+    <task_name>
+        Verify output
+    </task_name>
 
-Initial Hint: Run verification on the output.
+    <completion_criteria>
+        Output verified and saved.
+    </completion_criteria>
 
+    <initial_hint>
+        Run verification on the output.
+    </initial_hint>
 </task>
 
 <context>
-Project Description: Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
 
+    <subtask_goal>
+        Both iterations completed successfully with correct output.
+    </subtask_goal>
 
-Subtask Goal: Both iterations completed successfully with correct output.
+    <workflow>
+        2.1. Iteration setup
+          2.2. Process data
+        → 2.3. Verify output
+    </workflow>
 
+    <previous_step_result (2.2)>
+        I added both null handling and email validation:
+        - Filtered 342 null user_id records
+        - Filtered 89 malformed email records
+        - Processing completed on 4569 valid records
 
-This task is part of a larger workflow:
-    2.1. Iteration setup
-    2.2. Process data
-  → 2.3. Verify output
+        Output: iteration_1_results.csv with 4569 records.
 
-=== Previous Step (2.2) Result ===
-I added both null handling and email validation:
-- Filtered 342 null user_id records
-- Filtered 89 malformed email records
-- Processing completed on 4569 valid records
-
-Output: iteration_1_results.csv with 4569 records.
-
-✅ completed
-============================
+        ✅ completed
+    </previous_step_result>
 </context>
 ```
 
