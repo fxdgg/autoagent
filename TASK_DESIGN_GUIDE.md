@@ -132,8 +132,6 @@ session timeouts that waste progress and may leave the project in a broken
 state.
 
 **Design tips:**
-- You do NOT need to specify the `command` field — the AI can decide what
-  command to run based on the task description and `initial_hint`.
 - The AI will see the full output log after the command finishes, so
   `completion_criteria` can reference specific output patterns.
 
@@ -195,7 +193,7 @@ tasks:
 | `type`                 |   string  | Yes      | `simple`, `nested`, `looping`, `long_running`, `simple_once`, or `long_running_once` |
 |  `completion_criteria` |   string  | Yes      | Clear, specific, measurable success criteria   |
 | `model`                |   string  | No       | `"default"`, `"lite"`, or a direct model name. Default: `"default"` |
-| `system_prompt_prefix` |   string  | No       | Custom AI persona/instructions for this task (see §10) |
+| `system_prompt_prefix` |   string  | No       | Custom AI persona/instructions for this task (see §9) |
 
 ### 3.2 Type-Specific Fields
 
@@ -204,6 +202,7 @@ tasks:
 | Field          | Type   | Required | Description                              |
 |----------------|--------|----------|------------------------------------------|
 | `initial_hint` | string | No       | Static context/guidance included in every attempt |
+| `max_attempts` | int    | No       | Max retry attempts (default: 5). Applies to both top-level `simple` tasks and subtasks. |
 
 **nested:**
 
@@ -279,6 +278,10 @@ is constrained.
 Good for tasks involving open-ended code changes, multi-file refactoring,
 or optimization where the AI may need several different strategies.
 
+> **Note:** `max_attempts` is supported on **all** task types that the AI
+> executes directly — including top-level `simple` tasks, not just subtasks.
+> The default is 5 for all of them.
+
 **Do NOT use `max_attempts: 1`** on subtasks where the AI actively writes or
 modifies code — those benefit from multiple attempts with different strategies.
 
@@ -302,8 +305,10 @@ this helps you write better criteria:
   Avoid subjective criteria the AI cannot verify.
 - **Nested tasks** — Only the top-level `completion_criteria` determines
   overall pass/fail. Write it as the desired **end state**, not the process.
-- **Looping tasks** — No pass/fail evaluation. The task is "done" when all
-  `repeat_count` iterations finish.
+- **Looping tasks** — No overall pass/fail evaluation at the end. The task
+  is "done" when all `repeat_count` iterations finish. However, the
+  `completion_criteria` is still visible to each subtask's AI as project
+  context, so write it as a meaningful description of the iteration goal.
 
 ---
 
@@ -481,6 +486,13 @@ and retry logic.
 ### 7.5 State Persistence Pattern (Passing the Baton)
 
 Because subtasks do not share conversation context, the AI must use the filesystem to pass information between steps.
+
+**How context flows between subtasks:** The output of the immediately
+preceding subtask is automatically summarized and injected into the next
+subtask's prompt. However, this summary is **truncated to ~4000 characters**
+and only covers the **single previous subtask** — earlier subtasks' outputs
+are not included. For anything beyond short status messages, write results
+to files.
 
 **Best Practice:**
 - In the `initial_hint` of the producer subtask, explicitly instruct the AI to write intermediate results (e.g., analysis reports, selected parameters, generated code paths) to a specific file like `workflow_state.json` or `step1_out.txt`.
