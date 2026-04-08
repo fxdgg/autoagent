@@ -53,6 +53,18 @@ class SessionTimeoutError(AICallError):
     pass
 
 
+class StreamTimeoutError(AICallError):
+    """Raised when the SDK stream times out (no data for an extended period).
+
+    This typically means the AI backend is temporarily unresponsive.
+    The session is likely still alive — the caller should continue
+    in the same session with a short follow-up prompt rather than
+    resetting and replaying the full task prompt.
+    """
+
+    pass
+
+
 class AIClient:
     """
     AI CLI client with context management.
@@ -1044,6 +1056,12 @@ class AIClientSDK:
             raise
         except Exception as e:
             self._consecutive_failures += 1
+            # Detect SDK-level timeout errors — the session is likely
+            # still alive, so raise StreamTimeoutError to let the caller
+            # continue in the same session instead of resetting.
+            err_lower = str(e).lower()
+            if "timeout" in err_lower:
+                raise StreamTimeoutError(f"Failed to call CodeBuddy SDK: {e}")
             raise AICallError(f"Failed to call CodeBuddy SDK: {e}")
 
         if not response:
