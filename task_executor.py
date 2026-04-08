@@ -1473,9 +1473,14 @@ class NestedTaskExecutor:
                 continue
             old_key = StateManager.round_key(st_id, old_round_label)
             old_state = state_manager.get_task_state(old_key)
-            if old_state.get('status') == 'completed':
+            # All subtasks before retry_from should be marked completed
+            # in the new round — even if they were the failed subtask
+            # (e.g. retry_from points to a LATER subtask).
+            if old_state.get('status') in ('completed', 'failed'):
                 new_key = StateManager.round_key(st_id, new_round_label)
-                state_manager.state["tasks"][new_key] = dict(old_state)
+                carried = dict(old_state)
+                carried['status'] = 'completed'
+                state_manager.state["tasks"][new_key] = carried
         state_manager.save_state()
         # Clear stale previous_subtask_summary — the new round should not
         # inherit context from the old round's last completed subtask.
@@ -1902,9 +1907,14 @@ class LoopingTaskExecutor:
                 continue
             old_key = StateManager.round_key(st_id, old_round_label)
             old_state = state_manager.get_task_state(old_key)
-            if old_state.get('status') == 'completed':
+            # All subtasks before retry_from should be marked completed
+            # in the new round — even if they were the failed subtask
+            # (e.g. retry_from points to a LATER subtask).
+            if old_state.get('status') in ('completed', 'failed'):
                 new_key = StateManager.round_key(st_id, new_round_label)
-                state_manager.state["tasks"][new_key] = dict(old_state)
+                carried = dict(old_state)
+                carried['status'] = 'completed'
+                state_manager.state["tasks"][new_key] = carried
         state_manager.save_state()
         # Clear stale previous_subtask_summary — the new round should not
         # inherit context from the old round's last completed subtask.
