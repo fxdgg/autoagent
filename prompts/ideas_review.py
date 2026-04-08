@@ -78,6 +78,15 @@ Evaluate the generated tasks against these criteria:
    model name string. Tasks requiring complex reasoning should use `"default"`;
    straightforward tasks can use `"lite"`. The `model` field is valid on ALL task types
    (including `long_running` and `long_running_once`).
+8. **Root-level description**: Does the YAML include a meaningful `description` field at the
+   root level that explains the project goal, key constraints, and technical context?
+   An empty or missing `description` is a review failure.
+9. **Hint quality**: When `initial_hint` is present, does it provide actionable context
+   (file paths, commands, constraints) without duplicating `completion_criteria` or
+   including step-by-step instructions that over-constrain the AI's approach?
+10. **Retry strategy**: Are `max_attempts` values appropriate?
+   - Execution-only subtasks (build, test, benchmark) should use `max_attempts: 1`.
+   - Code-writing / reasoning tasks should allow multiple attempts (2–5).
 </review_criteria>
 
 <instructions>
@@ -89,7 +98,8 @@ If the tasks need improvement:
      {temp_tasks_path}
    Write the corrected full task list into that file.
    Do NOT include markdown code fences or any extra text in the file.
-2. After modifying the file, respond with: \u274c not completed
+2. In your response, briefly list what you changed and why (1-2 sentences per change).
+3. After listing your changes, respond with: \u274c not completed
 </instructions>
 """
 
@@ -125,6 +135,10 @@ Please read this file to see the current tasks.""")
 
     parts.append(f"""<instructions>
 Please revise the task decomposition based on the information above.
+Remember to validate against all review criteria from the initial review
+(schema correctness, type appropriateness, completion criteria quality,
+decomposition granularity, root-level description, hint quality, retry strategy, etc.).
+
 Write ONLY valid YAML (a dictionary containing a `description` string and a `tasks` list) into the following file:
   {temp_tasks_path}
 

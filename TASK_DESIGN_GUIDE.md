@@ -24,7 +24,7 @@ Key implications for task design:
   and a summary of the previous subtask's output is passed forward. Persist
   important intermediate results to files rather than relying on AI memory.
 - The AI's persona/role can be customized per-task via the
-  `system_prompt_prefix` field (see §10).
+  `system_prompt_prefix` field (see §9).
 
 ### Top-Level Task Execution Order
 
@@ -41,6 +41,20 @@ Top-level tasks are executed **strictly sequentially in ascending ID order**.
 ---
 
 ## 2. Task Types
+
+### Quick Choice Guide
+- **Need to run a command > 1 minute?** -> Use `long_running`.
+- **One-time environment setup?** -> Use `simple_once`.
+- **Iterative optimization (e.g., "try, measure, repeat")?** -> Use `looping`.
+- **Complex multi-step workflow with logical checkpoints?** -> Use `nested`.
+- **Everything else (code edits, quick tests, analysis)?** -> Use `simple`.
+
+### Decision Flow
+1. Is it a single logical step with no long-running commands? → **`simple`**
+2. Does it involve a command that may take > 1 minute? → Use as a **`long_running`** subtask inside `nested`
+3. Is it multi-step with a final success check? → **`nested`**
+4. Is it an iterative cycle (repeat the same steps N times)? → **`looping`**
+5. Is a subtask one-time setup that should not be re-run on retry? → **`simple_once`** or **`long_running_once`**
 
 ### 2.1 `simple`
 
@@ -68,10 +82,9 @@ changes, running tests, file analysis, data processing, simple builds, etc.
 
 ### 2.2 `nested`
 
-Executes subtasks sequentially. After ALL subtasks complete, an AI evaluation
-checks whether the main task's `completion_criteria` are met. If not, it
-decides which subtask to retry from and provides guidance for the next
-attempt. This repeats up to `max_attempts` times.
+Executes subtasks sequentially. After all subtasks complete, the overall
+`completion_criteria` is checked by an AI. If not met, one or more subtasks 
+may be retried with guidance from previous failures (up to `max_attempts` rounds).
 
 **Scope:** Can be a top-level task or a subtask inside nested/looping (nesting is supported — see §7.4).
 
@@ -88,10 +101,9 @@ the combined result of all steps.
 
 ### 2.3 `looping`
 
-Executes ALL subtasks sequentially — one "loop iteration" — then resets all
-subtask states and repeats for `repeat_count` iterations. There is NO
-completion evaluation between iterations. If a subtask fails within an
-iteration, failure analysis and retry works the same as nested.
+Executes ALL subtasks sequentially — one "loop iteration" — then repeats
+for `repeat_count` iterations. If a subtask fails within an iteration, it
+may be retried with guidance, the same as in nested tasks.
 
 **Scope:** Can be a top-level task or a subtask inside nested/looping (nesting is supported — see §7.4).
 
@@ -105,10 +117,10 @@ same workflow N times (e.g., profile → optimize → benchmark → commit).
 
 ### 2.4 `long_running`
 
-Tells the AI to launch a command in the background via `autoagent-exec`. If
-the command fails quickly, the AI sees the error and can fix & retry. If it
-takes a long time, the system waits for it to finish, then the AI analyzes
-the output.
+Tells the AI to launch a command in the background via `autoagent-exec`.
+If the command fails quickly, the AI sees the error and can fix & retry. If
+it takes a long time, the AI will see the full output after the command
+finishes.
 
 **Scope:** Subtask only (inside nested or looping).
 
@@ -270,33 +282,28 @@ or optimization where the AI may need several different strategies.
 **Do NOT use `max_attempts: 1`** on subtasks where the AI actively writes or
 modifies code — those benefit from multiple attempts with different strategies.
 
+### 3.6 ID Assignment Rules
+
+- **Top-level tasks**: Sequential integers starting from the next available ID.
+- **Subtasks**: Dot notation using parent ID as prefix (e.g., 6.1, 6.2, 6.3).
+- **Nested subtasks**: Continue the dot notation (e.g., 6.2.1, 6.2.2).
+- **IDs must be unique** across the entire todos.yaml file.
+- **Subtask IDs determine execution order** — they run in ascending order.
+
 ---
 
 ## 4. How Completion Criteria Are Evaluated
 
-### 4.1 Simple Tasks — Self-Evaluation
+Different task types evaluate completion criteria differently. Understanding
+this helps you write better criteria:
 
-The AI evaluates its own work. This means:
-
-- **Criteria must be objectively verifiable by the AI** — the AI should be
-  able to check files, run commands, or read outputs to confirm.
-- **Avoid subjective criteria** — the AI has no way to verify "code quality
-  is good" or "performance is acceptable" without concrete metrics.
-
-### 4.2 Nested Tasks — Holistic Evaluation
-
-After all subtasks complete, the overall `completion_criteria` are evaluated.
-If not met, the system decides which subtask to retry from.
-
-- **The nested task's criteria should describe the END STATE**, not the
-  process.
-- **Subtask results are summarized** for evaluation — the evaluator doesn't
-  see full details of each subtask's execution.
-
-### 4.3 Looping Tasks — No Completion Evaluation
-
-Looping tasks run for exactly `repeat_count` iterations. There is no
-completion evaluation — the task is "done" when all iterations finish.
+- **Simple tasks** — The AI self-evaluates. Criteria must be **objectively
+  verifiable by the AI** (e.g., check files, run commands, read outputs).
+  Avoid subjective criteria the AI cannot verify.
+- **Nested tasks** — Only the top-level `completion_criteria` determines
+  overall pass/fail. Write it as the desired **end state**, not the process.
+- **Looping tasks** — No pass/fail evaluation. The task is "done" when all
+  `repeat_count` iterations finish.
 
 ---
 
@@ -354,9 +361,7 @@ initial_hint: |
 
 ### 5.3 Subtask Failure in Nested/Looping Tasks
 
-When a subtask fails within a nested or looping task, the system analyzes the
-failure and decides which subtask to retry from, passing a `suggested_fix` to
-the retried subtask.
+When a subtask fails, earlier subtasks may be retried with guidance.
 
 **Implications for task design:**
 - Design subtasks so that the failure of one can be diagnosed from its output.
@@ -381,6 +386,8 @@ the retried subtask.
 
 4. **Use numbered lists** for multiple conditions — this makes it clear that
    ALL conditions must be met.
+
+5. **Focus on the "What", not the "How" of AutoAgent.** The AI executor doesn't need to know about AutoAgent's internal retry mechanisms or session management. The criteria should focus purely on the state of the codebase or the output of commands.
 
 ### 6.2 Examples
 
@@ -471,7 +478,15 @@ and retry logic.
 - Each nested subtask has its own `max_attempts` / `repeat_count`,
   independent of the parent.
 
-### 7.5 Comprehensive YAML Example
+### 7.5 State Persistence Pattern (Passing the Baton)
+
+Because subtasks do not share conversation context, the AI must use the filesystem to pass information between steps.
+
+**Best Practice:**
+- In the `initial_hint` of the producer subtask, explicitly instruct the AI to write intermediate results (e.g., analysis reports, selected parameters, generated code paths) to a specific file like `workflow_state.json` or `step1_out.txt`.
+- In the `initial_hint` of the consumer subtask, instruct the AI to read that specific file before proceeding.
+
+### 7.6 Comprehensive YAML Example
 
 The following example demonstrates all task types and nested structures:
 
@@ -568,7 +583,7 @@ The following example demonstrates all task types and nested structures:
         3. If slower or equal → changes rolled back with git checkout.
 ```
 
-### 7.6 Decomposition Anti-Patterns
+### 7.7 Decomposition Anti-Patterns
 
 ❌ **Over-decomposition:** Breaking a task into too many fine-grained subtasks.
 
@@ -620,6 +635,7 @@ are logically independent and may need separate retry strategies.
   name: "Train, evaluate, and deploy the model"
   type: simple
 ```
+*Why it's bad:* If the deployment step fails due to a network timeout, the AI will retry the entire `simple` task, which means it will re-run the expensive training step from scratch, wasting significant time and compute. These should be separate subtasks in a `nested` task so deployment can be retried independently.
 
 ❌ **Wrong type choice:**
 ```yaml
@@ -643,6 +659,10 @@ are logically independent and may need separate retry strategies.
 The `initial_hint` field provides static context included on **every attempt**
 (first attempt and retries alike).
 
+> **💡 `initial_hint` vs `system_prompt_prefix`**
+> - Use `initial_hint` for **"how to do the task"** (file paths, specific commands, troubleshooting guides).
+> - Use `system_prompt_prefix` for **"who you are and global rules"** (expert persona, coding style, strict constraints).
+
 ### 8.1 What to Include
 
 - **Key file paths** the AI needs to know about.
@@ -658,6 +678,18 @@ The `initial_hint` field provides static context included on **every attempt**
 - **Overly detailed step-by-step** — let the AI figure out the approach.
 - **Attempt-specific strategies** — avoid "start by trying X" that could
   cause the AI to repeat the same failed approach on retries.
+- **AutoAgent internals** — Do not explain how AutoAgent works to the AI executor. It only needs to know about the project it is working on.
+
+### 8.2.1 Where Does This Information Belong?
+
+| Information                                      | `completion_criteria` | `initial_hint` |
+|--------------------------------------------------|-----------------------|----------------|
+| "All tests pass with 0 failures"                 | ✅                    | ❌             |
+| "Build succeeds with no warnings"                | ✅                    | ❌             |
+| "Key files: src/api/routes.py, src/models/"      | ❌                    | ✅             |
+| "If previous attempt left residual, clean first" | ❌                    | ✅             |
+| "Use cmake -B build -DCMAKE_BUILD_TYPE=Release"  | ❌                    | ✅             |
+| "Output saved to results.txt"                    | ✅                    | ❌             |
 
 ### 8.3 Example
 
@@ -690,17 +722,7 @@ initial_hint: |
 
 ---
 
-## 9. ID Assignment Rules
-
-- **Top-level tasks**: Sequential integers starting from the next available ID.
-- **Subtasks**: Dot notation using parent ID as prefix (e.g., 6.1, 6.2, 6.3).
-- **Nested subtasks**: Continue the dot notation (e.g., 6.2.1, 6.2.2).
-- **IDs must be unique** across the entire todos.yaml file.
-- **Subtask IDs determine execution order** — they run in ascending order.
-
----
-
-## 10. Customizing the AI Persona — `system_prompt_prefix`
+## 9. Customizing the AI Persona — `system_prompt_prefix`
 
 Set `system_prompt_prefix` on any task or subtask to customize the AI's
 persona, role, or add task-specific instructions.
@@ -737,8 +759,10 @@ subtasks:
 
 ---
 
-## 11. Quick Reference
+## 10. Quick Reference
 
+- **ALWAYS include a root-level `description`** — without it, the AI has no
+  project context. Explain the goal, constraints, and technical stack.
 - Every task needs `id`, `name`, `type`, and `completion_criteria`.
 - `long_running`, `long_running_once`, `simple_once` can ONLY be subtasks.
 - All `completion_criteria` must be specific, measurable, and verifiable.
