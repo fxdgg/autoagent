@@ -17,7 +17,7 @@ from typing import Optional, Tuple
 
 import yaml
 
-from codebuddy_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError
+from codebuddy_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
 from state_manager import StateManager
 from prompts.shared import build_system_prompt_coding_agent, prepend_system_prompt_prefix
 from prompts.simple_task import build_simple_task_prompt
@@ -28,6 +28,10 @@ from prompts.long_running_task import (
 from prompts.failure_analysis import build_failure_analysis_prompt
 from prompts.main_evaluation import build_main_evaluation_prompt
 from prompts.marker_nudge import MAX_MARKER_NUDGES, MARKER_NUDGE_PROMPT
+from prompts.timeout_continuation import (
+    BASH_TIMEOUT_CONTINUATION_PROMPT,
+    STREAM_TIMEOUT_CONTINUATION_PROMPT,
+)
 from truncation_limits import limits
 
 logger = logging.getLogger(__name__)
@@ -347,18 +351,14 @@ class SimpleTaskExecutor:
             # after BashTimeoutError), use a lightweight in-session follow-up
             # instead of rebuilding the full task prompt.
             _log_round = (parent_context or {}).get('round_label') or str(attempts)
-            if attempts > 1 and last_timeout_type == "bash" and not should_reset:
-                # In-session continuation after BashTimeoutError — the AI's
-                # context is intact, just tell it what happened.
-                prompt = (
-                    "Your previous command was terminated because it produced "
-                    "no output for an extended period.\n"
-                    "The command was likely too long-running for direct Bash "
-                    "execution. Please use autoagent-exec for long-running "
-                    "commands (see system instructions).\n"
-                    "Continue working on the task from where you left off.\n"
-                    "When done, end with: ✅ completed or ❌ not completed: <reason>"
-                )
+            if attempts > 1 and last_timeout_type in ("bash", "stream") and not should_reset:
+                # In-session continuation after BashTimeoutError or
+                # StreamTimeoutError — the AI's context is intact, just
+                # tell it what happened.
+                if last_timeout_type == "bash":
+                    prompt = BASH_TIMEOUT_CONTINUATION_PROMPT
+                else:  # stream
+                    prompt = STREAM_TIMEOUT_CONTINUATION_PROMPT
                 exec_script_path = ""
                 if self.session_dir:
                     exec_script_path = _write_autoagent_exec_script(
@@ -505,6 +505,12 @@ class SimpleTaskExecutor:
                     last_timeout_type = "session"
                     should_reset = True  # Session killed — must reset
                     print(f"   ⏰ Session timeout detected — next attempt will start fresh with previous output")
+                elif isinstance(e, StreamTimeoutError):
+                    last_timeout_error = None  # No special feedback needed
+                    last_timeout_type = "stream"
+                    should_reset = False  # Session still alive — continue in-session
+                    last_ai_output = None  # AI still has context
+                    print(f"   ⏰ Stream timeout detected — will continue in same session")
                 else:
                     should_reset = True  # Other errors — reset
                 # Append error as response (prompt was already logged above)
@@ -1299,7 +1305,13 @@ class NestedTaskExecutor:
             subtasks_with_status=task_history,
         )
         print(f"\n   🤖 [AI Decision Point 1: Failure Analysis]")
-        
+
+        # Switch to evaluation model if configured
+        original_model = client.provider.model if hasattr(client, 'provider') and client.provider else None
+        eval_model = self.model_roles.get('evaluation')
+        if eval_model and original_model and eval_model != original_model:
+            client.provider.set_model(eval_model)
+
         # NOTE: Do NOT prepend system_prompt_prefix here — failure analysis
         # is a follow-up message in the same conversation context.
         effective_prompt = prompt
@@ -1341,6 +1353,10 @@ class NestedTaskExecutor:
                 "retry_from": failed_id,
                 "suggested_fix": "Retry the same subtask",
             }
+        finally:
+            # Restore original model
+            if original_model and hasattr(client, 'provider') and client.provider:
+                client.provider.set_model(original_model)
 
     def _ai_evaluate_main_task(
         self, client, task, subtasks, state_manager,
@@ -1400,6 +1416,12 @@ class NestedTaskExecutor:
         
         print(f"\n   🤖 [AI Decision Point 2: Main Task Evaluation]")
 
+        # Switch to evaluation model if configured
+        original_model = client.provider.model if hasattr(client, 'provider') and client.provider else None
+        eval_model = self.model_roles.get('evaluation')
+        if eval_model and original_model and eval_model != original_model:
+            client.provider.set_model(eval_model)
+
         try:
             # No system_prompt_prefix needed here —
             # this is a follow-up message in the same conversation context.
@@ -1437,6 +1459,10 @@ class NestedTaskExecutor:
                 "retry_from": str(subtasks[0]['id']),
                 "next_strategy": "Retry all subtasks",
             }
+        finally:
+            # Restore original model
+            if original_model and hasattr(client, 'provider') and client.provider:
+                client.provider.set_model(original_model)
 
     def _carry_forward_completed(
         self, retry_from: str, subtasks: list, state_manager,
@@ -1473,9 +1499,14 @@ class NestedTaskExecutor:
                 continue
             old_key = StateManager.round_key(st_id, old_round_label)
             old_state = state_manager.get_task_state(old_key)
-            if old_state.get('status') == 'completed':
+            # All subtasks before retry_from should be marked completed
+            # in the new round — even if they were the failed subtask
+            # (e.g. retry_from points to a LATER subtask).
+            if old_state.get('status') in ('completed', 'failed'):
                 new_key = StateManager.round_key(st_id, new_round_label)
-                state_manager.state["tasks"][new_key] = dict(old_state)
+                carried = dict(old_state)
+                carried['status'] = 'completed'
+                state_manager.state["tasks"][new_key] = carried
         state_manager.save_state()
         # Clear stale previous_subtask_summary — the new round should not
         # inherit context from the old round's last completed subtask.
@@ -1826,6 +1857,12 @@ class LoopingTaskExecutor:
 
         print(f"\n   🤖 [AI: Failure Analysis (loop {loop_idx})]")
 
+        # Switch to evaluation model if configured
+        original_model = client.provider.model if hasattr(client, 'provider') and client.provider else None
+        eval_model = self.model_roles.get('evaluation')
+        if eval_model and original_model and eval_model != original_model:
+            client.provider.set_model(eval_model)
+
         # NOTE: Do NOT prepend system_prompt_prefix here — failure analysis
         # is a follow-up message in the same conversation context.
         effective_prompt = prompt
@@ -1866,6 +1903,10 @@ class LoopingTaskExecutor:
                 "retry_from": failed_id,
                 "suggested_fix": "Retry the same subtask",
             }
+        finally:
+            # Restore original model
+            if original_model and hasattr(client, 'provider') and client.provider:
+                client.provider.set_model(original_model)
 
     def _carry_forward_completed(
         self, retry_from: str, subtasks: list, state_manager,
@@ -1902,9 +1943,14 @@ class LoopingTaskExecutor:
                 continue
             old_key = StateManager.round_key(st_id, old_round_label)
             old_state = state_manager.get_task_state(old_key)
-            if old_state.get('status') == 'completed':
+            # All subtasks before retry_from should be marked completed
+            # in the new round — even if they were the failed subtask
+            # (e.g. retry_from points to a LATER subtask).
+            if old_state.get('status') in ('completed', 'failed'):
                 new_key = StateManager.round_key(st_id, new_round_label)
-                state_manager.state["tasks"][new_key] = dict(old_state)
+                carried = dict(old_state)
+                carried['status'] = 'completed'
+                state_manager.state["tasks"][new_key] = carried
         state_manager.save_state()
         # Clear stale previous_subtask_summary — the new round should not
         # inherit context from the old round's last completed subtask.
@@ -2115,16 +2161,21 @@ class SubtaskExecutor:
         logger.info(f"Executing long-running subtask {subtask_id}: {subtask['name']}")
         logger.info(f"  autoagent-exec script: {exec_script_path}")
         logger.info(f"  log session dir: {log_session_dir}")
-        
+
+        should_reset = True   # Whether to reset session before next retry
+        last_stream_timeout = False  # Track stream timeout for continuation
+
         for attempt in range(1, max_attempts + 1):
             # Reset session before each retry to prevent context accumulation
             # (same rationale as SimpleTaskExecutor — see comment there).
-            if attempt > 1:
+            # Skip reset after StreamTimeoutError (session still alive).
+            if attempt > 1 and should_reset:
                 client.reset_session()
                 logger.info(
                     f"Long-running task {subtask_id}: reset session before retry "
                     f"attempt {attempt} (preventing context accumulation)"
                 )
+            should_reset = True  # Default: next retry will reset
 
             state_manager.mark_task_status(
                 sk, "in_progress",
@@ -2133,12 +2184,17 @@ class SubtaskExecutor:
             )
 
             print(f"\n      Long-running task attempt #{attempt}")
-            
-            # Build prompt for AI
-            prompt = self._build_long_running_prompt(
-                subtask, exec_script_path, attempt, state_manager,
-                parent_context=parent_context,
-            )
+
+            # Build prompt for AI.  After a stream timeout, send a short
+            # continuation prompt instead of the full task prompt.
+            if attempt > 1 and last_stream_timeout and not should_reset:
+                prompt = STREAM_TIMEOUT_CONTINUATION_PROMPT
+                last_stream_timeout = False
+            else:
+                prompt = self._build_long_running_prompt(
+                    subtask, exec_script_path, attempt, state_manager,
+                    parent_context=parent_context,
+                )
             
             try:
                 # Write prompt to log BEFORE calling AI (crash safety)
@@ -2323,6 +2379,10 @@ class SubtaskExecutor:
             except AICallError as e:
                 logger.error(f"AI call failed for long-running task {subtask_id}: {e}")
                 print(f"      ❌ AI call error: {e}")
+                if isinstance(e, StreamTimeoutError):
+                    should_reset = False
+                    last_stream_timeout = True
+                    print(f"      ⏰ Stream timeout detected — will continue in same session")
                 state_manager.add_task_history(sk, {
                     "attempt": attempt,
                     "time": time.strftime("%Y-%m-%d %H:%M:%S"),
