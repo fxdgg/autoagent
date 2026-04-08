@@ -59,6 +59,7 @@ tasks:
   - id: 1
     name: "编译项目并建立基准性能"
     type: simple
+    model: lite                # 只是跑编译命令，用便宜模型
     completion_criteria: |
       1. cmake --build build 编译成功
       2. build/main 运行输出 "Score: 100/100"
@@ -93,6 +94,7 @@ tasks:
       - id: 2.2
         name: "实现优化并运行基准测试"
         type: long_running
+        model: lite            # 跑命令为主，不需要强推理
         completion_criteria: |
           1. 代码修改已提交
           2. 基准测试运行完成，Score 仍为 100/100
@@ -123,6 +125,17 @@ tasks:
 
 > **关键设计**：`initial_hint` 是真正驱动 AI 工作的指令——告诉它具体做什么、怎么做、先后顺序；`completion_criteria` 只负责验收关键结果。`looping` 类型让 AI 自动循环执行「分析 → 优化 → 验证」，每轮自主决策。你只需要 `python orchestrator.py` 启动，然后去睡觉——醒来看结果就好。
 
+> [!TIP]
+> **不想手写这么复杂的 YAML？让 AI 帮你写。**
+>
+> 你只需要用自然语言描述你想做的事情，然后把 [TASK_DESIGN_GUIDE.md](TASK_DESIGN_GUIDE.md) 喂给任意 AI（ChatGPT、Claude、CodeBuddy 等），让它按照这份指南帮你拆解成 `todos.yaml`。这份指南详细定义了任务类型、字段含义、最佳实践和常见陷阱，AI 读完就能生成高质量的任务配置。
+>
+> ```
+> 你：「我想让 AI 自动把项目的测试覆盖率从 60% 提到 90%」
+> AI：（读取 TASK_DESIGN_GUIDE.md）→ 生成完整的 todos.yaml
+> 你：python orchestrator.py --config todos.yaml
+> ```
+
 ### Step 4：启动，然后去喝咖啡
 
 ```bash
@@ -147,6 +160,53 @@ AutoAgent 会自动按顺序执行任务。遇到 `looping` 任务时，AI 会�
 
 不是跑一次就结束。AI 会评估自己的执行结果，分析失败原因，自动调整策略重试，直到满足你定义的完成标准。
 
+### 💰 省 Token：按任务分配模型，简单活不烧钱
+
+AI 迭代优化动辄跑几十轮，Token 消耗是真实痛点。AutoAgent 支持**三级模型分配**，让你把贵的模型用在刀刃上：
+
+```bash
+# 全局：plan 用强模型拆任务，default 执行复杂任务，lite 跑简单活
+python orchestrator.py --model "plan:claude-opus-4.6;default:claude-sonnet-4;lite:glm-4-flash"
+```
+
+还可以在 `todos.yaml` 中**逐任务指定模型**——跑命令、提交代码这类不需要推理的任务用 `lite`，分析瓶颈、设计方案用 `default`：
+
+```yaml
+- id: 2.2
+  name: "运行基准测试"
+  type: long_running
+  model: lite              # 只是跑命令，用便宜模型
+  completion_criteria: "基准测试完成"
+
+- id: 2.1
+  name: "分析瓶颈并提出优化方案"
+  type: simple
+  model: default           # 需要深度推理，用强模型
+  completion_criteria: "优化方案已记录"
+```
+
+### 💡 随时投喂想法：Ideas 自动监听 → 拆解 → 执行
+
+AutoAgent 支持 **Idle 监听模式**——agent 在后台持续等待，你随时随地（手机、电脑、任何编辑器）往 `ideas.md` 里写一句想法，agent 自动检测到文件变化，立即将自然语言 idea 拆解成结构化任务并开始执行：
+
+```bash
+# 启动后 agent 进入监听状态，所有任务完成后不退出，持续等待新 ideas
+python orchestrator.py --ideas ideas.md --config todos.yaml --workspace ./project
+```
+
+```markdown
+<!-- ideas.md —— 你在地铁上用手机写下一句话 -->
+把项目的单元测试覆盖率从 60% 提升到 90%，优先覆盖 core/ 目录下的关键模块
+```
+
+Agent 检测到 `ideas.md` 变化后会自动：
+1. **AI 拆解**：将自然语言 idea 分解为多个结构化 TODO 任务（含 completion_criteria、initial_hint）
+2. **人工审核**（可选）：生成的任务列表可以先让你确认，也可以跳过直接执行
+3. **自动执行**：按顺序执行所有任务，失败自动重试，直到全部完成
+4. **继续等待**：执行完毕后回到监听状态，等你下一个想法
+
+> **你的工作流**：开着 agent → 想到什么写进 ideas.md → 去忙别的 → 回来看产出。AI 24 小时待命，你的想法随写随跑。
+
 ### 🔌 多 AI Provider 一键切换
 
 内置支持 CodeBuddy、Claude Code、Gemini CLI、OpenCode、Codex，一个参数切换：
@@ -156,7 +216,8 @@ python orchestrator.py --provider claude
 python orchestrator.py --provider gemini
 ```
 
-### 💾 断点续传：中断后从上次进度继续
+
+### ⏸️ 断点续传：中断后从上次进度继续
 
 长时间任务不怕中断，状态自动持久化：
 
@@ -172,11 +233,11 @@ python orchestrator.py --resume abc12345   # 恢复指定会话
 | 特性 | 说明 |
 |------|------|
 | **4 种任务类型** | simple（单步）、nested（多子任务）、looping（N 轮迭代）、long_running（后台运行） |
-| **Ideas 自动拆解** | 自然语言 ideas → 结构化任务，支持人工审核 |
+| **Ideas 监听 & 自动拆解** | 后台监听 `ideas.md`，检测到变化自动拆解为任务并执行，随写随跑 |
 | **Preset 配置** | `config.yaml` 预设参数组合，避免每次输入大量参数 |
-| **Idle 监听模式** | 任务完成后持续监听，检测到新 ideas 自动执行 |
 | **完整日志系统** | 记录 AI 对话全过程，支持回溯和调试 |
 | **智能失败分析** | AI 自动分析失败根因，决定从哪个步骤重试 |
+| **模型分级调度** | 全局三角色（plan/default/lite）+ 任务级 `model` 字段，Token 精细控制 |
 
 ---
 
