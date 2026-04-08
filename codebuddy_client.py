@@ -401,7 +401,12 @@ class AIClient:
         **Codex format:**
           - "thread.started": Session start with "thread_id"
           - "turn.started" / "turn.completed": Turn boundaries
-          - "item.completed": AI text ("agent_message"), tool calls ("tool_call"), tool results ("tool_call_output")
+          - "item.started": Item in progress (ignored — wait for completed)
+          - "item.completed": Completed item:
+            - "agent_message": AI text in item.text
+            - "command_execution": Tool call with item.command, item.aggregated_output, item.exit_code
+            - "reasoning": Thinking (ignored)
+            - "tool_call" / "tool_call_output": Generic tool call/result (fallback)
 
         Args:
             line: A single line of stream-json output
@@ -477,6 +482,14 @@ class AIClient:
                         full_log_parts.append(text)
                         sys.stdout.write(text)
                         sys.stdout.flush()
+                elif block_type == "thinking":
+                    thinking = block.get("thinking", "")
+                    if thinking:
+                        sys.stdout.write(f"\n💭 [Thinking] {thinking}\n")
+                        sys.stdout.flush()
+                        full_log_parts.append(
+                            f"\n<details><summary>💭 Thinking</summary>\n\n{thinking}\n\n</details>\n"
+                        )
                 elif block_type == "tool_use":
                     tool_name = block.get("name", "unknown")
                     tool_input = block.get("input", {})
@@ -678,10 +691,39 @@ class AIClient:
                     assistant_text_parts.append(text)
                     full_log_parts.append(text)
                     sys.stdout.write(text)
+                    if not text.endswith("\n"):
+                        sys.stdout.write("\n")
                     sys.stdout.flush()
 
+            elif item_type == "command_execution":
+                # Codex runs tools as "command_execution" items.
+                # item.started has status="in_progress" (no output yet);
+                # item.completed has the full aggregated_output + exit_code.
+                status = item.get("status", "")
+                command = item.get("command", "")
+                output = item.get("aggregated_output", "")
+                exit_code = item.get("exit_code")
+
+                if status == "completed" and command:
+                    # Display tool call
+                    self._display_tool_use("Bash", {"command": command})
+                    tool_log = self._format_tool_use_for_log("Bash", {"command": command})
+                    full_log_parts.append(tool_log)
+
+                    # Display/log tool result
+                    if output:
+                        is_error = exit_code is not None and exit_code != 0
+                        sys.stdout.flush()
+                        error_marker = " ❌" if is_error else ""
+                        log_content = output[:2000]
+                        if len(output) > 2000:
+                            log_content += f"\n... ({len(output)} chars total)"
+                        full_log_parts.append(
+                            f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
+                        )
+
             elif item_type == "tool_call":
-                # Tool invocation
+                # Generic tool invocation (non-command_execution)
                 tool_name = item.get("name", item.get("tool_name", "unknown"))
                 tool_input = item.get("arguments", item.get("input", {}))
                 if isinstance(tool_input, str):
@@ -706,6 +748,8 @@ class AIClient:
                         f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
                     )
 
+            # Silently ignore: "reasoning" (thinking), etc.
+
         elif event_type == "turn.completed":
             # Codex format: turn finished — display summary
             usage = event.get("usage", {})
@@ -718,7 +762,8 @@ class AIClient:
             sys.stdout.flush()
             full_log_parts.append(f"\n{summary}")
 
-        # Silently ignore: "init", "system", "topic", etc.
+        # Silently ignore: "init", "system", "topic", "item.started",
+        # "turn.started", etc.
 
     def _display_tool_use(self, tool_name: str, tool_input: dict):
         """Display a tool use event with a readable summary."""
@@ -1165,7 +1210,13 @@ class AIClientSDK:
                                 assistant_text_parts.append(text)
                                 full_log_parts.append(text)
                         elif isinstance(block, ThinkingBlock):
-                            pass
+                            thinking = block.thinking or ""
+                            if thinking:
+                                sys.stdout.write(f"\n💭 [Thinking] {thinking}\n")
+                                sys.stdout.flush()
+                                full_log_parts.append(
+                                    f"\n<details><summary>💭 Thinking</summary>\n\n{thinking}\n\n</details>\n"
+                                )
                         elif isinstance(block, ToolUseBlock):
                             tool_name = block.name or "unknown"
                             tool_input = block.input or {}
