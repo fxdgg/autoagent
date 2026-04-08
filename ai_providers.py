@@ -626,33 +626,78 @@ def list_providers() -> dict:
 
 
 # Valid model roles for multimodel support
-MODEL_ROLES = ("plan", "default", "lite")
+MODEL_ROLES = ("plan", "default", "lite", "evaluation")
 
 
-def parse_model_spec(model_str: str) -> dict:
+def parse_model_spec(model_spec) -> dict:
     """
-    Parse a model specification string into a role→model dict.
+    Parse a model specification into a role→model dict.
 
-    Supports two formats:
-    1. Single model: "glm-5" → all three roles use the same model
-    2. Multi-role: "plan:glm-4-flash;default:glm-5;lite:glm-4-flash"
-       - Separator is ';', key-value separator is ':'
-       - Only 'plan', 'default', 'lite' keys are allowed
-       - Missing roles are filled with the 'default' value
+    Supports three formats:
+
+    1. **Single model string**: ``"glm-5"``
+       → all roles use the same model
+
+    2. **Multi-role string** (CLI-friendly):
+       ``"plan:claude-opus-4.6;default:glm-5;lite:glm-4-flash"``
+       - Separator: ``;``   Key-value separator: ``:``
+       - Only role names from ``MODEL_ROLES`` are allowed
+       - Missing roles inherit from ``default``
+
+    3. **Dict** (config.yaml-friendly)::
+
+           model:
+             plan: claude-opus-4.6
+             default: glm-5
+             lite: glm-4-flash
+             evaluation: claude-opus-4.6
+
+       Same validation as format 2.
 
     Args:
-        model_str: Model specification string
+        model_spec: Model specification — ``str`` or ``dict``.
 
     Returns:
-        dict: {"plan": "...", "default": "...", "lite": "..."}
+        dict with at least ``plan``, ``default``, ``lite`` keys.
+        ``evaluation`` is included when explicitly specified, otherwise
+        falls back to ``default``.
 
     Raises:
-        ValueError: If the spec contains invalid role names
+        ValueError: If the spec contains invalid role names or is
+            missing the ``default`` role.
     """
-    if not model_str:
-        return {"plan": "", "default": "", "lite": ""}
+    empty = {role: "" for role in MODEL_ROLES}
 
-    # Check if it's a multi-role spec (contains both ';' and ':' with a valid role prefix)
+    if not model_spec:
+        return empty
+
+    # ── Format 3: dict (from config.yaml) ────────────────────────
+    if isinstance(model_spec, dict):
+        roles = {}
+        for role, model in model_spec.items():
+            role = str(role).strip()
+            if role not in MODEL_ROLES:
+                raise ValueError(
+                    f"Unknown model role: {role!r}. "
+                    f"Allowed roles: {', '.join(MODEL_ROLES)}"
+                )
+            roles[role] = str(model).strip()
+
+        if "default" not in roles:
+            raise ValueError(
+                f"Model spec dict must include 'default'. Got: {model_spec!r}"
+            )
+
+        default_model = roles["default"]
+        for role in MODEL_ROLES:
+            if role not in roles:
+                roles[role] = default_model
+        return roles
+
+    # ── Format 1 & 2: string ─────────────────────────────────────
+    model_str = str(model_spec)
+
+    # Check if it's a multi-role spec (contains ';' or starts with a valid role prefix)
     if ";" in model_str or any(
         model_str.startswith(f"{role}:") for role in MODEL_ROLES
     ):
@@ -691,4 +736,4 @@ def parse_model_spec(model_str: str) -> dict:
         return roles
     else:
         # Single model string — all roles use the same model
-        return {"plan": model_str, "default": model_str, "lite": model_str}
+        return {role: model_str for role in MODEL_ROLES}

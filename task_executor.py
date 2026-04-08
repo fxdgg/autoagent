@@ -1305,7 +1305,13 @@ class NestedTaskExecutor:
             subtasks_with_status=task_history,
         )
         print(f"\n   🤖 [AI Decision Point 1: Failure Analysis]")
-        
+
+        # Switch to evaluation model if configured
+        original_model = client.provider.model if hasattr(client, 'provider') and client.provider else None
+        eval_model = self.model_roles.get('evaluation')
+        if eval_model and original_model and eval_model != original_model:
+            client.provider.set_model(eval_model)
+
         # NOTE: Do NOT prepend system_prompt_prefix here — failure analysis
         # is a follow-up message in the same conversation context.
         effective_prompt = prompt
@@ -1347,6 +1353,10 @@ class NestedTaskExecutor:
                 "retry_from": failed_id,
                 "suggested_fix": "Retry the same subtask",
             }
+        finally:
+            # Restore original model
+            if original_model and hasattr(client, 'provider') and client.provider:
+                client.provider.set_model(original_model)
 
     def _ai_evaluate_main_task(
         self, client, task, subtasks, state_manager,
@@ -1406,6 +1416,12 @@ class NestedTaskExecutor:
         
         print(f"\n   🤖 [AI Decision Point 2: Main Task Evaluation]")
 
+        # Switch to evaluation model if configured
+        original_model = client.provider.model if hasattr(client, 'provider') and client.provider else None
+        eval_model = self.model_roles.get('evaluation')
+        if eval_model and original_model and eval_model != original_model:
+            client.provider.set_model(eval_model)
+
         try:
             # No system_prompt_prefix needed here —
             # this is a follow-up message in the same conversation context.
@@ -1443,6 +1459,10 @@ class NestedTaskExecutor:
                 "retry_from": str(subtasks[0]['id']),
                 "next_strategy": "Retry all subtasks",
             }
+        finally:
+            # Restore original model
+            if original_model and hasattr(client, 'provider') and client.provider:
+                client.provider.set_model(original_model)
 
     def _carry_forward_completed(
         self, retry_from: str, subtasks: list, state_manager,
@@ -1837,6 +1857,12 @@ class LoopingTaskExecutor:
 
         print(f"\n   🤖 [AI: Failure Analysis (loop {loop_idx})]")
 
+        # Switch to evaluation model if configured
+        original_model = client.provider.model if hasattr(client, 'provider') and client.provider else None
+        eval_model = self.model_roles.get('evaluation')
+        if eval_model and original_model and eval_model != original_model:
+            client.provider.set_model(eval_model)
+
         # NOTE: Do NOT prepend system_prompt_prefix here — failure analysis
         # is a follow-up message in the same conversation context.
         effective_prompt = prompt
@@ -1877,6 +1903,10 @@ class LoopingTaskExecutor:
                 "retry_from": failed_id,
                 "suggested_fix": "Retry the same subtask",
             }
+        finally:
+            # Restore original model
+            if original_model and hasattr(client, 'provider') and client.provider:
+                client.provider.set_model(original_model)
 
     def _carry_forward_completed(
         self, retry_from: str, subtasks: list, state_manager,

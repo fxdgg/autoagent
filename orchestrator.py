@@ -309,6 +309,7 @@ class TodoOrchestrator:
             "plan": self.provider.model,
             "default": self.provider.model,
             "lite": self.provider.model,
+            "evaluation": self.provider.model,
         }
 
         # ── Resolve session log directory ──────────────────────────
@@ -1320,9 +1321,10 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         '--model', '-m',
         default=None,
         help='AI model to use. Supports single model (e.g. "glm-5") or '
-             'multi-role format: "plan:model1;default:model2;lite:model3". '
+             'multi-role format: "plan:model1;default:model2;lite:model3;evaluation:model4". '
              'Roles: plan (idea decomposition), default (task execution), '
-             'lite (lightweight tasks). Missing roles inherit from default.',
+             'lite (lightweight tasks), evaluation (failure analysis & main task evaluation). '
+             'Missing roles inherit from default.',
     )
     parser.add_argument(
         '--workspace', '-w',
