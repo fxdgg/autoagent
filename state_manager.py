@@ -79,19 +79,35 @@ class StateManager:
         return {"tasks": {}}
 
     def save_state(self):
-        """Save current state to file (thread-safe)."""
+        """Save current state to file (thread-safe, crash-safe).
+
+        Uses write-to-temp + flush + fsync + atomic rename so the state
+        file is never left empty or half-written after a crash or
+        interrupt.
+        """
         with self._lock:
+            temp_file = self.state_file + ".tmp"
             try:
-                with open(self.state_file, 'w', encoding='utf-8') as f:
+                with open(temp_file, 'w', encoding='utf-8') as f:
                     yaml.dump(
                         self.state, f,
                         default_flow_style=False,
                         allow_unicode=True,
                         sort_keys=False,
                     )
+                    f.flush()
+                    os.fsync(f.fileno())
+                # Atomic replace — on Windows os.replace is atomic
+                # for same-volume files.
+                os.replace(temp_file, self.state_file)
                 logger.debug(f"State saved to {self.state_file}")
             except Exception as e:
                 logger.error(f"Failed to save state: {e}")
+                # Clean up temp file on failure
+                try:
+                    os.remove(temp_file)
+                except OSError:
+                    pass
                 raise
 
     def get_task_state(self, task_id: str) -> dict:
