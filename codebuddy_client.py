@@ -540,14 +540,6 @@ class AIClient:
                 )
             )
             if content:
-                preview = content[:500]
-                if len(content) > 500:
-                    preview += f"... ({len(content)} chars total)"
-                if is_error:
-                    sys.stdout.write(f"\033[31m   ↳ {preview}\033[0m\n")
-                else:
-                    sys.stdout.write(f"   ↳ {preview}\n")
-                sys.stdout.flush()
                 error_marker = " ❌" if is_error else ""
                 log_content = content[:2000]
                 if len(content) > 2000:
@@ -566,14 +558,6 @@ class AIClient:
                         content = block.get("content", "")
                         is_error = block.get("is_error", False)
                         if isinstance(content, str) and content:
-                            preview = content[:500]
-                            if len(content) > 500:
-                                preview += f"... ({len(content)} chars total)"
-                            if is_error:
-                                sys.stdout.write(f"\033[31m   ↳ {preview}\033[0m\n")
-                            else:
-                                sys.stdout.write(f"   ↳ {preview}\n")
-                            sys.stdout.flush()
                             error_marker = " ❌" if is_error else ""
                             log_content = content[:2000]
                             if len(content) > 2000:
@@ -714,14 +698,6 @@ class AIClient:
                 output = item.get("output", item.get("result", ""))
                 is_error = item.get("is_error", False)
                 if isinstance(output, str) and output:
-                    preview = output[:500]
-                    if len(output) > 500:
-                        preview += f"... ({len(output)} chars total)"
-                    if is_error:
-                        sys.stdout.write(f"\033[31m   ↳ {preview}\033[0m\n")
-                    else:
-                        sys.stdout.write(f"   ↳ {preview}\n")
-                    sys.stdout.flush()
                     error_marker = " ❌" if is_error else ""
                     log_content = output[:2000]
                     if len(output) > 2000:
