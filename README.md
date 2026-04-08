@@ -70,12 +70,12 @@ tasks:
       3. 将耗时写入 results.tsv 作为 baseline（status=SOTA）
       4. git add -A && git commit -m "baseline established"
 
-  # 核心：自动迭代优化循环，AI 自主跑 10 轮
+  # 核心：自动迭代优化循环，AI 自主跑 100 轮
   - id: 2
     name: "迭代优化 CUDA 内核"
     type: looping
     repeat_count: 100           # 自动循环 100 轮
-    max_attempts_per_loop: 3   # 每轮最多重试 3 次
+    max_attempts_per_loop: 3   # 每轮遇到错误最多重试 3 次
     completion_criteria: "完成一轮 分析→优化→验证 循环"
     subtasks:
       - id: 2.1
@@ -88,25 +88,30 @@ tasks:
           Step 1: 读取 results.tsv 找到 status=SOTA 的行，了解当前最优性能
           Step 2: 读取 failure_log.md，了解哪些方向已经失败过，避免重复
           Step 3: 用 ncu --set full ./build/main 做 profiling，找到耗时最长的 kernel
-          Step 4: 基于 profiling 数据提出一个具体的优化假设
-          Step 5: 将方案写入 ideas/<N>.md（含：假设、预期收益、风险）
+          Step 4: 基于 profiling 数据提出一个具体的优化假设。注意优化假设一次只生成一个想法
+          Step 5: 将方案写入 ideas/<N>.md（含：假设、预期收益、风险）并提交
 
       - id: 2.2
-        name: "实现优化并运行基准测试"
-        type: long_running
-        model: lite            # 跑命令为主，不需要强推理
+        name: "实现代码优化"
+        type: simple
         completion_criteria: |
-          1. 代码修改已提交
-          2. 基准测试运行完成，Score 仍为 100/100
+          代码修改已提交
         initial_hint: |
           1. 读取 ideas/<N>.md 了解本轮优化方案
-          2. 修改代码，保持改动最小化（一次只改一个点）
-          3. cmake --build build -j$(nproc) 编译
-          4. 运行 ./build/main 2>&1 | tee logs/exp_<N>.log
-          5. 确认 Score 仍为 100/100（正确性不能退化）
-          6. git add -A && git commit -m "opt: experiment <N> - <描述>"
+          2. 修改代码
+          3. 提交代码修改
 
       - id: 2.3
+        name: "编译并运行基准测试"
+        type: long_running
+        model: lite            # 纯跑命令，用便宜模型
+        completion_criteria: |
+          基准测试运行完成，日志已保存到 logs/exp_<N>.log
+        initial_hint: |
+          1. cmake --build build -j$(nproc) 编译
+          2. 运行 ./build/main 2>&1 | tee logs/exp_<N>.log
+
+      - id: 2.4
         name: "评估结果：保留或回滚"
         type: simple
         completion_criteria: |
@@ -122,8 +127,6 @@ tasks:
               将失败原因追加到 failure_log.md（含：方向、现象、结论）
           Step 4: git add -A && git commit -m "doc: experiment <N> results"
 ```
-
-> **关键设计**：`initial_hint` 是真正驱动 AI 工作的指令——告诉它具体做什么、怎么做、先后顺序；`completion_criteria` 只负责验收关键结果。`looping` 类型让 AI 自动循环执行「分析 → 优化 → 验证」，每轮自主决策。你只需要 `python orchestrator.py` 启动，然后去睡觉——醒来看结果就好。
 
 > [!TIP]
 > **不想手写这么复杂的 YAML？让 AI 帮你写。**
