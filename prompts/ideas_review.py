@@ -74,8 +74,10 @@ detailed rules and examples on each point.
 8. **`model`**: `"default"` for reasoning, `"lite"` for execution. See §5.5.
 9. **Retry strategy**: `max_attempts: 1` for execution-only subtasks; 2–5 for code-writing
    tasks. Hints mention residual state cleanup when relevant. See §5.4, §6.
-10. **Looping discipline** (if applicable): Doc commits separated from code commits;
-    failure pattern tracking; structured keep/discard rules; workspace cleanup. See §6.4.
+10. **Task-type best practices**: Read the relevant guide listed in §7 for the task type
+    (build & ship, testing, iterative optimization, data pipelines, setup, or research) and
+    verify the generated tasks follow the recommended patterns and avoid the anti-patterns
+    described there.
 </review_criteria>
 
 <instructions>

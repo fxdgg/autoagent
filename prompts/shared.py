@@ -111,12 +111,20 @@ def prepend_system_prompt_prefix(prompt: str, task: dict = None) -> str:
 
 _task_design_guide_cache: str | None = None
 
+# Directory containing the task design guide and its sub-guides.
+_GUIDE_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "task_design_guide")
+)
+
 
 def load_task_design_guide() -> str:
     """Load and cache the content of TASK_DESIGN_GUIDE.md.
 
-    The file is located at ``autoagent/TASK_DESIGN_GUIDE.md`` (one level up
-    from the ``prompts/`` package directory).
+    The file is located at ``autoagent/task_design_guide/TASK_DESIGN_GUIDE.md``.
+
+    After loading, bare filenames that correspond to sibling ``.md`` files in
+    the same directory (e.g. ``build_and_ship.md``) are replaced with their
+    absolute paths so the consuming AI can read them directly without guessing.
 
     Returns:
         The full text of the guide, or a short fallback message if the file
@@ -126,12 +134,17 @@ def load_task_design_guide() -> str:
     if _task_design_guide_cache is not None:
         return _task_design_guide_cache
 
-    guide_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "TASK_DESIGN_GUIDE.md"
-    )
+    guide_path = os.path.join(_GUIDE_DIR, "TASK_DESIGN_GUIDE.md")
     try:
         with open(guide_path, "r", encoding="utf-8") as f:
-            _task_design_guide_cache = f.read()
+            content = f.read()
+        # Replace bare .md filenames with absolute paths so the AI can read
+        # them directly.  Only replace names that actually exist on disk.
+        for fname in os.listdir(_GUIDE_DIR):
+            if fname.endswith(".md") and fname != "TASK_DESIGN_GUIDE.md":
+                abs_path = os.path.join(_GUIDE_DIR, fname)
+                content = content.replace(f"`{fname}`", f"`{abs_path}`")
+        _task_design_guide_cache = content
     except OSError as e:
         logger.warning(f"Failed to load TASK_DESIGN_GUIDE.md: {e}")
         _task_design_guide_cache = (
