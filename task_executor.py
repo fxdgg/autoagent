@@ -339,9 +339,14 @@ class SimpleTaskExecutor:
             last_timeout_type = "interrupt"
             should_reset = False
             state_manager.update_task_field(sk, "interrupt_pending", None)
+            # Roll back the attempt counter so the interrupted attempt is not
+            # counted as a failure.  The while-loop below will increment it
+            # back, effectively resuming at the same attempt number.
+            if attempts > 0:
+                attempts -= 1
             logger.info(
                 f"Task {task_id}: interrupt_pending detected with session_id — "
-                f"will continue in same session"
+                f"will continue in same session (attempts rolled back to {attempts})"
             )
 
         while attempts < max_attempts:
@@ -1033,6 +1038,18 @@ class NestedTaskExecutor:
 
         current_state = state_manager.get_task_state(task_id)
         attempts = current_state.get('attempts', 0)
+
+        # If the task was interrupted by Ctrl+C, roll back the attempt
+        # counter so the interrupted round is not counted as a failure.
+        # The interrupt_pending flag is consumed by the subtask executor,
+        # but we still need to adjust the parent's attempt counter here.
+        if current_state.get('interrupt_pending'):
+            if attempts > 0:
+                attempts -= 1
+                logger.info(
+                    f"Nested task {task_id}: interrupt_pending detected — "
+                    f"rolling back attempts to {attempts}"
+                )
 
         # Round labelling: X.Y where X = main evaluation round, Y = failure sub-round
         # X increments after each main_task_evaluation; Y increments after each failure_analysis
