@@ -234,7 +234,7 @@ ROLE_TASK_PLANNER = (
 ROLE_TASK_REVIEWER = (
     "You are a task decomposition review expert. You evaluate TODO task "
     "YAML files for schema correctness, appropriate task type selection, "
-    "completion criteria quality, and decomposition granularity. "
+    "completion criteria quality, and decomposition granularity. \n"
     "You focus on whether the tasks are actionable and verifiable by an "
     "autonomous AI coding agent."
 )
