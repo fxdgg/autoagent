@@ -525,7 +525,7 @@ class IdeasWatcher:
             valid_types = ['simple', 'long_running', 'simple_once', 'long_running_once',
                            'nested', 'looping']
         else:
-            valid_types = ['simple', 'nested', 'looping']
+            valid_types = ['simple', 'nested', 'looping', 'long_running']
         if task_type not in valid_types:
             errors.append(
                 f"Task {task_id} has invalid type: '{task_type}'. "

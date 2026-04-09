@@ -249,9 +249,9 @@ tasks:
 #
 # Task types (6 total):
 #   simple           — AI completes autonomously. Top-level or subtask.
-#   nested           — Multi-step with AI evaluation. Top-level only.
-#   looping          — Fixed N iterations. Top-level only.
-#   long_running     — Background process via autoagent-exec. Subtask only.
+#   nested           — Multi-step with AI evaluation. Top-level or subtask.
+#   looping          — Fixed N iterations. Top-level or subtask.
+#   long_running     — Background process via autoagent-exec. Top-level or subtask.
 #   simple_once      — Like simple, but never re-executed once completed. Subtask only.
 #   long_running_once — Like long_running, but never re-executed once completed. Subtask only.
 #
@@ -260,7 +260,7 @@ tasks:
 # simple:         + initial_hint (optional)
 # nested:         + subtasks, max_attempts (optional, default 5)
 # looping:        + subtasks, repeat_count, max_attempts_per_loop (optional, default 5)
-# long_running:   + command (optional), initial_hint (optional)
+# long_running:   + initial_hint (optional)
 # *_once:         Same fields as their base type
 #
 # Key principles:
@@ -277,5 +277,5 @@ tasks:
 #       type: simple
 #       system_prompt_prefix: "You are a senior CUDA engineer."
 #   Each task can have its own prefix — different tasks can have different personas.
-#   See TASK_DESIGN_GUIDE.md §12 for details.
+#   See TASK_DESIGN_GUIDE.md §5.3 for details.
 # ==========================================================================

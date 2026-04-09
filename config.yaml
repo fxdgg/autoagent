@@ -107,17 +107,4 @@ preset:
     human_review: true  # When processing ideas, force human review After AI review
     verbose: true
 
-  - name: nbf
-    ideas: ${workspace}/../ideas.md
-    config: ${workspace}/../todos_nbf.yaml
-    provider: codebuddy
-    use_cli: false
-    model:
-      plan: claude-opus-4.6
-      default: claude-opus-4.6
-      lite: glm-5.0-ioa
-      evaluation: claude-opus-4.6
-    human_review: true  # When processing ideas, force human review After AI review
-    verbose: true
-
   - name: nothing

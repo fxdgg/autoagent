@@ -1,0 +1,39 @@
+# =============================================================================
+# Test Rules 11 - Top-level long_running task
+# =============================================================================
+# Tests that long_running works as a top-level task type.
+#
+# Expected call sequence:
+#   Rule 1: Task 1 (long_running) attempt #1 → autoagent-exec + LONG_RUNNING_IN_PROGRESS
+#   Rule 2: Task 1 callback → ✅ completed
+#   Rule 3: Task 2 (simple) attempt #1 → ✅ completed
+# =============================================================================
+
+# --- Rule 1: Top-level LR task submission ---
+I'll run the benchmark using autoagent-exec:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 2: LR callback - analyze results ---
+I analyzed the benchmark output log.
+
+Results:
+- Throughput: 1500 ops/sec
+- Latency p99: 12ms
+- Exit code: 0
+
+Written results to benchmark_result.txt.
+
+✅ completed
+---RULE---
+# --- Rule 3: Simple task - summarize ---
+I've read benchmark_result.txt and written a summary to summary.txt.
+
+Summary:
+- Benchmark completed successfully
+- Throughput: 1500 ops/sec
+- Latency p99: 12ms
+
+✅ completed

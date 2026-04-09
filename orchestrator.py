@@ -31,6 +31,7 @@ from task_executor import (
     SimpleTaskExecutor,
     NestedTaskExecutor,
     LoopingTaskExecutor,
+    SubtaskExecutor,
     ConfigError,
     ExecutionError,
 )
@@ -443,7 +444,7 @@ class TodoOrchestrator:
             valid_types = ['simple', 'long_running', 'simple_once', 'long_running_once',
                            'nested', 'looping']
         else:
-            valid_types = ['simple', 'nested', 'looping']
+            valid_types = ['simple', 'nested', 'looping', 'long_running']
         
         if task_type not in valid_types:
             raise ConfigError(
@@ -693,6 +694,20 @@ class TodoOrchestrator:
                     conv_logger=self.conv_logger,
                     project_description=self.project_description,
                 )
+            elif task_type == 'long_running':
+                lr_executor = SubtaskExecutor(
+                    session_dir=self.session_dir,
+                    model_roles=self.model_roles,
+                )
+                result = lr_executor._execute_long_running_subtask(
+                    task, client, self.state_manager,
+                    conv_logger=self.conv_logger,
+                    parent_task_id=None,
+                    parent_context={
+                        'project_description': self.project_description,
+                    },
+                )
+                return result.success
             else:
                 raise ConfigError(f"Unknown task type: {task_type}")
                 
