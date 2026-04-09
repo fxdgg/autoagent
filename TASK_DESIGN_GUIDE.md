@@ -272,6 +272,8 @@ Subtasks don't share conversation context. Use the filesystem:
 | `nested` | Only the top-level `completion_criteria` determines overall pass/fail. |
 | `looping` | No pass/fail evaluation. Done when all `repeat_count` iterations finish. |
 
+> **Note:** While `looping` tasks do not have overall AI evaluation, their `completion_criteria` is still visible to subtask AI executors. This gives each subtask awareness of the overall goal of the parent task, so write meaningful criteria even for `looping` tasks.
+
 **Rules:**
 1. Be specific and measurable — the AI must be able to verify by reading files, checking output, or running tests.
 2. Reference concrete artifacts — file names, command outputs, specific values.

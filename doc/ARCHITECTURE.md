@@ -511,10 +511,11 @@ SimpleTaskExecutor 根据失败类型决定是否重置 session：
 | `❌ not completed` | ✅ | 传递到 prompt | AI 明确失败，需要新策略 |
 | Missing marker（nudge 耗尽） | ✅ | 传递到 prompt | AI 未输出标记 |
 | `BashTimeoutError` | ❌ | 不需要（同一 session） | 命令超时但 session 存活，in-session follow-up 告知 AI 命令被 kill |
+| `StreamTimeoutError` | ❌ | 不需要（同一 session） | SDK stream 超时（后端暂时无响应），session 可能仍存活，in-session follow-up 继续 |
 | `SessionTimeoutError` | ✅ | 传递到 prompt | session 进程已被 kill |
 | 其他 `AICallError` | ✅ | 传递到 prompt | API 错误 |
 
-当 session 被 reset 时，上一轮 AI 的完整输出（截断到 4000 字符）会注入到下一轮 prompt 的 "Previous Attempt Output" section 中，让 AI 知道上次做到了哪一步。当 session 不 reset 时（BashTimeoutError），AI 的上下文完整保留，只需发送轻量级的 in-session follow-up。
+当 session 被 reset 时，上一轮 AI 的完整输出（截断到 4000 字符）会注入到下一轮 prompt 的 "Previous Attempt Output" section 中，让 AI 知道上次做到了哪一步。当 session 不 reset 时（BashTimeoutError / StreamTimeoutError），AI 的上下文完整保留，只需发送轻量级的 in-session follow-up。
 
 **重试 prompt 信息传递**：
 
@@ -2281,7 +2282,7 @@ graph TD
 
 **审查标准**（由 reviewer AI 判断）：
 1. 任务 ID 是否正确且一致（包括子任务点号表示法）
-2. 任务类型是否合适（顶层：simple vs nested vs looping，子任务：simple vs long_running vs simple_once vs long_running_once）
+2. 任务类型是否合适（顶层：simple / nested / looping / long_running，子任务：simple / long_running / simple_once / long_running_once / nested / looping）
 3. 完成标准是否清晰、具体、可衡量
 4. 分解是否完整覆盖了原始想法
 5. 是否有遗漏或冗余的任务
@@ -2444,7 +2445,7 @@ python orchestrator.py --ideas ideas.md --log-dir logs
 本架构设计实现了：
 
 - ✅ 统一的任务执行模型（不再区分简单任务和循环任务）
-- ✅ 精简的任务类型体系（顶层：simple / nested / looping；子任务：simple / long_running / simple_once / long_running_once）
+- ✅ 精简的任务类型体系（顶层：simple / nested / looping / long_running；子任务：simple / long_running / simple_once / long_running_once / nested / looping）
 - ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI / OpenCode / Test）
 - ✅ AI完全自主判断完成条件（三层检测策略）
 - ✅ 支持嵌套任务
