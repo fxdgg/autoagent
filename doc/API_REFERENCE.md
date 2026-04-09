@@ -585,6 +585,12 @@ class SimpleTaskExecutor:
 should_reset = True
 last_ai_output = None
 
+# 如果上次运行被用户中断（Ctrl+C）且 session_id 已保存，
+# 则跳过 session reset，使用 in-session follow-up 继续。
+if state.get('interrupt_pending') and client.session_id:
+    should_reset = False  # 保持 session 存活
+    clear interrupt_pending flag
+
 while attempts < max_attempts:
     # 根据失败类型决定是否重置 session
     if attempts > 1 and should_reset:
@@ -597,7 +603,7 @@ while attempts < max_attempts:
     if is_completed(result):
         return True
 
-    # BashTimeoutError → should_reset = False（session 存活，in-session follow-up）
+    # BashTimeoutError / StreamTimeoutError / 用户中断 → should_reset = False（session 存活，in-session follow-up）
     # SessionTimeoutError / not_completed / 其他 → should_reset = True
     attempts += 1
 

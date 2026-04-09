@@ -330,6 +330,14 @@ autoagent/
 - **作用**：任务审查与修订 prompt 构造器
 - **用途**：构造 AI 审查、修订和人工反馈修订的 prompt
 
+#### prompts/timeout_continuation.py
+- **作用**：In-session continuation prompt 常量
+- **内容**：当 AI 的 session 被中断但仍然存活时（BashTimeoutError、StreamTimeoutError、用户 Ctrl+C），发送轻量级的 follow-up prompt 在同一 session 中继续，而不是重置 session 并重放完整的任务 prompt
+- **核心常量**：
+  - `BASH_TIMEOUT_CONTINUATION_PROMPT`: 命令超时后的 follow-up
+  - `STREAM_TIMEOUT_CONTINUATION_PROMPT`: SDK stream 超时后的 follow-up
+  - `INTERRUPT_CONTINUATION_PROMPT`: 用户 Ctrl+C 中断后的 follow-up
+
 ### 用户文件
 
 #### todos.yaml（用户创建）
