@@ -1,10 +1,10 @@
 """
-Prompt constants for in-session timeout continuation.
+Prompt constants for in-session continuation.
 
-When the AI's session is interrupted by a timeout but the session is still
-alive (BashTimeoutError, StreamTimeoutError), we send a lightweight
-follow-up *in the same session* instead of resetting and replaying the
-entire task prompt.
+When the AI's session is interrupted but the session is still alive
+(BashTimeoutError, StreamTimeoutError, or user Ctrl+C), we send a
+lightweight follow-up *in the same session* instead of resetting and
+replaying the entire task prompt.
 """
 
 # ── Bash timeout ────────────────────────────────────────────────────
@@ -29,7 +29,20 @@ BASH_TIMEOUT_CONTINUATION_PROMPT = (
 STREAM_TIMEOUT_CONTINUATION_PROMPT = (
     "Your previous response was interrupted due to a "
     "network/stream timeout.\n"
-    "Please continue from where you left off.\n"
+    "Please continue working on the task from where you left off.\n"
+    "When you are done, end your response with EXACTLY one of:\n"
+    "  ✅ completed\n"
+    "  ❌ not completed: <reason>\n"
+    "  ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints \"TASK SUBMITTED\", then end your session immediately)\n"
+)
+
+# ── User interrupt (Ctrl+C) ───────────────────────────────────────
+# The user pressed Ctrl+C while the AI was working.  The session is
+# still alive — send a short follow-up so the AI can resume without
+# losing its accumulated context.
+INTERRUPT_CONTINUATION_PROMPT = (
+    "Your session was interrupted by the user (Ctrl+C). Previous context is preserved.\n"
+    "Please continue working on the task from where you left off.\n"
     "When you are done, end your response with EXACTLY one of:\n"
     "  ✅ completed\n"
     "  ❌ not completed: <reason>\n"
