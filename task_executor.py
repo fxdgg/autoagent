@@ -31,6 +31,7 @@ from prompts.marker_nudge import MAX_MARKER_NUDGES, MARKER_NUDGE_PROMPT
 from prompts.timeout_continuation import (
     BASH_TIMEOUT_CONTINUATION_PROMPT,
     STREAM_TIMEOUT_CONTINUATION_PROMPT,
+    INTERRUPT_CONTINUATION_PROMPT,
 )
 from truncation_limits import limits
 
@@ -314,9 +315,39 @@ class SimpleTaskExecutor:
         logger.info(f"Executing simple task {task_id}: {task['name']}")
 
         last_timeout_error = None  # Track if previous attempt timed out
-        last_timeout_type = None   # "bash" or "session"
+        last_timeout_type = None   # "bash", "session", "stream", or "interrupt"
         should_reset = True        # Whether to reset session before next retry
         last_ai_output = None      # Full AI output from previous attempt
+
+        # Check if the task was interrupted by user (Ctrl+C) in a previous
+        # run.  If the session was preserved (session_id restored by the
+        # orchestrator), skip the session reset and send a lightweight
+        # in-session follow-up instead — just like BashTimeoutError.
+        #
+        # When running as a subtask inside a nested parent, the orchestrator
+        # sets interrupt_pending on the *parent* task key (e.g. "1"), not on
+        # the subtask's round-scoped key (e.g. "4@1.1").  So we also check
+        # the parent task state when the subtask's own state has no flag.
+        _interrupt_pending = current_state.get('interrupt_pending')
+        if not _interrupt_pending and parent_task_id:
+            parent_state = state_manager.get_task_state(parent_task_id)
+            _interrupt_pending = parent_state.get('interrupt_pending')
+            if _interrupt_pending:
+                # Consume the flag from the parent so it isn't re-used
+                state_manager.update_task_field(parent_task_id, "interrupt_pending", None)
+        if _interrupt_pending and client.session_id:
+            last_timeout_type = "interrupt"
+            should_reset = False
+            state_manager.update_task_field(sk, "interrupt_pending", None)
+            # Roll back the attempt counter so the interrupted attempt is not
+            # counted as a failure.  The while-loop below will increment it
+            # back, effectively resuming at the same attempt number.
+            if attempts > 0:
+                attempts -= 1
+            logger.info(
+                f"Task {task_id}: interrupt_pending detected with session_id — "
+                f"will continue in same session (attempts rolled back to {attempts})"
+            )
 
         while attempts < max_attempts:
             attempts += 1
@@ -331,9 +362,6 @@ class SimpleTaskExecutor:
                     f"Task {task_id}: reset session before retry attempt {attempts} "
                     f"(preventing context accumulation)"
                 )
-            # Default: next retry will reset (overridden by BashTimeoutError handler)
-            should_reset = True
-
             state_manager.mark_task_status(
                 sk, "in_progress",
                 attempts=attempts,
@@ -351,14 +379,18 @@ class SimpleTaskExecutor:
             # after BashTimeoutError), use a lightweight in-session follow-up
             # instead of rebuilding the full task prompt.
             _log_round = (parent_context or {}).get('round_label') or str(attempts)
-            if attempts > 1 and last_timeout_type in ("bash", "stream") and not should_reset:
-                # In-session continuation after BashTimeoutError or
-                # StreamTimeoutError — the AI's context is intact, just
-                # tell it what happened.
+            _is_continuation = False  # True for lightweight in-session follow-ups
+            if last_timeout_type in ("bash", "stream", "interrupt") and not should_reset:
+                # In-session continuation after BashTimeoutError,
+                # StreamTimeoutError, or user interrupt — the AI's
+                # context is intact, just tell it what happened.
+                _is_continuation = True
                 if last_timeout_type == "bash":
                     prompt = BASH_TIMEOUT_CONTINUATION_PROMPT
-                else:  # stream
+                elif last_timeout_type == "stream":
                     prompt = STREAM_TIMEOUT_CONTINUATION_PROMPT
+                else:  # interrupt
+                    prompt = INTERRUPT_CONTINUATION_PROMPT
                 exec_script_path = ""
                 if self.session_dir:
                     exec_script_path = _write_autoagent_exec_script(
@@ -377,14 +409,21 @@ class SimpleTaskExecutor:
                 )
             last_timeout_error = None  # Reset after injecting into prompt
             last_timeout_type = None
+            # Default: next retry will reset (overridden by BashTimeoutError handler)
+            should_reset = True
             try:
                 # Write prompt to log BEFORE calling AI (crash safety)
                 system_prompt = build_system_prompt_coding_agent(
                     exec_script_path,
                     supports_system_prompt=client.provider.supports_system_prompt,
                 )
-                # Always prepend system_prompt_prefix to user prompt
-                effective_prompt = prepend_system_prompt_prefix(prompt, task)
+                # Prepend system_prompt_prefix to user prompt — but skip for
+                # lightweight continuation prompts (the session already has
+                # the role/persona from the original prompt).
+                if _is_continuation:
+                    effective_prompt = prompt
+                else:
+                    effective_prompt = prepend_system_prompt_prefix(prompt, task)
                 if conv_logger:
                     conv_logger.log_prompt(
                         task_id=task_id,
@@ -1000,6 +1039,18 @@ class NestedTaskExecutor:
         current_state = state_manager.get_task_state(task_id)
         attempts = current_state.get('attempts', 0)
 
+        # If the task was interrupted by Ctrl+C, roll back the attempt
+        # counter so the interrupted round is not counted as a failure.
+        # The interrupt_pending flag is consumed by the subtask executor,
+        # but we still need to adjust the parent's attempt counter here.
+        if current_state.get('interrupt_pending'):
+            if attempts > 0:
+                attempts -= 1
+                logger.info(
+                    f"Nested task {task_id}: interrupt_pending detected — "
+                    f"rolling back attempts to {attempts}"
+                )
+
         # Round labelling: X.Y where X = main evaluation round, Y = failure sub-round
         # X increments after each main_task_evaluation; Y increments after each failure_analysis
         _main_round = len(current_state.get('main_task_evaluations', [])) + 1
@@ -1098,7 +1149,12 @@ class NestedTaskExecutor:
 
                 # Reset session before each subtask (except the first) to
                 # prevent unbounded context growth across subtasks.
-                if context_isolation and previous_subtask_summary:
+                # However, skip the reset when the parent task was interrupted
+                # (Ctrl+C) — the orchestrator restored the session so the
+                # subtask can send a lightweight follow-up instead of replaying
+                # the full prompt.
+                parent_interrupt_pending = state_manager.get_task_state(task_id).get('interrupt_pending')
+                if context_isolation and previous_subtask_summary and not parent_interrupt_pending:
                     client.reset_session()
 
                 parent_context['previous_subtask_summary'] = previous_subtask_summary
@@ -1722,7 +1778,10 @@ class LoopingTaskExecutor:
 
                 # Reset session before each subtask (except the first) to
                 # prevent unbounded context growth across subtasks.
-                if context_isolation and previous_subtask_summary:
+                # Skip reset when parent was interrupted (Ctrl+C) — session
+                # needs to stay alive for the lightweight follow-up.
+                parent_interrupt_pending = state_manager.get_task_state(task_id).get('interrupt_pending')
+                if context_isolation and previous_subtask_summary and not parent_interrupt_pending:
                     client.reset_session()
 
                 parent_context['previous_subtask_summary'] = previous_subtask_summary
@@ -2163,7 +2222,63 @@ class SubtaskExecutor:
         logger.info(f"  log session dir: {log_session_dir}")
 
         should_reset = True   # Whether to reset session before next retry
-        last_stream_timeout = False  # Track stream timeout for continuation
+        last_timeout_type = None  # "bash", "stream", or "interrupt"
+
+        # Check if the task was interrupted by user (Ctrl+C) in a previous
+        # run.  If the session was preserved, use in-session continuation.
+        # Also check the parent task state — the orchestrator sets
+        # interrupt_pending on the parent key, not the subtask's round-scoped key.
+        current_state = state_manager.get_task_state(sk)
+        _interrupt_pending = current_state.get('interrupt_pending')
+        if not _interrupt_pending and parent_task_id:
+            parent_state = state_manager.get_task_state(parent_task_id)
+            _interrupt_pending = parent_state.get('interrupt_pending')
+            if _interrupt_pending:
+                state_manager.update_task_field(parent_task_id, "interrupt_pending", None)
+        # ── Interrupt-during-polling recovery ──────────────────────────
+        # If the previous run was interrupted while polling a signal file
+        # (i.e. a background task was already submitted), we should resume
+        # polling or go straight to analysis — NOT send a continuation
+        # prompt that would confuse the AI into re-submitting the task.
+        _pending_lr_signal = None  # Will hold (signal_file, output_log, signal_status) if applicable
+        if _interrupt_pending:
+            state_manager.update_task_field(sk, "interrupt_pending", None)
+            if parent_task_id:
+                # Already consumed from parent above; clear subtask's own flag too
+                pass
+
+            # Check if a signal file exists for this subtask
+            signal_file = os.path.join(log_session_dir, "lr_tasks", f"lr_{subtask_id}_signal.json")
+            if os.path.isfile(signal_file):
+                try:
+                    with open(signal_file, "r", encoding="utf-8") as f:
+                        sig = json.load(f)
+                    sig_status = sig.get("status")
+                except Exception:
+                    sig_status = None
+
+                if sig_status in ("running", "finished", "error"):
+                    _pending_lr_signal = (signal_file, sig_status)
+                    should_reset = False
+                    logger.info(
+                        f"Long-running task {subtask_id}: interrupt_pending detected "
+                        f"with signal file status={sig_status} — will resume "
+                        f"{'polling' if sig_status == 'running' else 'analysis'}"
+                    )
+                    print(
+                        f"      🔄 Resuming long-running task {subtask_id} "
+                        f"(signal status: {sig_status})"
+                    )
+
+            # No signal file or unreadable — fall back to normal interrupt
+            # continuation prompt (the AI was interrupted before submitting)
+            if _pending_lr_signal is None and client.session_id:
+                last_timeout_type = "interrupt"
+                should_reset = False
+                logger.info(
+                    f"Long-running task {subtask_id}: interrupt_pending detected "
+                    f"with no signal file — will continue in same session"
+                )
 
         for attempt in range(1, max_attempts + 1):
             # Reset session before each retry to prevent context accumulation
@@ -2175,7 +2290,6 @@ class SubtaskExecutor:
                     f"Long-running task {subtask_id}: reset session before retry "
                     f"attempt {attempt} (preventing context accumulation)"
                 )
-            should_reset = True  # Default: next retry will reset
 
             state_manager.mark_task_status(
                 sk, "in_progress",
@@ -2185,16 +2299,73 @@ class SubtaskExecutor:
 
             print(f"\n      Long-running task attempt #{attempt}")
 
-            # Build prompt for AI.  After a stream timeout, send a short
-            # continuation prompt instead of the full task prompt.
-            if attempt > 1 and last_stream_timeout and not should_reset:
-                prompt = STREAM_TIMEOUT_CONTINUATION_PROMPT
-                last_stream_timeout = False
+            # ── Fast-path: resume polling / analysis for interrupted LR task ──
+            # If we detected a signal file from the previous interrupted run,
+            # skip the AI call entirely and jump straight to poll or analysis.
+            if _pending_lr_signal is not None:
+                signal_file, sig_status = _pending_lr_signal
+                output_log = signal_file.replace("_signal.json", "_output.log")
+                _pending_lr_signal = None  # Consume — only applies once
+                _log_round = (parent_context or {}).get('round_label') or str(attempt)
+
+                if sig_status == "running":
+                    print(f"      ⏳ Background task still running, resuming poll...")
+                    monitor_status = self._poll_signal_file(
+                        subtask_id, signal_file,
+                        max_initial_wait=_load_fast_fail_timeout() * 2,
+                    )
+                else:
+                    # "finished" or "error" — already done
+                    monitor_status = sig_status
+                    print(f"      📋 Background task already {sig_status}, analyzing result...")
+
+                analyze_result = self._ai_analyze_long_running_result(
+                    subtask, client, state_manager,
+                    monitor_status, output_log,
+                    conv_logger=conv_logger, parent_task_id=parent_task_id,
+                    parent_context=parent_context, signal_file=signal_file,
+                    exec_script_path=exec_script_path,
+                    log_round=_log_round,
+                )
+
+                if analyze_result.success:
+                    return analyze_result
+
+                # Analysis says not completed — fall through to normal retry
+                print(f"      ⏳ Long-running callback analysis failed, retrying...")
+                state_manager.add_task_history(sk, {
+                    "attempt": attempt,
+                    "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "result": "not_completed",
+                    "summary": analyze_result.output or "Long-running task did not meet completion criteria",
+                })
+                state_manager.mark_task_status(
+                    sk, "in_progress",
+                    attempts=attempt,
+                    last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                should_reset = True
+                continue
+
+            # Build prompt for AI.  After a timeout or user interrupt,
+            # send a short continuation prompt instead of the full task
+            # prompt (same logic as SimpleTaskExecutor).
+            _is_continuation = False
+            if last_timeout_type in ("bash", "stream", "interrupt") and not should_reset:
+                if last_timeout_type == "bash":
+                    prompt = BASH_TIMEOUT_CONTINUATION_PROMPT
+                elif last_timeout_type == "stream":
+                    prompt = STREAM_TIMEOUT_CONTINUATION_PROMPT
+                else:  # interrupt
+                    prompt = INTERRUPT_CONTINUATION_PROMPT
+                _is_continuation = True
             else:
                 prompt = self._build_long_running_prompt(
                     subtask, exec_script_path, attempt, state_manager,
                     parent_context=parent_context,
                 )
+            last_timeout_type = None
+            should_reset = True  # Default: next retry will reset
             
             try:
                 # Write prompt to log BEFORE calling AI (crash safety)
@@ -2202,8 +2373,11 @@ class SubtaskExecutor:
                     exec_script_path,
                     supports_system_prompt=client.provider.supports_system_prompt,
                 )
-                # Always prepend system_prompt_prefix to user prompt
-                effective_prompt = prepend_system_prompt_prefix(prompt, subtask)
+                # Prepend system_prompt_prefix — skip for continuation prompts
+                if _is_continuation:
+                    effective_prompt = prompt
+                else:
+                    effective_prompt = prepend_system_prompt_prefix(prompt, subtask)
                 _log_round = (parent_context or {}).get('round_label') or str(attempt)
                 if conv_logger:
                     conv_logger.log_prompt(
@@ -2379,10 +2553,20 @@ class SubtaskExecutor:
             except AICallError as e:
                 logger.error(f"AI call failed for long-running task {subtask_id}: {e}")
                 print(f"      ❌ AI call error: {e}")
-                if isinstance(e, StreamTimeoutError):
+                if isinstance(e, BashTimeoutError):
                     should_reset = False
-                    last_stream_timeout = True
+                    last_timeout_type = "bash"
+                    print(f"      ⏰ Bash timeout detected — will continue in same session")
+                elif isinstance(e, SessionTimeoutError):
+                    should_reset = True
+                    last_timeout_type = "session"
+                    print(f"      ⏰ Session timeout detected — next attempt will start fresh")
+                elif isinstance(e, StreamTimeoutError):
+                    should_reset = False
+                    last_timeout_type = "stream"
                     print(f"      ⏰ Stream timeout detected — will continue in same session")
+                else:
+                    should_reset = True
                 state_manager.add_task_history(sk, {
                     "attempt": attempt,
                     "time": time.strftime("%Y-%m-%d %H:%M:%S"),

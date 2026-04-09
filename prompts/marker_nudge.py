@@ -47,21 +47,12 @@ MAX_MARKER_NUDGES = _load_max_marker_nudges()
 # tokens to the existing session context instead of replaying the whole
 # task description.
 MARKER_NUDGE_PROMPT = (
-    "Your previous response did not end with a status marker (possibly "
-    "due to an unexpected interruption).\n"
-    "Review what you have done so far against the completion criteria. "
-    "You may read files or run commands to verify.\n"
-    "\n"
-    "CRITICAL: Do NOT re-run any command you have already executed. "
-    "In particular, NEVER call autoagent-exec again — if you already "
-    "called it (regardless of what output you saw), the background task "
-    "is already running. Just reply with: ⏳ LONG_RUNNING_IN_PROGRESS\n"
-    "\n"
-    "If the task is not yet finished and you did NOT use autoagent-exec, "
-    "continue working on it until it is done (or you are sure it cannot "
-    "be completed).\n"
+    "Your previous response did not end with a status marker.\n"
+    "If you already called autoagent-exec, do NOT call it again — \n"
+    "just reply with: ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.\n"
+    "Otherwise, continue working on the task from where you left off.\n"
     "When you are done, end your response with EXACTLY one of:\n"
     "  ✅ completed\n"
     "  ❌ not completed: <reason>\n"
-    "  ⏳ LONG_RUNNING_IN_PROGRESS\n"
+    "  ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints \"TASK SUBMITTED\")"
 )

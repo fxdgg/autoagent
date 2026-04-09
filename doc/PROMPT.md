@@ -10,7 +10,7 @@
 
 ### 1.1 系统提示词前缀 (System Prompt Prefix)
 用户可以在 `config.yaml` 或任务定义中配置 `system_prompt_prefix`，用于自定义 AI 的角色或添加特定指令。
-如果配置了该前缀，它会被放置在用户提示词的最前面：
+如果配置了该前缀，它会被放置在用户提示词的最前面（Continuation prompt 除外，见 §3.4）：
 ```
 [system_prompt_prefix]
 
@@ -18,29 +18,24 @@
 ```
 
 ### 1.2 编码代理系统指令 (Coding Agent System Instructions)
-对于执行代码任务的 AI，会附加以下状态标记和长任务执行指令（如果模型支持原生 system prompt，通过 `--append-system-prompt` 传递；否则作为普通 prompt 附加到用户 prompt 末尾）：
+对于执行代码任务的 AI，会生成编号规则列表作为系统指令（如果模型支持原生 system prompt，通过 `--append-system-prompt` 传递；否则包裹在 `<instructions>` 标签中附加到用户 prompt 末尾）：
 ```
-## Status Markers
-When you finish a task, you MUST end your response with EXACTLY one of these status lines (on its own line):
+1. You are fully autonomous — make all decisions independently. NEVER ask the user questions or wait for confirmation.
+
+2. For any command that may run longer than a few minutes (compilation, benchmarking, profiling, training, etc.),   *(有 exec_script_path 时)*
+you MUST use autoagent-exec instead of running it directly in Bash:
+  "[exec_script_path]" "<your entire command>"
+Always wrap the command in double quotes so that shell operators are passed correctly.
+When autoagent-exec prints "TASK SUBMITTED", output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+NEVER run long commands directly in Bash — the session may be killed due to timeout, wasting time or leaving the project in broken state.
+
+3. When you are done, end your response with EXACTLY one of:
   ✅ completed
   ❌ not completed: <reason>
-
-If a task requires a long-running command (e.g. compilation, benchmarking), use the `autoagent-exec` launcher instead of running it directly in Bash. When the launcher prints "TASK SUBMITTED", output:
-  ⏳ LONG_RUNNING_IN_PROGRESS
-
-These markers are MANDATORY. Your response MUST end with one of them.
-
-## Note on long-running commands
-If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "[exec_script_path]" "<your entire command>"
-Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "[exec_script_path]" "cd build && cmake .. && make -j8"
-The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS
-
-## ⚠️ IMPORTANT
-1. You are fully autonomous — make all decisions independently. NEVER ask the user questions or end your response with prompts like "What would you like to do?" or "Should I proceed?" — just do the work.
-2. You MUST always use autoagent-exec for long-running commands. Running them directly in Bash will cause the session to hang and be killed. Even if autoagent-exec fails, fix the command arguments and retry with autoagent-exec — NEVER fall back to running directly in Bash.
+  ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints "TASK SUBMITTED")
 ```
+
+> **Note**: 规则编号根据 `exec_script_path` 是否存在动态调整（无 exec_script_path 时规则 2 省略，编号变为 1/2）。
 
 ---
 
@@ -79,9 +74,11 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
         → [current_id]. [current_name]
           [other_id]. [other_name]
           ...
+
+        IMPORTANT: Only work on the current step (→). Do NOT perform work that belongs to later steps.
     </workflow>
 
-    <previous_step_result ([id])>                                   *(有 previous_subtask_summary 时，注：不需要给AI提供严格正确的XML格式，关键是易于理解，直接加括号即可)*
+    <previous_step_result ([id])>                                   *(有 previous_subtask_summary 时)*
         [previous_subtask_summary]
     </previous_step_result>
 </context>
@@ -114,7 +111,8 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 </guidance_from_main_task_evaluator>
 
 <constraints>                                                       *(有超时反馈时)*
-    ⏰ TIMEOUT WARNING: The previous session was terminated because no new output was produced for an extended period. If your task involves a long-running command, remember to use `autoagent-exec` (see system instructions).
+    ⏰ TIMEOUT WARNING: The previous session was killed due to session timeout.
+    If your task involves a long-running command, remember to use `autoagent-exec` (see system instructions).
 </constraints>
 ```
 
@@ -151,26 +149,24 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
         → [current_id]. [current_name]
           [other_id]. [other_name]
           ...
+
+        IMPORTANT: Only work on the current step (→). Do NOT perform work that belongs to later steps.
     </workflow>
 
-    <previous_step_result ([id])>                                   *(有 previous_subtask_summary 时，注：不需要给AI提供严格正确的XML格式，关键是易于理解，直接加括号即可)*
+    <previous_step_result ([id])>                                   *(有 previous_subtask_summary 时)*
         [previous_subtask_summary]
     </previous_step_result>
 </context>
 
 <previous_attempts>                                                 *(attempt > 1 时)*
-    <previous_attempt_output>                                       *(session 被 reset 且有上次输出时)*
-        [previous_attempt_output_text]
-    </previous_attempt_output>
-
-    <attempt_history>                                               *(有非 completed 的 history 时)*
+    <attempt_history>                                               *(有非 completed 的 history 时；注：无 previous_attempt_output）*
         - Attempt [N]: [result_str]
             Error: [error_msg]                                      *(result=error)*
             Note: [summary]                                         *(result=interrupted)*
             Summary: [summary]                                      *(result=not_completed 且非 "cannot find")*
     </attempt_history>
 
-    Please analyze what went wrong and try a different approach.    *(注：这两处原来可能不一致，现在令它们一致)*
+    Please analyze what went wrong and try a different approach.
 </previous_attempts>
 
 <guidance_from_previous_failure>                                    *(有 suggested_fix 时)*
@@ -185,12 +181,11 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
     [next_strategy]
 </guidance_from_main_task_evaluator>
 
-<constraints>
-    ⏰ TIMEOUT WARNING: ...                                         *(有超时反馈时，替代下面的 reminder)*
+<constraints>                                                       *(始终存在)*
+    ⏰ TIMEOUT WARNING: The previous session was killed due to session timeout.    *(有超时反馈时，替代下面的 reminder)*
+    If your task involves a long-running command, remember to use `autoagent-exec` (see system instructions).
 
-    ⚠️ Long-Running Task: You MUST use `autoagent-exec` to run your command. Do NOT run it directly in Bash. Example:
-      "[exec_script_path]" "cd build && cmake .. && make -j8"
-    See system instructions for full details.                       *(无超时反馈时显示)*
+    ⚠️ Long-Running Task: You MUST use autoagent-exec to run your command, Do NOT run it directly in Bash (see system instructions).    *(无超时反馈时显示)*
 </constraints>
 ```
 
@@ -215,36 +210,38 @@ The task has now finished. Output has been saved to:
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
 
 <failed_subtask>
-    <task_name>                                                     *(注：改成task_name)*
-        [task_name]
+    <task_name>
+        [task_name]                                                 *(注：是父任务 name，非子任务)*
     </task_name>
 
-    <main_task_completion_criteria>                    
+    <main_task_completion_criteria>
         [task_completion_criteria]
-    </main_task_completion_criteria>                                 *(注：loop_progress删掉，没有必要)*
+    </main_task_completion_criteria>
 
-    <workflow>                                                      *(注：将原来的Failed Subtask ID, Name, Type改成workflow，失败任务用FAILED标注，更加清晰)*
-          [other_id]. [other_name] (COMPLETED)                       *(后面的all_subtasks_status一节也可以删除)*
-                Criteria: 
-                    [criteria] 
-                Summary: 
-                    [ai_reasoning] 
-        → [current_id]. [current_name] (FAILED)                      
+    <workflow>                                                      *(有 subtasks_with_status 时)*
+          [other_id]. [other_name] (COMPLETED)
+                Criteria:
+                    [criteria]
+                Summary:
+                    [ai_reasoning]
+        → [failed_id]. [failed_name] (FAILED)
+                Criteria:
+                    [criteria]
           [other_id]. [other_name]
           ...
     </workflow>
 </failed_subtask>
- 
-<outputs>                                                              *(添加outputs标题)*
-    <previous_step_context ([id])>                                     *(有 previous_context 时)*
+
+<outputs>                                                           *(有任何输出内容时)*
+    <previous_step_context ([id])>                                  *(有 previous_context 时)*
         [previous_context_text]
     </previous_step_context>
 
-    <failed_subtask_output ([id])>                                      *(有实际输出时)*
+    <failed_subtask_output ([id])>                                  *(有实际输出时)*
         [error_text]
     </failed_subtask_output>
 
-    <failed_subtask_attempt_history ([id])>                              *(有 attempt history 时)*
+    <failed_subtask_attempt_history ([id])>                         *(有 attempt history 时)*
         - Attempt [N]: [result]
             Detail: [summary_or_error]
     </failed_subtask_attempt_history>
@@ -279,7 +276,7 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
 ```
 You are a task evaluation expert. Evaluate whether the main task's completion criteria have been fully met based on the execution results.
 
-<context>                                                           *(注：改成context)*
+<context>
     <main_task>
         [task_name]
     </main_task>
@@ -289,14 +286,12 @@ You are a task evaluation expert. Evaluate whether the main task's completion cr
     </completion_criteria>
 </context>
 
-<workflow>                                                      *(注：一样改成workflow)*
-    [other_id]. [other_name] (COMPLETED)         
-        Criteria: 
-            [criteria] 
-        Summary: 
-            [ai_reasoning] 
-    → [current_id]. [current_name]                     
-    [other_id]. [other_name]
+<workflow>                                                          *(有 subtasks_with_status 时)*
+    [id]. [name] (COMPLETED)
+        Criteria:
+            [criteria]
+        Result:                                                     *(注：是 Result 非 Summary)*
+            [ai_reasoning]
     ...
 </workflow>
 
@@ -329,17 +324,54 @@ You are a task evaluation expert. Evaluate whether the main task's completion cr
 当 AI 未输出完成标记时，在同一 session 中发送轻量级追问（不重建完整 prompt）：
 
 ```
-Your previous response did not end with a status marker (possibly due to an unexpected interruption).
-Review what you have done so far against the completion criteria. You may read files or run commands to verify.
-
-CRITICAL: Do NOT re-run any command you have already executed. In particular, NEVER call autoagent-exec again — if you already called it (regardless of what output you saw), the background task is already running. Just reply with: ⏳ LONG_RUNNING_IN_PROGRESS
-
-If the task is not yet finished and you did NOT use autoagent-exec, continue working on it until it is done (or you are sure it cannot be completed).
+Your previous response did not end with a status marker.
+If you already called autoagent-exec, do NOT call it again — 
+just reply with: ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+Otherwise, continue working on the task from where you left off.
 When you are done, end your response with EXACTLY one of:
   ✅ completed
   ❌ not completed: <reason>
-  ⏳ LONG_RUNNING_IN_PROGRESS
+  ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints "TASK SUBMITTED")
 ```
+
+### 3.4 In-Session Continuation（会话内继续）
+当 session 仍然存活但被中断时（BashTimeout、StreamTimeout、用户 Ctrl+C），在同一 session 中发送轻量级 follow-up（不重置 session，不重建完整 prompt）。
+
+> **Note**: Continuation prompt 不会添加 `system_prompt_prefix`，因为 session 上下文里已包含原始 prompt 的角色设定。
+
+**Bash 超时**：
+```
+Your previous command was terminated and triggered session timeout.
+The command was likely too long-running for direct Bash execution. 
+Please use autoagent-exec for long-running commands (see system instructions).
+Continue working on the task from where you left off.
+When you are done, end your response with EXACTLY one of:
+  ✅ completed
+  ❌ not completed: <reason>
+  ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints "TASK SUBMITTED", then end your session immediately)
+```
+
+**Stream 超时**：
+```
+Your previous response was interrupted due to a network/stream timeout.
+Please continue working on the task from where you left off.
+When you are done, end your response with EXACTLY one of:
+  ✅ completed
+  ❌ not completed: <reason>
+  ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints "TASK SUBMITTED", then end your session immediately)
+```
+
+**用户中断（Ctrl+C）**：
+```
+Your session was interrupted by the user (Ctrl+C). Previous context is preserved.
+Please continue working on the task from where you left off.
+When you are done, end your response with EXACTLY one of:
+  ✅ completed
+  ❌ not completed: <reason>
+  ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints "TASK SUBMITTED", then end your session immediately)
+```
+
+> **Note**: 用户中断与超时的区别在于，中断通过持久化的 `interrupt_pending` 标志跨进程传递（因为 Ctrl+C 会终止整个进程），而超时在同一进程的 retry 循环内通过 transient 变量传递。当运行在 nested/looping 父任务内部时，`interrupt_pending` 设置在父任务 key 上，子任务恢复时会从父任务 state 中查找该标志。
 
 ---
 
@@ -349,42 +381,41 @@ When you are done, end your response with EXACTLY one of:
 将 ideas.md 中的想法分解为结构化 TODO 任务：
 
 ```
-You are a task planner. Your job is to decompose a given idea into concrete, actionable TODO tasks in YAML format.
+You are a task planner. Your job is to decompose a given idea into concrete, actionable
+TODO tasks in YAML format.
 
-These tasks will be executed by an AI coding agent that can read/modify files, run shell commands, and analyze code and outputs. Design your tasks and completion criteria accordingly.
+These tasks will be executed by an AI coding agent that can read/modify files, run shell
+commands, and analyze code and outputs. Design your tasks and completion criteria accordingly.
 
 <idea>
-    [idea_content]
+[idea_content]
 </idea>
 
-The following guide describes how AutoAgent executes tasks at runtime. Understanding this is essential for designing effective tasks. Read it carefully before generating your task decomposition.
+Understanding this following guide is essential for designing effective tasks. Read it carefully before generating your task decomposition.
 
 <task_design_guide>
-    [TASK_DESIGN_GUIDE.md 内容]
+[TASK_DESIGN_GUIDE.md 内容]
 </task_design_guide>
 
 <output_instructions>
-    - Task IDs start from **[next_id]** (integer for top-level, dot notation for subtasks, e.g., [next_id].1, [next_id].2).
-    - Write ONLY valid YAML into the following file:
-        [temp_tasks_path]
-    - Do NOT include markdown code fences or any extra text in the file.
-    - The file content must be a YAML dictionary containing a `description` string and a `tasks` list.
-
-    ### Output Examples
-    [simple / nested / looping 示例]
+- Task IDs start from **[next_id]** (integer for top-level, dot notation for subtasks, e.g., [next_id].1, [next_id].2).
+- Write ONLY valid YAML into the following file:
+    [temp_tasks_path]
+- Do NOT include markdown code fences or any extra text in the file.
+- The file content must be a YAML dictionary containing a `description` string and a `tasks` list.
 </output_instructions>
 ```
 
 ### 4.2 任务审查 (Ideas Review)
-独立 AI 审查生成的任务质量：
+独立 AI 审查生成的任务质量。使用独立的 `ROLE_TASK_REVIEWER` 角色（非 `system_prompt_prefix`）：
 
 ```
-You are a task review expert. Review the following TODO task decomposition for quality, completeness, and correctness.
-
-These tasks will be executed by an AI coding agent that can read/modify files, run shell commands, and analyze code and outputs.
+You are a task decomposition review expert. You evaluate TODO task YAML files for schema correctness, appropriate task type selection, completion criteria quality, and decomposition granularity.
+You focus on whether the tasks are actionable and verifiable by an autonomous AI coding agent. Review the following TODO task decomposition
+for quality, completeness, and correctness.
 
 <original_idea>
-    [idea_content]
+[idea_content]
 </original_idea>
 
 The generated tasks have been saved to the following file:
@@ -392,30 +423,50 @@ The generated tasks have been saved to the following file:
 
 Please read this file to review the tasks.
 
-The following guide describes how AutoAgent executes tasks at runtime. Use it as the authoritative reference for task types, schema, hierarchy rules, and best practices when reviewing the generated tasks.
+The following guide serves as the authoritative reference for task types, schema, hierarchy rules,
+and best practices when reviewing the generated tasks.
 
 <task_design_guide>
-    [TASK_DESIGN_GUIDE.md 内容]
+[TASK_DESIGN_GUIDE.md 内容]
 </task_design_guide>
 
 <review_criteria>
-    1. **Schema correctness**: Does every task have the required fields for its type?
-    2. **ID consistency**: Are task IDs sequential integers and subtask IDs use correct dot notation?
-    3. **Type appropriateness**: Are task types chosen correctly?
-    4. **Completion criteria quality**: Is every completion_criteria specific, measurable, and objectively verifiable by an AI agent?
-    5. **Decomposition granularity**: Does the decomposition fully cover the idea?
-    6. **YAML validity**: Is the YAML structure well-formed and parseable?
-    7. **Model field**: If present, must be "default", "lite", or a direct model name string.
+Evaluate the generated tasks against these criteria. Refer to <task_design_guide> for
+detailed rules and examples on each point.
+
+1. **YAML & schema**: Well-formed YAML; correct IDs (integers + dot notation); all
+   required fields present per type; `*_once` types only as subtasks.
+2. **Type selection**: `nested` vs `looping` vs `simple` chosen correctly per §4.1;
+   commands > 1 min use `long_running`; `*_once` used sparingly.
+3. **Decomposition granularity**: No over-decomposition (merge steps that fail together)
+   and no under-decomposition (split logically independent steps). See §4.2.
+4. **Root-level `description`**: Present, meaningful, covers goal/architecture/key
+   paths/commands/constraints as applicable. Missing = review failure.
+   Order of tasks and description fields doesn't matter. See §3.1.
+5. **`completion_criteria`**: Specific, measurable, AI-verifiable. Top-level criteria
+   describe end state; subtask criteria describe step output. No unverifiable or
+   process-describing criteria. See §5.1.
+6. **`initial_hint`**: Provides context (paths, commands, constraints), not step-by-step
+   playbooks. Subtasks use filesystem for state passing across sessions. See §5.2, §4.3.
+7. **`system_prompt_prefix`**: Used appropriately (persona, restrictions); NOT set on
+   top-level `nested`/`looping`. See §5.3.
+8. **`model`**: `"default"` for reasoning, `"lite"` for execution. See §5.5.
+9. **Retry strategy**: `max_attempts: 1` for execution-only subtasks; 2–5 for code-writing
+   tasks. Hints mention residual state cleanup when relevant. See §5.4, §6.
+10. **Looping discipline** (if applicable): Doc commits separated from code commits;
+    failure pattern tracking; structured keep/discard rules; workspace cleanup. See §6.4.
 </review_criteria>
 
 <instructions>
-    If the tasks pass ALL criteria, respond with EXACTLY:
-    ✅ completed
+If the tasks pass ALL criteria, respond with EXACTLY:
+✅ completed
 
-    If the tasks need improvement:
-    1. DIRECTLY modify the YAML file at:
-         [temp_tasks_path]
-    2. After modifying the file, respond with: ❌ not completed
+If the tasks need improvement:
+DIRECTLY modify the YAML file at:
+    [temp_tasks_path]
+Do NOT include markdown code fences or any extra text in the file.
+After modifying the file, respond with EXACTLY:
+❌ not completed
 </instructions>
 ```
 
@@ -433,10 +484,14 @@ Please read this file to see the current tasks.
 </human_feedback>
 
 <instructions>
-    Please revise the task decomposition based on the information above.
-    Write ONLY valid YAML (a dictionary containing a `description` string and a `tasks` list) into the following file:
-      [temp_tasks_path]
+Please revise the task decomposition based on the information above.
+Remember to validate against all review criteria from the initial review
+(schema correctness, type appropriateness, completion criteria quality,
+decomposition granularity, root-level description, hint quality, retry strategy, etc.).
 
-    Do NOT include markdown code fences or any extra text in the file.
+Write ONLY valid YAML (a dictionary containing a `description` string and a `tasks` list) into the following file:
+  [temp_tasks_path]
+
+Do NOT include markdown code fences or any extra text in the file.
 </instructions>
 ```

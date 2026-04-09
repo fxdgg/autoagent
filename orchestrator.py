@@ -712,13 +712,19 @@ class TodoOrchestrator:
                 raise ConfigError(f"Unknown task type: {task_type}")
                 
         except KeyboardInterrupt:
-            # Save session_id so the task can be resumed after restart
+            # Save session_id and mark interrupt so the next run can
+            # continue in the same session with a lightweight follow-up
+            # instead of resetting and replaying the full task prompt.
             if client.session_id:
                 self.state_manager.update_task_field(
                     task_id, "session_id", client.session_id
                 )
+                self.state_manager.update_task_field(
+                    task_id, "interrupt_pending", True
+                )
                 logger.info(
-                    f"Saved session_id {client.session_id} for interrupted task {task_id}"
+                    f"Saved session_id {client.session_id} for interrupted task {task_id} "
+                    f"(interrupt_pending=True)"
                 )
             raise
         except ConfigError as e:

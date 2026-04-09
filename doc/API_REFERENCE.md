@@ -585,6 +585,12 @@ class SimpleTaskExecutor:
 should_reset = True
 last_ai_output = None
 
+# 如果上次运行被用户中断（Ctrl+C）且 session_id 已保存，
+# 则跳过 session reset，使用 in-session follow-up 继续。
+if state.get('interrupt_pending') and client.session_id:
+    should_reset = False  # 保持 session 存活
+    clear interrupt_pending flag
+
 while attempts < max_attempts:
     # 根据失败类型决定是否重置 session
     if attempts > 1 and should_reset:
@@ -597,7 +603,7 @@ while attempts < max_attempts:
     if is_completed(result):
         return True
 
-    # BashTimeoutError → should_reset = False（session 存活，in-session follow-up）
+    # BashTimeoutError / StreamTimeoutError / 用户中断 → should_reset = False（session 存活，in-session follow-up）
     # SessionTimeoutError / not_completed / 其他 → should_reset = True
     attempts += 1
 
@@ -765,7 +771,7 @@ bash autoagent-exec.sh <command...>
 |------|------|------|
 | `--log-dir` | str | 日志会话目录绝对路径（由 SubtaskExecutor 的 `session_dir` 提供） |
 | `--task-id` | str | 子任务 ID（如 `1.2`） |
-| `--fast-fail-timeout` | int | 快速失败超时时间（秒），由 `config.yaml` 的 `fast_fail_timeout` 配置 |
+| `--fast-fail-timeout` | int | 快速失败超时时间（秒，默认 10），由 `config.yaml` 的 `fast_fail_timeout` 配置 |
 | `--cmd <command>` | str | 要执行的命令（由 wrapper 脚本拼接用户参数后传入） |
 
 **行为**（以下 `N` 秒由 `--fast-fail-timeout` 控制）：
@@ -1315,13 +1321,15 @@ class SubtaskState(TypedDict, total=False):
 class TaskConfig(TypedDict, total=False):
     id: Union[int, str]                               # 必填，唯一标识
     name: str                                          # 必填，任务名称
-    type: Literal["simple", "nested", "looping"]  # 必填，任务类型（顶层）
+    type: Literal["simple", "nested", "looping", "long_running"]  # 必填，任务类型（顶层）
     completion_criteria: str                            # 必填，完成标准
-    initial_hint: str                                  # simple 可选，每次尝试都传入
+    initial_hint: str                                  # simple/long_running 可选，每次尝试都传入
     max_attempts: int                                  # 可选，默认 5
     subtasks: List['SubtaskConfig']                    # nested/looping 必填
     repeat_count: int                                  # looping 必填，循环次数
     max_attempts_per_loop: int                         # looping 可选，每轮最大重试次数（默认 5）
+    model: str                                         # 可选，"default"、"lite" 或直接模型名
+    system_prompt_prefix: str                          # 可选，自定义 AI 人设/指令
 ```
 
 ### SubtaskConfig
@@ -1332,8 +1340,10 @@ class SubtaskConfig(TypedDict, total=False):
     name: str                                          # 必填
     type: Literal["simple", "long_running", "simple_once", "long_running_once", "nested", "looping"]  # 必填
     completion_criteria: str                            # 必填
-    initial_hint: str                                  # simple 可选，每次尝试都传入
+    initial_hint: str                                  # simple/long_running 可选，每次尝试都传入
     max_attempts: int                                  # 可选，默认 5
+    model: str                                         # 可选，"default"、"lite" 或直接模型名
+    system_prompt_prefix: str                          # 可选，自定义 AI 人设/指令
 ```
 
 ---
@@ -1359,6 +1369,12 @@ class BashTimeoutError(AICallError):
 class SessionTimeoutError(AICallError):
     """会话总时间超时（超过 session_timeout 秒）。
     调用方应告知 AI 它被用户中断（Ctrl+C）。"""
+
+class StreamTimeoutError(AICallError):
+    """SDK stream 超时（长时间无数据）。
+    通常意味着 AI 后端暂时无响应。会话可能仍然存活，
+    调用方应在同一 session 中发送简短的 follow-up prompt，
+    而非重置并重放完整的任务 prompt。"""
 ```
 
 ---

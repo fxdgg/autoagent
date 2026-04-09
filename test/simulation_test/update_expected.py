@@ -16,8 +16,10 @@ def _normalize_log_content(text):
     )
     return text
 
-src_base = r"d:\silasshen\autoagent\autoagent\test\simulation_test\logs"
-dst_base = r"d:\silasshen\autoagent\autoagent\test\simulation_test\comprehensive_test\expected_logs"
+base_dir = os.path.dirname(os.path.abspath(__file__))
+
+src_base = os.path.join(base_dir, "logs")
+dst_base = os.path.join(base_dir, "comprehensive_test", "expected_logs")
 
 dirs = [d for d in os.listdir(src_base) if d.startswith("comprehensive_test")]
 latest = max(dirs, key=lambda d: os.path.getmtime(os.path.join(src_base, d)))

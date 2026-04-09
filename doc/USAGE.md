@@ -597,6 +597,11 @@ python orchestrator.py --continue
 
 断点续传会加载上次会话的 `todos_state.yaml`，自动跳过已完成的任务，继续未完成的部分。
 
+**中断恢复机制**：
+- 当用户按 Ctrl+C 中断时，系统会保存当前的 session_id 并标记 `interrupt_pending`
+- 下次运行时，如果 session 仍然存活，系统会在同一 session 中发送轻量级的 follow-up prompt 继续工作，而不是重置 session 并重播完整的任务 prompt
+- 这与 BashTimeoutError / StreamTimeoutError 的处理方式一致，AI 的上下文完整保留，恢复速度更快
+
 **断点续传的具体行为**：
 - 子任务状态使用 round-scoped key（`subtask_id@round_label`，如 `1.2@3.1`），每轮循环/每次 failure retry 有独立状态
 - 中断后 resume 时只检查当前轮次的 key，已完成的子任务被精确跳过，未完成的继续执行
@@ -927,8 +932,9 @@ python orchestrator.py --status
 
 ```bash
 # Ctrl+C 中断当前任务
-# 下次运行时可以从中断点继续
-python orchestrator.py
+# 系统会保存 session_id 和中断标志
+# 下次运行时会在同一 session 中继续（不重置上下文）
+python orchestrator.py --continue
 ```
 
 ### Q: 如何重新开始某个任务？

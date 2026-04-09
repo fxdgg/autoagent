@@ -35,9 +35,6 @@ def build_ideas_review_prompt(
     return f"""{role_line} Review the following TODO task decomposition
 for quality, completeness, and correctness.
 
-These tasks will be executed by an AI coding agent that can read/modify files, run shell
-commands, and analyze code and outputs.
-
 <original_idea>
 {idea_content[:limits.get('max')] + chr(10) + chr(10) + '(idea text truncated)' if len(idea_content) > limits.get('max') else idea_content}
 </original_idea>
@@ -47,45 +44,38 @@ The generated tasks have been saved to the following file:
 
 Please read this file to review the tasks.
 
-The following guide describes how AutoAgent executes tasks at runtime. Use it as
-the authoritative reference for task types, schema, hierarchy rules, and best
-practices when reviewing the generated tasks.
+The following guide serves as the authoritative reference for task types, schema, hierarchy rules, 
+and best practices when reviewing the generated tasks.
 
 <task_design_guide>
 {task_design_guide}
 </task_design_guide>
 
 <review_criteria>
-Evaluate the generated tasks against these criteria:
+Evaluate the generated tasks against these criteria. Refer to <task_design_guide> for
+detailed rules and examples on each point.
 
-1. **Schema correctness**: Does every task have the required fields for its type?
-   (e.g., nested/looping must have subtasks; looping must have repeat_count)
-2. **ID consistency**: Are task IDs sequential integers and subtask IDs use correct
-   dot notation (e.g., 2.1, 2.2)?
-3. **Type appropriateness**: Are task types chosen correctly?
-   - Multi-step ideas should use nested/looping, not a single simple task.
-   - Iterative optimize-test cycles should use looping, not nested.
-   - nested/looping CAN be used as subtask types (multi-level nesting is supported).
-4. **Completion criteria quality**: Is every completion_criteria specific, measurable,
-   and objectively verifiable by an AI agent?
-   \u2705 Good: "All unit tests pass with 0 failures"
-   \u274c Bad: "Code is optimized" or "Performance is improved"
-5. **Decomposition granularity**: Does the decomposition fully cover the idea without
-   over-decomposing into trivial subtasks or leaving gaps?
-6. **YAML validity**: Is the YAML structure well-formed and parseable?
-7. **Model field**: If present, the model field must be `"default"`, `"lite"`, or a direct
-   model name string. Tasks requiring complex reasoning should use `"default"`;
-   straightforward tasks can use `"lite"`. The `model` field is valid on ALL task types
-   (including `long_running` and `long_running_once`).
-8. **Root-level description**: Does the YAML include a meaningful `description` field at the
-   root level that explains the project goal, key constraints, and technical context?
-   An empty or missing `description` is a review failure.
-9. **Hint quality**: When `initial_hint` is present, does it provide actionable context
-   (file paths, commands, constraints) without duplicating `completion_criteria` or
-   including step-by-step instructions that over-constrain the AI's approach?
-10. **Retry strategy**: Are `max_attempts` values appropriate?
-   - Execution-only subtasks (build, test, benchmark) should use `max_attempts: 1`.
-   - Code-writing / reasoning tasks should allow multiple attempts (2–5).
+1. **YAML & schema**: Well-formed YAML; correct IDs (integers + dot notation); all
+   required fields present per type; `*_once` types only as subtasks.
+2. **Type selection**: `nested` vs `looping` vs `simple` chosen correctly per §4.1;
+   commands > 1 min use `long_running`; `*_once` used sparingly.
+3. **Decomposition granularity**: No over-decomposition (merge steps that fail together)
+   and no under-decomposition (split logically independent steps). See §4.2.
+4. **Root-level `description`**: Present, meaningful, covers goal/architecture/key
+   paths/commands/constraints as applicable. Missing = review failure. 
+   Order of tasks and description fields doesn't matter. See §3.1.
+5. **`completion_criteria`**: Specific, measurable, AI-verifiable. Top-level criteria
+   describe end state; subtask criteria describe step output. No unverifiable or
+   process-describing criteria. See §5.1.
+6. **`initial_hint`**: Provides context (paths, commands, constraints), not step-by-step
+   playbooks. Subtasks use filesystem for state passing across sessions. See §5.2, §4.3.
+7. **`system_prompt_prefix`**: Used appropriately (persona, restrictions); NOT set on
+   top-level `nested`/`looping`. See §5.3.
+8. **`model`**: `"default"` for reasoning, `"lite"` for execution. See §5.5.
+9. **Retry strategy**: `max_attempts: 1` for execution-only subtasks; 2–5 for code-writing
+   tasks. Hints mention residual state cleanup when relevant. See §5.4, §6.
+10. **Looping discipline** (if applicable): Doc commits separated from code commits;
+    failure pattern tracking; structured keep/discard rules; workspace cleanup. See §6.4.
 </review_criteria>
 
 <instructions>
@@ -93,12 +83,11 @@ If the tasks pass ALL criteria, respond with EXACTLY:
 \u2705 completed
 
 If the tasks need improvement:
-1. DIRECTLY modify the YAML file at:
-     {temp_tasks_path}
-   Write the corrected full task list into that file.
-   Do NOT include markdown code fences or any extra text in the file.
-2. In your response, briefly list what you changed and why (1-2 sentences per change).
-3. After listing your changes, respond with: \u274c not completed
+DIRECTLY modify the YAML file at:
+    {temp_tasks_path}
+Do NOT include markdown code fences or any extra text in the file.
+After modifying the file, respond with EXACTLY: 
+\u274c not completed
 </instructions>
 """
 

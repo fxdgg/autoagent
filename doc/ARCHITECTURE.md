@@ -511,10 +511,12 @@ SimpleTaskExecutor 根据失败类型决定是否重置 session：
 | `❌ not completed` | ✅ | 传递到 prompt | AI 明确失败，需要新策略 |
 | Missing marker（nudge 耗尽） | ✅ | 传递到 prompt | AI 未输出标记 |
 | `BashTimeoutError` | ❌ | 不需要（同一 session） | 命令超时但 session 存活，in-session follow-up 告知 AI 命令被 kill |
+| `StreamTimeoutError` | ❌ | 不需要（同一 session） | SDK stream 超时（后端暂时无响应），session 可能仍存活，in-session follow-up 继续 |
+| 用户中断（Ctrl+C） | ❌ | 不需要（同一 session） | session 存活且 session_id 已保存，下次运行时 in-session follow-up 继续。通过持久化的 `interrupt_pending` 标志跨进程传递 |
 | `SessionTimeoutError` | ✅ | 传递到 prompt | session 进程已被 kill |
 | 其他 `AICallError` | ✅ | 传递到 prompt | API 错误 |
 
-当 session 被 reset 时，上一轮 AI 的完整输出（截断到 4000 字符）会注入到下一轮 prompt 的 "Previous Attempt Output" section 中，让 AI 知道上次做到了哪一步。当 session 不 reset 时（BashTimeoutError），AI 的上下文完整保留，只需发送轻量级的 in-session follow-up。
+当 session 被 reset 时，上一轮 AI 的完整输出（截断到 4000 字符）会注入到下一轮 prompt 的 "Previous Attempt Output" section 中，让 AI 知道上次做到了哪一步。当 session 不 reset 时（BashTimeoutError / StreamTimeoutError / 用户中断），AI 的上下文完整保留，只需发送轻量级的 in-session follow-up。
 
 **重试 prompt 信息传递**：
 
@@ -526,7 +528,7 @@ SimpleTaskExecutor 根据失败类型决定是否重置 session：
 | `## Guidance from Previous Failure` | `suggested_fix` 非空（来自 failure_analysis 或 main_task_evaluation） | **独立于 `attempt > 1`**——failure_analysis 创建新 round 后 attempt 重置为 1，但 fix 仍会显示 |
 
 history 中的特殊过滤：
-- `interrupted` 条目（Ctrl+C 中断）会显示，告知 AI 上次是用户主动中断
+- `interrupted` 条目（Ctrl+C 中断）会显示在 history 中（用于 session 被 reset 的回退情况）。正常情况下，中断后会通过 in-session follow-up 继续，不会走 Previous Attempts 路径
 - `not_completed` 条目中 summary 包含 "Cannot find" 的条目会被过滤（纯标记缺失噪音，无指导意义）
 
 **完成检测三层策略**：
@@ -2281,7 +2283,7 @@ graph TD
 
 **审查标准**（由 reviewer AI 判断）：
 1. 任务 ID 是否正确且一致（包括子任务点号表示法）
-2. 任务类型是否合适（顶层：simple vs nested vs looping，子任务：simple vs long_running vs simple_once vs long_running_once）
+2. 任务类型是否合适（顶层：simple / nested / looping / long_running，子任务：simple / long_running / simple_once / long_running_once / nested / looping）
 3. 完成标准是否清晰、具体、可衡量
 4. 分解是否完整覆盖了原始想法
 5. 是否有遗漏或冗余的任务
@@ -2444,7 +2446,7 @@ python orchestrator.py --ideas ideas.md --log-dir logs
 本架构设计实现了：
 
 - ✅ 统一的任务执行模型（不再区分简单任务和循环任务）
-- ✅ 精简的任务类型体系（顶层：simple / nested / looping；子任务：simple / long_running / simple_once / long_running_once）
+- ✅ 精简的任务类型体系（顶层：simple / nested / looping / long_running；子任务：simple / long_running / simple_once / long_running_once / nested / looping）
 - ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI / OpenCode / Test）
 - ✅ AI完全自主判断完成条件（三层检测策略）
 - ✅ 支持嵌套任务

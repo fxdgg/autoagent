@@ -187,47 +187,44 @@ def build_system_prompt_coding_agent(
     # For providers without native system-prompt support, add a heading
     # so the AI can distinguish instructions from the task description.
     if not supports_system_prompt:
-        parts.append("# Instructions")
+        parts.append("<instructions>")
 
-    parts.append(
-        "## Status Markers\n"
-        "When you finish a task, you MUST end your response with EXACTLY one of "
-        "these status lines (on its own line):\n"
-        "  ✅ completed\n"
-        "  ❌ not completed: <reason>\n\n"
-        "If a task requires a long-running command (e.g. compilation, benchmarking), "
-        "use the `autoagent-exec` launcher instead of running it directly in Bash. "
-        "When the launcher prints \"TASK SUBMITTED\", output:\n"
-        "  ⏳ LONG_RUNNING_IN_PROGRESS and END YOUR SESSION immediately.\n\n"
-        "These markers are MANDATORY. Your response MUST end with one of them."
-    )
+    # ── Core rules ────────────────────────────────────────────────
+    rules = [
+        "You are fully autonomous — make all decisions independently. "
+        "NEVER ask the user questions or wait for confirmation.\n",
+    ]
 
     if exec_script_path:
-        parts.append(
-            "## Note on long-running commands\n"
-            "If a Bash command may take more than a few minutes "
-            "(e.g. compilation, benchmarking, profiling), do "
-            "NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:\n"
+        rules.append(
+            "For any command that may run longer than a few minutes "
+            "(compilation, benchmarking, profiling, training, etc.), \n"
+            "you MUST use autoagent-exec instead of running it directly in Bash:\n"
             f'  "{exec_script_path}" "<your entire command>"\n'
-            "Always wrap your command in double quotes so that shell operators "
-            "(&&, |, ;, etc.) are passed correctly. For example:\n"
-            f'  "{exec_script_path}" "cd build && cmake .. && make -j8"\n'
-            "The launcher will auto-detach after the fast-run window and print \"TASK SUBMITTED\". "
-            "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS and END YOUR SESSION immediately."
+            "Always wrap the command in double quotes so that shell operators are passed correctly.\n"
+            "When autoagent-exec prints \"TASK SUBMITTED\", output "
+            "⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.\n"
+            "NEVER run long commands directly in Bash — the session may be "
+            "killed due to timeout, wasting time or leaving the project in broken state.\n"
         )
 
-    parts.append(
-        "## ⚠️ IMPORTANT\n"
-        "1. You are fully autonomous — make all decisions independently. "
-        "NEVER ask the user questions or end your response with prompts like "
-        "\"What would you like to do?\" or \"Should I proceed?\" — just do the work.\n"
-        "2. You MUST always use autoagent-exec for long-running "
-        "commands. Running them directly in Bash will cause the session to hang "
-        "and be killed. Even if autoagent-exec fails, fix the command arguments "
-        "and retry with autoagent-exec — NEVER fall back to running directly in Bash."
+    rules.append(
+        "When you are done, end your response with EXACTLY one of:\n"
+        "  ✅ completed\n"
+        "  ❌ not completed: <reason>\n"
+        "  ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints \"TASK SUBMITTED\")"
     )
 
-    return "\n\n".join(parts)
+    if not supports_system_prompt:
+        str_unindent = "\n".join(f"{i}. {r}" for i, r in enumerate(rules, 1))
+        parts.append("\n".join("    " + line for line in str_unindent.splitlines()))
+    else:
+        parts.append("\n".join(f"{i}. {r}" for i, r in enumerate(rules, 1)))
+
+    if not supports_system_prompt:
+        parts.append("</instructions>")
+
+    return "\n".join(parts)
 
 ROLE_TASK_PLANNER = (
     "You are a task planner. Your job is to decompose a given idea into "
@@ -237,7 +234,7 @@ ROLE_TASK_PLANNER = (
 ROLE_TASK_REVIEWER = (
     "You are a task decomposition review expert. You evaluate TODO task "
     "YAML files for schema correctness, appropriate task type selection, "
-    "completion criteria quality, and decomposition granularity. "
+    "completion criteria quality, and decomposition granularity. \n"
     "You focus on whether the tasks are actionable and verifiable by an "
     "autonomous AI coding agent."
 )
@@ -426,20 +423,13 @@ def build_timeout_guidance(
     """Build the timeout-warning text.
 
     Returns plain text (no wrapping tag — caller adds ``<constraints>``).
-
-    Args:
-        exec_script_path: Path to the autoagent-exec wrapper script.
-        timeout_feedback: Human-readable description of the timeout event.
-        timeout_type: ``"bash"`` or ``"session"``.
     """
     if timeout_type == "session":
         return ""
 
     return (
-        "⏰ TIMEOUT WARNING: The previous session was terminated because "
-        "no new output was produced for an extended period. "
-        "If your task involves a long-running command, remember to use "
-        "`autoagent-exec` (see system instructions)."
+        "⏰ TIMEOUT WARNING: The previous session was killed due to session timeout. \n"
+        "If your task involves a long-running command, remember to use `autoagent-exec` (see system instructions)."
     )
 
 
@@ -449,8 +439,5 @@ def build_long_running_reminder(exec_script_path: str) -> str:
     Returns plain text (no wrapping tag — caller adds ``<constraints>``).
     """
     return (
-        "⚠️ Long-Running Task: You MUST use `autoagent-exec` to run your command. "
-        "Do NOT run it directly in Bash. Example:\n"
-        f'  "{exec_script_path}" "cd build && cmake .. && make -j8"\n'
-        "See system instructions for full details."
+        "⚠️ Long-Running Task: You MUST use autoagent-exec to run your command, Do NOT run it directly in Bash (see system instructions)."
     )
