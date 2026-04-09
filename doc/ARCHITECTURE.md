@@ -840,8 +840,6 @@ tasks:
   completion_criteria: "训练正常退出且验证集指标满足要求"
 ```
 
-> **注意**：`long_running` 类型的子任务不再需要在 YAML 中指定 `command` 字段。AI 会根据任务描述自主决定要运行的命令，并通过 `autoagent-exec` 启动。
-
 **执行流程**：
 ```
 1. AutoAgent 构造 prompt，告知 AI 使用 autoagent-exec wrapper 脚本执行长时间命令

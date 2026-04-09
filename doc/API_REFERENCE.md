@@ -739,7 +739,7 @@ class SubtaskExecutor:
 | `simple` | AI 自主完成（含代码修改、命令执行等） | 调用 `client.ask()` |
 | `long_running` | 长时间任务 | AI 通过 wrapper 脚本调用 `autoagent-exec` 启动，AutoAgent 轮询信号文件 + AI 分析结果 |
 
-**long_running 子任务执行流程**：
+**long_running 任务执行流程**：
 
 1. 构造 prompt，告知 AI 使用 `autoagent-exec` wrapper 脚本启动命令（内部参数由 wrapper 预填）
 2. AI 通过 wrapper 脚本调用 `autoagent-exec`
@@ -1335,8 +1335,6 @@ class SubtaskConfig(TypedDict, total=False):
     initial_hint: str                                  # simple 可选，每次尝试都传入
     max_attempts: int                                  # 可选，默认 5
 ```
-
-> **注意**：`long_running` 类型的子任务不再需要 `command` 字段。AI 会根据任务描述自主决定要运行的命令，并通过 `autoagent-exec` 启动。
 
 ---
 

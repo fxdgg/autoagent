@@ -168,16 +168,11 @@ autoagent/
       config: ${workspace}/todos.yaml
       provider: codebuddy
       use_cli: false
-      model: "plan:claude-opus-4.6;default:claude-opus-4.6;lite:glm-5.0-ioa"
-      human_review: true
-      verbose: true
-
-    - name: test
-      ideas: ${workspace}/../ideas.md
-      config: ${workspace}/../todos.yaml
-      provider: codebuddy
-      use_cli: false
-      model: "plan:glm-5.0-ioa;default:glm-5.0-ioa;lite:deepseek-v3-2-volc-ioa"
+      model: 
+        plan: claude-opus-4.6
+        default: claude-opus-4.6
+        lite: glm-5.0-ioa
+        evaluation: claude-opus-4.6
       human_review: true
       verbose: true
   ```
@@ -412,7 +407,7 @@ tasks:
 |------|------|------|------|
 | `id` | int/string | 是 | 任务 ID（唯一标识） |
 | `name` | string | 是 | 任务名称 |
-| `type` | string | 是 | 顶层任务类型：`simple`、`nested`、`looping`；子任务类型：`simple`、`long_running`、`simple_once`、`long_running_once` |
+| `type` | string | 是 | 顶层任务类型：`simple`、`nested`、`looping`、`long_running`；子任务额外支持：`simple_once`、`long_running_once` |
 | `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
 | `model` | string | 否 | 模型选择：`"default"`、`"lite"` 或直接模型名称（默认 `"default"`） |
 | `system_prompt_prefix` | string | 否 | 任务级系统提示词前缀，覆盖 config.yaml 中的全局设置 |
@@ -443,7 +438,6 @@ tasks:
 | 额外字段 | 类型 | 必填 | 说明 |
 |---------|------|------|------|
 | `initial_hint` | string | 否 | 静态上下文提示（每次尝试都会传入） |
-| `command` | string | 否 | 可选的命令提示。AI 会根据任务描述自主决定要运行的命令，并通过 `autoagent-exec` 启动 |
 
 ## 📊 状态值说明
 
