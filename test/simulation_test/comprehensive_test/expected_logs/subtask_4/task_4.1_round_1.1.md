@@ -3,28 +3,21 @@
 ## System Prompt
 
 ```
-# Instructions
-
-## Status Markers
-When you finish a task, you MUST end your response with EXACTLY one of these status lines (on its own line):
-  ✅ completed
-  ❌ not completed: <reason>
-
-If a task requires a long-running command (e.g. compilation, benchmarking), use the `autoagent-exec` launcher instead of running it directly in Bash. When the launcher prints "TASK SUBMITTED", output:
-  ⏳ LONG_RUNNING_IN_PROGRESS and END YOUR SESSION immediately.
-
-These markers are MANDATORY. Your response MUST end with one of them.
-
-## Note on long-running commands
-If a Bash command may take more than a few minutes (e.g. compilation, benchmarking, profiling), do NOT run it directly in Bash. Instead use the `autoagent-exec` launcher:
-  "<autoagent-exec>" "<your entire command>"
-Always wrap your command in double quotes so that shell operators (&&, |, ;, etc.) are passed correctly. For example:
-  "<autoagent-exec>" "cd build && cmake .. && make -j8"
-The launcher will auto-detach after the fast-run window and print "TASK SUBMITTED". When you see that, output: ⏳ LONG_RUNNING_IN_PROGRESS and END YOUR SESSION immediately.
-
-## ⚠️ IMPORTANT
-1. You are fully autonomous — make all decisions independently. NEVER ask the user questions or end your response with prompts like "What would you like to do?" or "Should I proceed?" — just do the work.
-2. You MUST always use autoagent-exec for long-running commands. Running them directly in Bash will cause the session to hang and be killed. Even if autoagent-exec fails, fix the command arguments and retry with autoagent-exec — NEVER fall back to running directly in Bash.
+<instructions>
+    1. You are fully autonomous — make all decisions independently. NEVER ask the user questions or wait for confirmation.
+    
+    2. For any command that may run longer than a few minutes (compilation, benchmarking, profiling, training, etc.), 
+    you MUST use autoagent-exec instead of running it directly in Bash:
+      "<autoagent-exec>" "<your entire command>"
+    Always wrap the command in double quotes so that shell operators are passed correctly.
+    When autoagent-exec prints "TASK SUBMITTED", output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+    NEVER run long commands directly in Bash — the session may be killed due to timeout, wasting time or leaving the project in broken state.
+    
+    3. When you are done, end your response with EXACTLY one of:
+      ✅ completed
+      ❌ not completed: <reason>
+      ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints "TASK SUBMITTED")
+</instructions>
 ```
 
 ## Prompt
@@ -65,9 +58,7 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 </context>
 
 <constraints>
-    ⚠️ Long-Running Task: You MUST use `autoagent-exec` to run your command. Do NOT run it directly in Bash. Example:
-      "<autoagent-exec>" "cd build && cmake .. && make -j8"
-    See system instructions for full details.
+    ⚠️ Long-Running Task: You MUST use autoagent-exec to run your command, Do NOT run it directly in Bash (see system instructions).
 </constraints>
 ```
 
@@ -81,7 +72,7 @@ Report generation submitted.
 
 ⏳ LONG_RUNNING_IN_PROGRESS
 
-[autoagent-exec] Starting command (watching for 60s)...
+[autoagent-exec] Starting command (watching for 10s)...
    Command: python -c "import time; time.sleep(1)"
    PID: <PID>
 
