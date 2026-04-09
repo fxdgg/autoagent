@@ -12,16 +12,14 @@ entire task prompt.
 # Typically means the command is too long-running for direct Bash
 # execution and should use autoagent-exec instead.
 BASH_TIMEOUT_CONTINUATION_PROMPT = (
-    "Your previous command was terminated because it produced "
-    "no output for an extended period.\n"
-    "The command was likely too long-running for direct Bash "
-    "execution. Please use autoagent-exec for long-running "
-    "commands (see system instructions).\n"
+    "Your previous command was terminated and triggered session timeout.\n"
+    "The command was likely too long-running for direct Bash execution. \n"
+    "Please use autoagent-exec for long-running commands (see system instructions).\n"
     "Continue working on the task from where you left off.\n"
     "When you are done, end your response with EXACTLY one of:\n"
     "  ✅ completed\n"
     "  ❌ not completed: <reason>\n"
-    "  ⏳ LONG_RUNNING_IN_PROGRESS\n"
+    "  ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints \"TASK SUBMITTED\", then end your session immediately)"
 )
 
 # ── Stream timeout ──────────────────────────────────────────────────
@@ -35,5 +33,5 @@ STREAM_TIMEOUT_CONTINUATION_PROMPT = (
     "When you are done, end your response with EXACTLY one of:\n"
     "  ✅ completed\n"
     "  ❌ not completed: <reason>\n"
-    "  ⏳ LONG_RUNNING_IN_PROGRESS\n"
+    "  ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints \"TASK SUBMITTED\", then end your session immediately)\n"
 )
