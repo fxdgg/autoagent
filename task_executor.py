@@ -375,7 +375,7 @@ class SimpleTaskExecutor:
             # instead of rebuilding the full task prompt.
             _log_round = (parent_context or {}).get('round_label') or str(attempts)
             _is_continuation = False  # True for lightweight in-session follow-ups
-            if attempts > 1 and last_timeout_type in ("bash", "stream", "interrupt") and not should_reset:
+            if last_timeout_type in ("bash", "stream", "interrupt") and not should_reset:
                 # In-session continuation after BashTimeoutError,
                 # StreamTimeoutError, or user interrupt — the AI's
                 # context is intact, just tell it what happened.
@@ -2205,8 +2205,7 @@ class SubtaskExecutor:
         logger.info(f"  log session dir: {log_session_dir}")
 
         should_reset = True   # Whether to reset session before next retry
-        last_stream_timeout = False  # Track stream timeout for continuation
-        last_interrupt = False  # Track user interrupt for continuation
+        last_timeout_type = None  # "bash", "stream", or "interrupt"
 
         # Check if the task was interrupted by user (Ctrl+C) in a previous
         # run.  If the session was preserved, use in-session continuation.
@@ -2220,7 +2219,7 @@ class SubtaskExecutor:
             if _interrupt_pending:
                 state_manager.update_task_field(parent_task_id, "interrupt_pending", None)
         if _interrupt_pending and client.session_id:
-            last_interrupt = True
+            last_timeout_type = "interrupt"
             should_reset = False
             state_manager.update_task_field(sk, "interrupt_pending", None)
             logger.info(
@@ -2247,23 +2246,24 @@ class SubtaskExecutor:
 
             print(f"\n      Long-running task attempt #{attempt}")
 
-            # Build prompt for AI.  After a stream timeout or user
-            # interrupt, send a short continuation prompt instead of the
-            # full task prompt.
+            # Build prompt for AI.  After a timeout or user interrupt,
+            # send a short continuation prompt instead of the full task
+            # prompt (same logic as SimpleTaskExecutor).
             _is_continuation = False
-            if attempt > 1 and last_stream_timeout and not should_reset:
-                prompt = STREAM_TIMEOUT_CONTINUATION_PROMPT
-                last_stream_timeout = False
-                _is_continuation = True
-            elif last_interrupt and not should_reset:
-                prompt = INTERRUPT_CONTINUATION_PROMPT
-                last_interrupt = False
+            if last_timeout_type in ("bash", "stream", "interrupt") and not should_reset:
+                if last_timeout_type == "bash":
+                    prompt = BASH_TIMEOUT_CONTINUATION_PROMPT
+                elif last_timeout_type == "stream":
+                    prompt = STREAM_TIMEOUT_CONTINUATION_PROMPT
+                else:  # interrupt
+                    prompt = INTERRUPT_CONTINUATION_PROMPT
                 _is_continuation = True
             else:
                 prompt = self._build_long_running_prompt(
                     subtask, exec_script_path, attempt, state_manager,
                     parent_context=parent_context,
                 )
+            last_timeout_type = None
             should_reset = True  # Default: next retry will reset
             
             try:
@@ -2452,10 +2452,20 @@ class SubtaskExecutor:
             except AICallError as e:
                 logger.error(f"AI call failed for long-running task {subtask_id}: {e}")
                 print(f"      ❌ AI call error: {e}")
-                if isinstance(e, StreamTimeoutError):
+                if isinstance(e, BashTimeoutError):
                     should_reset = False
-                    last_stream_timeout = True
+                    last_timeout_type = "bash"
+                    print(f"      ⏰ Bash timeout detected — will continue in same session")
+                elif isinstance(e, SessionTimeoutError):
+                    should_reset = True
+                    last_timeout_type = "session"
+                    print(f"      ⏰ Session timeout detected — next attempt will start fresh")
+                elif isinstance(e, StreamTimeoutError):
+                    should_reset = False
+                    last_timeout_type = "stream"
                     print(f"      ⏰ Stream timeout detected — will continue in same session")
+                else:
+                    should_reset = True
                 state_manager.add_task_history(sk, {
                     "attempt": attempt,
                     "time": time.strftime("%Y-%m-%d %H:%M:%S"),
