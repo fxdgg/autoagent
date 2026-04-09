@@ -198,7 +198,7 @@ def build_system_prompt_coding_agent(
         "If a task requires a long-running command (e.g. compilation, benchmarking), "
         "use the `autoagent-exec` launcher instead of running it directly in Bash. "
         "When the launcher prints \"TASK SUBMITTED\", output:\n"
-        "  ⏳ LONG_RUNNING_IN_PROGRESS\n\n"
+        "  ⏳ LONG_RUNNING_IN_PROGRESS and END YOUR SESSION immediately.\n\n"
         "These markers are MANDATORY. Your response MUST end with one of them."
     )
 
@@ -213,7 +213,7 @@ def build_system_prompt_coding_agent(
             "(&&, |, ;, etc.) are passed correctly. For example:\n"
             f'  "{exec_script_path}" "cd build && cmake .. && make -j8"\n'
             "The launcher will auto-detach after the fast-run window and print \"TASK SUBMITTED\". "
-            "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS"
+            "When you see that, output: \u23f3 LONG_RUNNING_IN_PROGRESS and END YOUR SESSION immediately."
         )
 
     parts.append(
@@ -285,6 +285,9 @@ def build_workflow_section(task: dict, parent_context: dict) -> str:
     Returns the plain workflow lines (no wrapping tag — caller adds
     ``<workflow>``).  The current subtask is marked with ``→``.
 
+    A reminder is appended telling the AI to focus only on the current
+    step and not to perform work for later steps.
+
     Returns an empty string when there is no sibling information.
     """
     if not parent_context or not parent_context.get('subtasks'):
@@ -296,6 +299,11 @@ def build_workflow_section(task: dict, parent_context: dict) -> str:
         st_id = str(st['id'])
         marker = "→" if st_id == current_id else " "
         lines.append(f"{marker} {st_id}. {st['name']}")
+    lines.append("")
+    lines.append(
+        "IMPORTANT: Only work on the current step (→). "
+        "Do NOT perform work that belongs to later steps."
+    )
     return "\n".join(lines)
 
 

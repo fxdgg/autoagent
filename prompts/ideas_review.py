@@ -65,7 +65,6 @@ Evaluate the generated tasks against these criteria:
 3. **Type appropriateness**: Are task types chosen correctly?
    - Multi-step ideas should use nested/looping, not a single simple task.
    - Iterative optimize-test cycles should use looping, not nested.
-   - long_running is only used as a subtask, never top-level.
    - nested/looping CAN be used as subtask types (multi-level nesting is supported).
 4. **Completion criteria quality**: Is every completion_criteria specific, measurable,
    and objectively verifiable by an AI agent?

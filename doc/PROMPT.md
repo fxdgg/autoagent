@@ -119,7 +119,7 @@ The launcher will auto-detach after the fast-run window and print "TASK SUBMITTE
 ```
 
 ### 2.2 长时间运行任务执行 (Long-Running Task)
-用于 `long_running` 和 `long_running_once` 子任务的执行。
+用于 `long_running` 和 `long_running_once` 任务的执行。
 
 ```
 [system_prompt_prefix]

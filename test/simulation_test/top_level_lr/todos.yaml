@@ -1,0 +1,23 @@
+# =============================================================================
+# Top-level long_running task test
+# =============================================================================
+# Tests that long_running can be used as a top-level task (not just subtask).
+# Task 1: A top-level long_running task that succeeds after callback.
+# Task 2: A simple task that follows to verify sequencing.
+# =============================================================================
+
+description: |
+  Test project for top-level long_running task support.
+
+tasks:
+  - id: 1
+    name: "Run long benchmark"
+    type: long_running
+    completion_criteria: |
+      Benchmark completes successfully with exit code 0 and results written to benchmark_result.txt.
+
+  - id: 2
+    name: "Summarize results"
+    type: simple
+    completion_criteria: |
+      A summary of the benchmark results is written to summary.txt.

@@ -27,10 +27,10 @@ AutoAgent 通过调用 AI 编程助手来执行任务，**运行前必须确保�
 | AI Provider | 安装 & 登录 |
 |-------------|------------|
 | **CodeBuddy**（默认） | 安装 CodeBuddy IDE 插件或 CLI，确保已登录账号 |
-| **Claude Code** | `npm install -g @anthropic-ai/claude-code`，运行 `claude` 完成 OAuth 登录 |
-| **Gemini CLI** | `npm install -g @anthropic-ai/gemini-cli`，运行 `gemini` 完成登录 |
+| **Claude Code** | `npm install -g @anthropic-ai/claude-code`，运行 `claude` 完成登录 |
+| **Gemini CLI** | `npm install -g @google/gemini-cli`，运行 `gemini` 完成登录 |
+| **Codex** | `npm install -g @openai/codex`，运行 `codex` 完成登录 |
 | **OpenCode** | 安装 OpenCode CLI，配置 API Key |
-| **Codex** | 安装 Codex CLI，配置 API Key |
 
 验证工具可用：
 
@@ -165,11 +165,11 @@ AutoAgent 会自动按顺序执行任务。遇到 `looping` 任务时，AI 会�
 
 ### 💰 省 Token：按任务分配模型，简单活不烧钱
 
-AI 迭代优化动辄跑几十轮，Token 消耗是真实痛点。AutoAgent 支持**三级模型分配**，让你把贵的模型用在刀刃上：
+AI 迭代优化动辄跑几十轮，Token 消耗是真实痛点。AutoAgent 支持**四级模型分配**，让你把贵的模型用在刀刃上：
 
 ```bash
-# 全局：plan 用强模型拆任务，default 执行复杂任务，lite 跑简单活
-python orchestrator.py --model "plan:claude-opus-4.6;default:claude-sonnet-4;lite:glm-4-flash"
+# 全局：plan 用强模型拆任务，default 执行复杂任务，lite 跑简单活，evaluation 做失败分析和主任务评估
+python orchestrator.py --model "plan:claude-opus-4.6;default:claude-sonnet-4;lite:glm-4-flash;evaluation:claude-opus-4.6"
 ```
 
 还可以在 `todos.yaml` 中**逐任务指定模型**——跑命令、提交代码这类不需要推理的任务用 `lite`，分析瓶颈、设计方案用 `default`：
@@ -235,12 +235,12 @@ python orchestrator.py --resume abc12345   # 恢复指定会话
 
 | 特性 | 说明 |
 |------|------|
-| **4 种任务类型** | simple（单步）、nested（多子任务）、looping（N 轮迭代）、long_running（后台运行） |
+| **6 种任务类型** | simple（单步）、nested（多子任务）、looping（N 轮迭代）、long_running（后台运行），以及 simple_once / long_running_once（一次性变体） |
 | **Ideas 监听 & 自动拆解** | 后台监听 `ideas.md`，检测到变化自动拆解为任务并执行，随写随跑 |
 | **Preset 配置** | `config.yaml` 预设参数组合，避免每次输入大量参数 |
 | **完整日志系统** | 记录 AI 对话全过程，支持回溯和调试 |
 | **智能失败分析** | AI 自动分析失败根因，决定从哪个步骤重试 |
-| **模型分级调度** | 全局三角色（plan/default/lite）+ 任务级 `model` 字段，Token 精细控制 |
+| **模型分级调度** | 全局四角色（plan/default/lite/evaluation）+ 任务级 `model` 字段，Token 精细控制 |
 
 ---
 
@@ -306,7 +306,8 @@ python orchestrator.py --preset default
                   ┌─────────────────┐
                   │   AI Provider   │
                   │ CodeBuddy/Claude│
-                  │ /Gemini/OpenCode│
+                  │/Gemini/OpenCode │
+                  │     /Codex      │
                   └─────────────────┘
 ```
 
