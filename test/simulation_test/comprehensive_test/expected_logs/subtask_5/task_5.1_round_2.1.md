@@ -60,6 +60,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
         → 5.1. Prepare fallback scenario
           5.2. Run fragile transformation
           5.3. Verify fallback output
+
+        IMPORTANT: Only work on the current step (→). Do NOT perform work that belongs to later steps.
     </workflow>
 </context>
 

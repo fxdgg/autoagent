@@ -60,6 +60,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
         2.1. Iteration setup
         → 2.2. Process data
           2.3. Verify output
+
+        IMPORTANT: Only work on the current step (→). Do NOT perform work that belongs to later steps.
     </workflow>
 </context>
 ```

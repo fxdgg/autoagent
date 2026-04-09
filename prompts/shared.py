@@ -285,6 +285,9 @@ def build_workflow_section(task: dict, parent_context: dict) -> str:
     Returns the plain workflow lines (no wrapping tag — caller adds
     ``<workflow>``).  The current subtask is marked with ``→``.
 
+    A reminder is appended telling the AI to focus only on the current
+    step and not to perform work for later steps.
+
     Returns an empty string when there is no sibling information.
     """
     if not parent_context or not parent_context.get('subtasks'):
@@ -296,6 +299,11 @@ def build_workflow_section(task: dict, parent_context: dict) -> str:
         st_id = str(st['id'])
         marker = "→" if st_id == current_id else " "
         lines.append(f"{marker} {st_id}. {st['name']}")
+    lines.append("")
+    lines.append(
+        "IMPORTANT: Only work on the current step (→). "
+        "Do NOT perform work that belongs to later steps."
+    )
     return "\n".join(lines)
 
 

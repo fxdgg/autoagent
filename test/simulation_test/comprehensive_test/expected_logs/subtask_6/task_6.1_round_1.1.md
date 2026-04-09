@@ -60,6 +60,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
         → 6.1. Generate oversized prior context
           6.2. Retry with truncated context
           6.3. Finalize truncation validation
+
+        IMPORTANT: Only work on the current step (→). Do NOT perform work that belongs to later steps.
     </workflow>
 </context>
 ```

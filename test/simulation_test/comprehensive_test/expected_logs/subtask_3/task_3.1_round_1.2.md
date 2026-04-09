@@ -61,6 +61,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
           3.2. Run integration tests
           3.3. Deploy staging
           3.4. Smoke test staging
+
+        IMPORTANT: Only work on the current step (→). Do NOT perform work that belongs to later steps.
     </workflow>
 </context>
 

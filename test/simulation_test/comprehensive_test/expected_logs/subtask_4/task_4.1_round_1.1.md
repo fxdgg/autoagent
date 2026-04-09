@@ -59,6 +59,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
     <workflow>
         → 4.1. Generate report
           4.2. Validate report
+
+        IMPORTANT: Only work on the current step (→). Do NOT perform work that belongs to later steps.
     </workflow>
 </context>
 

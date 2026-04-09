@@ -63,6 +63,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
           1.3. Core processing
         → 1.4. Benchmark and validate
           1.5. Commit results
+
+        IMPORTANT: Only work on the current step (→). Do NOT perform work that belongs to later steps.
     </workflow>
 
     <previous_step_result (1.3)>
