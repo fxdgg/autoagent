@@ -11,6 +11,9 @@
 #   6. Iterate until the cumulative speedup target is met
 # =============================================================================
 
+description: |
+    Cufftdx optimization project.
+    
 tasks:
   # ==========================================================================
   # Task 1: Optimize cuFFTDx DCT3D Kernel (nested task with iterative loop)

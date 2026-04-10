@@ -822,6 +822,7 @@ class IdeasWatcher:
                 client, review_client, idea, parsed_data, result,
                 conv_logger=conv_logger,
                 next_id=next_id,
+                existing_todos_yaml=existing_todos_yaml,
             )
 
         # Human review loop: after AI review + validation passes, pause for human approval
@@ -847,6 +848,7 @@ class IdeasWatcher:
         raw_yaml_response: str,
         conv_logger: ConversationLogger = None,
         next_id: int = 1,
+        existing_todos_yaml: str = "",
     ) -> tuple:
         """Run the AI review loop followed by schema validation.
 
@@ -880,6 +882,7 @@ class IdeasWatcher:
                         review_round=review_round,
                         last_feedback=last_feedback,
                         next_id=next_id,
+                        existing_todos_yaml=existing_todos_yaml,
                     )
                     if review_passed:
                         print(f"   ✅ Review passed (round {review_round})")
@@ -967,6 +970,7 @@ class IdeasWatcher:
         review_round: int = 1,
         last_feedback: str = "",
         next_id: int = 1,
+        existing_todos_yaml: str = "",
     ) -> tuple:
         """
         Send generated tasks to a fresh-context reviewer AI for quality check.
@@ -1011,6 +1015,7 @@ class IdeasWatcher:
             idea_content=idea['content'],
             temp_tasks_path=temp_tasks_path,
             next_id=next_id,
+            existing_todos_yaml=existing_todos_yaml,
         )
 
         try:
