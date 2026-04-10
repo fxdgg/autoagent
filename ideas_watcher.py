@@ -592,11 +592,6 @@ class IdeasWatcher:
             scoped_desc = parsed_data.get(scoped_key)
             if scoped_desc is not None and not isinstance(scoped_desc, str):
                 all_errors.append(f"'{scoped_key}' must be a string")
-            # Also reject root-level description in later batches
-            if parsed_data.get('description') is not None:
-                all_errors.append(
-                    f"Later batches should use '{scoped_key}' instead of root-level 'description'"
-                )
 
         tasks = parsed_data.get('tasks', [])
         if not tasks:

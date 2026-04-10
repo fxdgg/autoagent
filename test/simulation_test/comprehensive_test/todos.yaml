@@ -39,11 +39,20 @@
 #     2.1  skipped (once)
 #     2.2  simple         — succeeds (no stale fix leak from loop 1)
 #     2.3  simple         — succeeds
+#
+# ---- Task 7: simple ----
+# Tests: round-scoped description (description@7).
+#        The executor should inject description@7 instead of the root-level
+#        description into <project_description>.
 # =============================================================================
 
 description: >
   Comprehensive test project exercising all prompt-building paths
   for nested and looping task executors.
+
+description@7: >
+  Round-scoped description for task 7: validates that the orchestrator
+  selects description@7 over the root-level description.
 
 tasks:
   # ==========================================================================
@@ -322,3 +331,16 @@ tasks:
           Final validation recorded.
         initial_hint: |
           Summarize the truncation validation results.
+
+  # ==========================================================================
+  # Task 7: Simple — round-scoped description coverage
+  # ==========================================================================
+  # Tests: description@7 is used in <project_description> instead of root
+  #        description. Verifies _get_description_for_task() selects correctly.
+  - id: 7
+    name: "Round-scoped description validation"
+    type: simple
+    completion_criteria: |
+      Round-scoped description verified in prompt context.
+    initial_hint: |
+      Verify that description@7 appears in the project context.

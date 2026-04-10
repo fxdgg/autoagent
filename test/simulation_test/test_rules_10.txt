@@ -746,3 +746,10 @@ Final truncation validation succeeded:
     "analysis": "Oversized context was truncated safely in downstream prompts, retry analysis remained actionable, and the final checkpoint reconstruction plus validation completed successfully.",
     "confidence": "high"
 }
+---RULE---
+# --- Rule 67: Task 7 (simple, round-scoped description) - COMPLETED ---
+Round-scoped description validation passed:
+- description@7 was correctly injected into the prompt context
+- Root-level description was not used for this task
+
+✅ completed

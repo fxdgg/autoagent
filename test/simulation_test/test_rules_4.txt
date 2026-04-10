@@ -45,7 +45,7 @@
 # --- Rule 1: Idea 1 decomposition ---
 # Tests: AI decomposes the first idea (Use __sincosf intrinsic) into a simple task
 # IdeasWatcher calls client.ask() with the idea content and expects YAML back
-description: "Optimize cuFFTDx DCT3D kernel by replacing separate trig calls with fused intrinsics"
+description@2: "Optimize cuFFTDx DCT3D kernel by replacing separate trig calls with fused intrinsics"
 tasks:
   - id: 2
     name: "Replace cosf/sinf with __sincosf intrinsic"
@@ -67,7 +67,7 @@ The task decomposition looks good:
 ---RULE---
 # --- Rule 3: Idea 2 decomposition ---
 # Tests: AI decomposes the second idea (shared memory transpose) into a nested task
-description: "Optimize cuFFTDx DCT3D kernel with shared memory transpose for non-X axis"
+description@3: "Optimize cuFFTDx DCT3D kernel with shared memory transpose for non-X axis"
 tasks:
   - id: 3
     name: "Implement shared memory transpose for non-X axis operations"
@@ -98,7 +98,7 @@ Please add initial_hint to the main task and be more specific in subtask 3.2's c
 ---RULE---
 # --- Rule 5: Idea 2 revision ---
 # Tests: Original AI revises the tasks based on reviewer feedback
-description: "Optimize cuFFTDx DCT3D kernel with shared memory transpose for non-X axis"
+description@3: "Optimize cuFFTDx DCT3D kernel with shared memory transpose for non-X axis"
 tasks:
   - id: 3
     name: "Implement shared memory transpose for non-X axis operations"
