@@ -352,6 +352,7 @@ class TodoOrchestrator:
             self.ideas_watcher = None
 
         self.project_description = ''
+        self.scoped_descriptions = {}
         self.todos = self._load_todos(allow_empty=self.ideas_watcher is not None)
 
     def _load_todos(self, allow_empty: bool = False) -> list:
@@ -399,6 +400,19 @@ class TodoOrchestrator:
             raise ConfigError(f"'description' must be a string in {self.todos_file}")
         self.project_description = description or ''
 
+        # Extract round-scoped descriptions (description@N)
+        self.scoped_descriptions = {}
+        for key, val in config.items():
+            if key.startswith('description@'):
+                if val and not isinstance(val, str):
+                    raise ConfigError(f"'{key}' must be a string in {self.todos_file}")
+                try:
+                    scope_id = int(key.split('@')[1])
+                    if val:
+                        self.scoped_descriptions[scope_id] = val
+                except (ValueError, IndexError):
+                    raise ConfigError(f"Invalid round-scoped description key '{key}' in {self.todos_file}")
+
         # Validate each task
         for task in tasks:
             self._validate_task(task)
@@ -417,6 +431,30 @@ class TodoOrchestrator:
             logger.info(f"Reloaded {len(self.todos)} tasks from {self.todos_file}")
         except ConfigError as e:
             logger.error(f"Failed to reload todos: {e}")
+
+    def _get_description_for_task(self, task_id) -> str:
+        """Return the most relevant description for a given task ID.
+
+        Finds the round-scoped description with the largest scope_id <= task_id.
+        Falls back to root-level description if no scoped match exists.
+        """
+        if not self.scoped_descriptions:
+            return self.project_description
+
+        # Convert task_id to int for comparison (handles float IDs like 1.0)
+        try:
+            tid = int(task_id)
+        except (ValueError, TypeError):
+            return self.project_description
+
+        best_scope = None
+        for scope_id in sorted(self.scoped_descriptions.keys()):
+            if scope_id <= tid:
+                best_scope = scope_id
+
+        if best_scope is not None:
+            return self.scoped_descriptions[best_scope]
+        return self.project_description
 
     def _validate_task(self, task: dict, is_subtask: bool = False):
         """
@@ -676,23 +714,24 @@ class TodoOrchestrator:
         )
         
         try:
+            task_description = self._get_description_for_task(task_id)
             if task_type == 'simple':
                 return self.simple_executor.execute(
                     task, client, self.state_manager, is_subtask=False,
                     conv_logger=self.conv_logger,
-                    project_description=self.project_description,
+                    project_description=task_description,
                 )
             elif task_type == 'nested':
                 return self.nested_executor.execute(
                     task, client, self.state_manager,
                     conv_logger=self.conv_logger,
-                    project_description=self.project_description,
+                    project_description=task_description,
                 )
             elif task_type == 'looping':
                 return self.looping_executor.execute(
                     task, client, self.state_manager,
                     conv_logger=self.conv_logger,
-                    project_description=self.project_description,
+                    project_description=task_description,
                 )
             elif task_type == 'long_running':
                 lr_executor = SubtaskExecutor(
@@ -704,7 +743,7 @@ class TodoOrchestrator:
                     conv_logger=self.conv_logger,
                     parent_task_id=None,
                     parent_context={
-                        'project_description': self.project_description,
+                        'project_description': task_description,
                     },
                 )
                 return result.success

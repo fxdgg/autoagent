@@ -566,20 +566,38 @@ class IdeasWatcher:
         return errors
 
     @staticmethod
-    def _validate_tasks_schema(parsed_data: dict) -> tuple:
+    def _validate_tasks_schema(parsed_data: dict, next_id: int = 1) -> tuple:
         """Validate the schema of the parsed YAML data (tasks and description).
+
+        Args:
+            parsed_data: Parsed YAML data containing tasks and description.
+            next_id: Starting ID for new tasks. When 1, root-level ``description``
+                is required. When > 1, ``description@{next_id}`` is optional.
 
         Returns:
             (valid: bool, errors: List[str])
         """
         all_errors: List[str] = []
-        
-        description = parsed_data.get('description')
-        if description is None or not str(description).strip():
-            all_errors.append("Root-level 'description' field is missing or empty")
-        elif not isinstance(description, str):
-            all_errors.append("'description' must be a string")
-            
+
+        if next_id == 1:
+            # First batch: root-level description is required
+            description = parsed_data.get('description')
+            if description is None or not str(description).strip():
+                all_errors.append("Root-level 'description' field is missing or empty")
+            elif not isinstance(description, str):
+                all_errors.append("'description' must be a string")
+        else:
+            # Later batches: description@{next_id} is optional
+            scoped_key = f'description@{next_id}'
+            scoped_desc = parsed_data.get(scoped_key)
+            if scoped_desc is not None and not isinstance(scoped_desc, str):
+                all_errors.append(f"'{scoped_key}' must be a string")
+            # Also reject root-level description in later batches
+            if parsed_data.get('description') is not None:
+                all_errors.append(
+                    f"Later batches should use '{scoped_key}' instead of root-level 'description'"
+                )
+
         tasks = parsed_data.get('tasks', [])
         if not tasks:
             all_errors.append("No tasks found")
@@ -629,7 +647,7 @@ class IdeasWatcher:
             print(f"\n   💡 Processing idea: {idea['title']}")
             self._record_idea_state(idea, "in_progress")
             try:
-                parsed_data = self._decompose_idea_to_tasks(
+                parsed_data, next_id = self._decompose_idea_to_tasks(
                     client, idea,
                     review_client=review_client,
                     conv_logger=conv_logger,
@@ -638,7 +656,7 @@ class IdeasWatcher:
                 )
                 if parsed_data and parsed_data.get('tasks'):
                     new_tasks = parsed_data['tasks']
-                    self._append_tasks_to_todos(parsed_data)
+                    self._append_tasks_to_todos(parsed_data, next_id=next_id)
                     task_ids = [t.get('id') for t in new_tasks if t.get('id') is not None]
                     self._record_idea_state(idea, "completed", task_ids=task_ids)
                     print(f"   ✅ Added {len(new_tasks)} task(s) from idea: {idea['title']}")
@@ -667,7 +685,7 @@ class IdeasWatcher:
         conv_logger: ConversationLogger = None,
         idea_index: int = 1,
         human_review: bool = False,
-    ) -> dict:
+    ) -> tuple:
         """
         Call AI to decompose an idea into structured TODO tasks.
         
@@ -689,16 +707,39 @@ class IdeasWatcher:
             human_review: If True, pause for human approval after AI review passes
             
         Returns:
-            dict: Parsed data containing 'tasks' and 'description'
+            tuple: (parsed_data, next_id) where parsed_data is a dict containing
+                'tasks' and optionally description fields, and next_id is the
+                starting task ID used for this batch.
         """
-        # Load existing tasks to determine the next available task ID
-        existing_tasks = self._load_existing_tasks()
+        # Load existing config to determine the next available task ID
+        # and to provide existing todos context to the decomposition AI
+        existing_config = self._load_existing_config()
+        existing_tasks = existing_config.get('tasks', [])
         max_id = 0
         for task in existing_tasks:
             tid = task.get('id', 0)
             if isinstance(tid, (int, float)):
                 max_id = max(max_id, int(tid))
         next_id = max_id + 1
+
+        # Serialize existing todos for the decomposition prompt (read-only context)
+        existing_todos_yaml = ""
+        if existing_tasks:
+            # Build a config snapshot with descriptions + tasks for context
+            snapshot = {}
+            desc = existing_config.get('description', '')
+            if desc:
+                snapshot['description'] = desc
+            # Include any round-scoped descriptions (description@N)
+            for key, val in existing_config.items():
+                if key.startswith('description@') and isinstance(val, str):
+                    snapshot[key] = val
+            snapshot['tasks'] = existing_tasks
+            existing_todos_yaml = yaml.dump(
+                snapshot, Dumper=_BlockStyleDumper,
+                default_flow_style=False, allow_unicode=True,
+                sort_keys=False, width=120,
+            )
 
         # Resolve paths for the prompt
         temp_tasks_path = self._get_temp_tasks_path()
@@ -730,6 +771,7 @@ class IdeasWatcher:
                     idea_content=idea['content'],
                     next_id=next_id,
                     temp_tasks_path=temp_tasks_path,
+                    existing_todos_yaml=existing_todos_yaml,
                 )
 
                 try:
@@ -784,6 +826,7 @@ class IdeasWatcher:
             parsed_data, result = self._review_and_validate_loop(
                 client, review_client, idea, parsed_data, result,
                 conv_logger=conv_logger,
+                next_id=next_id,
             )
 
         # Human review loop: after AI review + validation passes, pause for human approval
@@ -791,13 +834,14 @@ class IdeasWatcher:
             parsed_data = self._human_review_loop(
                 client, review_client, idea, parsed_data, result,
                 conv_logger=conv_logger,
+                next_id=next_id,
             )
 
         # Write section end separator
         if conv_logger:
             conv_logger.log_ideas_section_end()
 
-        return parsed_data or {}
+        return (parsed_data or {}, next_id)
 
     def _review_and_validate_loop(
         self,
@@ -807,6 +851,7 @@ class IdeasWatcher:
         parsed_data: dict,
         raw_yaml_response: str,
         conv_logger: ConversationLogger = None,
+        next_id: int = 1,
     ) -> tuple:
         """Run the AI review loop followed by schema validation.
 
@@ -839,6 +884,7 @@ class IdeasWatcher:
                         conv_logger=conv_logger,
                         review_round=review_round,
                         last_feedback=last_feedback,
+                        next_id=next_id,
                     )
                     if review_passed:
                         print(f"   ✅ Review passed (round {review_round})")
@@ -863,7 +909,7 @@ class IdeasWatcher:
             if not parsed_data or not parsed_data.get('tasks'):
                 break
 
-            valid, errors = self._validate_tasks_schema(parsed_data)
+            valid, errors = self._validate_tasks_schema(parsed_data, next_id=next_id)
             if valid:
                 print(f"   ✅ Schema validation passed")
                 break
@@ -893,6 +939,7 @@ class IdeasWatcher:
                 revision_prompt = build_revision_prompt(
                     temp_tasks_path=temp_tasks_path,
                     human_feedback=validation_feedback,
+                    next_id=next_id,
                 )
                 try:
                     if conv_logger:
@@ -924,6 +971,7 @@ class IdeasWatcher:
         conv_logger: ConversationLogger = None,
         review_round: int = 1,
         last_feedback: str = "",
+        next_id: int = 1,
     ) -> tuple:
         """
         Send generated tasks to a fresh-context reviewer AI for quality check.
@@ -967,6 +1015,7 @@ class IdeasWatcher:
         review_prompt = build_ideas_review_prompt(
             idea_content=idea['content'],
             temp_tasks_path=temp_tasks_path,
+            next_id=next_id,
         )
 
         try:
@@ -1040,6 +1089,7 @@ class IdeasWatcher:
         parsed_data: dict,
         raw_yaml_response: str,
         conv_logger: ConversationLogger = None,
+        next_id: int = 1,
     ) -> dict:
         """
         Pause for human approval of the generated tasks.
@@ -1088,7 +1138,7 @@ class IdeasWatcher:
                 edited_data = self._read_tasks_from_temp_file()
                 if edited_data is not None:
                     # Validate the human-edited tasks
-                    valid, errors = self._validate_tasks_schema(edited_data)
+                    valid, errors = self._validate_tasks_schema(edited_data, next_id=next_id)
                     if valid:
                         parsed_data = edited_data
                         print(f"   ✅ Human approved the tasks (loaded from temp file).")
@@ -1138,6 +1188,7 @@ class IdeasWatcher:
                 revision_prompt = build_revision_prompt(
                     temp_tasks_path=self._get_temp_tasks_path(),
                     human_feedback=human_feedback,
+                    next_id=next_id,
                 )
                 try:
                     if conv_logger:
@@ -1156,7 +1207,7 @@ class IdeasWatcher:
                     if new_parsed_data and new_parsed_data.get('tasks'):
                         parsed_data = new_parsed_data
                         # Run validation on the new tasks
-                        valid, errors = self._validate_tasks_schema(parsed_data)
+                        valid, errors = self._validate_tasks_schema(parsed_data, next_id=next_id)
                         if not valid:
                             print(f"   ⚠️  AI revision has schema errors:")
                             for e in errors:
@@ -1241,29 +1292,40 @@ class IdeasWatcher:
 
     def _load_existing_tasks(self) -> list:
         """Load existing tasks from todos.yaml."""
+        config = self._load_existing_config()
+        return config.get('tasks', [])
+
+    def _load_existing_config(self) -> dict:
+        """Load full existing config (tasks + descriptions) from todos.yaml."""
         if not os.path.exists(self.todos_file):
-            return []
+            return {}
         try:
             with open(self.todos_file, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
             if config and isinstance(config, dict):
-                return config.get('tasks', [])
+                return config
         except Exception as e:
             logger.error(f"Failed to load todos file: {e}")
-        return []
+        return {}
 
-    def _append_tasks_to_todos(self, parsed_data: dict):
+    def _append_tasks_to_todos(self, parsed_data: dict, next_id: int = 1):
         """
         Append new tasks to todos.yaml.
         
         If the file doesn't exist, creates it with proper structure.
         If it exists, reads existing tasks and appends new ones.
         
+        For the first batch (next_id == 1), the root-level ``description``
+        field is written.  For later batches, a round-scoped
+        ``description@{next_id}`` field is used instead.
+        
         Args:
-            parsed_data: dict containing 'tasks' and 'description'
+            parsed_data: dict containing 'tasks' and optionally
+                'description' or 'description@{next_id}'
+            next_id: Starting task ID for this batch (used for
+                round-scoped description key)
         """
         new_tasks = parsed_data.get('tasks', [])
-        new_description = parsed_data.get('description', '')
         if not new_tasks:
             return
 
@@ -1285,9 +1347,30 @@ class IdeasWatcher:
         # Append new tasks
         config['tasks'].extend(new_tasks)
         
-        # Overwrite description if provided
-        if new_description:
-            config['description'] = new_description
+        # Handle description: first batch uses root-level, later batches use round-scoped
+        # DEFENSIVE: Never overwrite existing descriptions to preserve user context
+        if next_id == 1:
+            new_description = parsed_data.get('description', '')
+            if new_description:
+                if 'description' not in config:
+                    config['description'] = new_description
+                else:
+                    logger.warning(
+                        f"Root 'description' already exists in {self.todos_file}; "
+                        f"skipping overwrite (next_id={next_id}). Existing description preserved."
+                    )
+        else:
+            scoped_key = f'description@{next_id}'
+            new_description = parsed_data.get(scoped_key, '')
+            if new_description:
+                if scoped_key not in config:
+                    config[scoped_key] = new_description
+                else:
+                    logger.warning(
+                        f"Description field '{scoped_key}' already exists in {self.todos_file}; "
+                        f"skipping overwrite to preserve existing context. "
+                        f"Use a different next_id to add new descriptions."
+                    )
 
         # Write back
         try:

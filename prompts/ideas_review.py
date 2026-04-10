@@ -15,6 +15,7 @@ from prompts.shared import (
 def build_ideas_review_prompt(
     idea_content: str,
     temp_tasks_path: str,
+    next_id: int = 1,
 ) -> str:
     """Build the prompt that asks a reviewer AI to evaluate generated tasks.
 
@@ -24,6 +25,7 @@ def build_ideas_review_prompt(
     Args:
         idea_content: Raw idea text.
         temp_tasks_path: File path where corrected YAML should be written.
+        next_id: Starting task ID for this batch (used for ID validation context).
     """
     task_design_guide = load_task_design_guide()
 
@@ -31,6 +33,20 @@ def build_ideas_review_prompt(
     # system_prompt_prefix here, because the reviewer must be an
     # independent expert, not the same persona as the coding agent.
     role_line = ROLE_TASK_REVIEWER
+
+    # Description criterion varies by batch
+    if next_id == 1:
+        description_criterion = (
+            '4. **Description field**: Root-level `description` must be present, meaningful,\n'
+            '   and cover goal/architecture/key paths/commands/constraints as applicable.\n'
+            '   Missing = review failure. See §3.1.'
+        )
+    else:
+        description_criterion = (
+            f'4. **Description field**: `description@{next_id}` is optional. If present, it must\n'
+            f'   be meaningful and cover goal/architecture/key paths/commands/constraints.\n'
+            f'   Root-level `description` must NOT be included (it belongs to the first batch). See §3.1.'
+        )
 
     return f"""{role_line} Review the following TODO task decomposition
 for quality, completeness, and correctness.
@@ -51,19 +67,23 @@ and best practices when reviewing the generated tasks.
 {task_design_guide}
 </task_design_guide>
 
+<id_context>
+New top-level task IDs must start from {next_id}.
+Subtask IDs use dot notation: {next_id}.1, {next_id}.2, etc.
+IDs below {next_id} are already in use by existing tasks.
+</id_context>
+
 <review_criteria>
 Evaluate the generated tasks against these criteria. Refer to <task_design_guide> for
 detailed rules and examples on each point.
 
-1. **YAML & schema**: Well-formed YAML; correct IDs (integers + dot notation); all
-   required fields present per type; `*_once` types only as subtasks.
+1. **YAML & schema**: Well-formed YAML; correct IDs starting from {next_id}
+   (integers + dot notation); all required fields present per type; `*_once` types only as subtasks.
 2. **Type selection**: `nested` vs `looping` vs `simple` chosen correctly per §4.1;
    commands > 1 min use `long_running`; `*_once` used sparingly.
 3. **Decomposition granularity**: No over-decomposition (merge steps that fail together)
    and no under-decomposition (split logically independent steps). See §4.2.
-4. **Root-level `description`**: Present, meaningful, covers goal/architecture/key
-   paths/commands/constraints as applicable. Missing = review failure. 
-   Order of tasks and description fields doesn't matter. See §3.1.
+{description_criterion}
 5. **`completion_criteria`**: Specific, measurable, AI-verifiable. Top-level criteria
    describe end state; subtask criteria describe step output. No unverifiable or
    process-describing criteria. See §5.1.
@@ -82,14 +102,14 @@ detailed rules and examples on each point.
 
 <instructions>
 If the tasks pass ALL criteria, respond with EXACTLY:
-\u2705 completed
+✅ completed
 
 If the tasks need improvement:
 DIRECTLY modify the YAML file at:
     {temp_tasks_path}
 Do NOT include markdown code fences or any extra text in the file.
 After modifying the file, respond with EXACTLY: 
-\u274c not completed
+❌ not completed
 </instructions>
 """
 
@@ -97,6 +117,7 @@ After modifying the file, respond with EXACTLY:
 def build_revision_prompt(
     temp_tasks_path: str,
     human_feedback: str = "",
+    next_id: int = 1,
 ) -> str:
     """Build a revision prompt sent to the reviewer AI after human feedback.
 
@@ -107,6 +128,7 @@ def build_revision_prompt(
     Args:
         temp_tasks_path: File path where revised YAML should be written.
         human_feedback: Free-form feedback text from the human user (may be empty).
+        next_id: Starting task ID for this batch (for description field guidance).
     """
     parts: list[str] = []
 
@@ -123,13 +145,19 @@ Please read this file to see the current tasks.""")
 {fb_display}
 </human_feedback>""")
 
+    # Description field guidance varies by batch
+    if next_id == 1:
+        desc_guidance = "a `description` string and a `tasks` list"
+    else:
+        desc_guidance = f"a `tasks` list (and optionally a `description@{next_id}` string)"
+
     parts.append(f"""<instructions>
 Please revise the task decomposition based on the information above.
 Remember to validate against all review criteria from the initial review
 (schema correctness, type appropriateness, completion criteria quality,
-decomposition granularity, root-level description, hint quality, retry strategy, etc.).
+decomposition granularity, description field, hint quality, retry strategy, etc.).
 
-Write ONLY valid YAML (a dictionary containing a `description` string and a `tasks` list) into the following file:
+Write ONLY valid YAML (a dictionary containing {desc_guidance}) into the following file:
   {temp_tasks_path}
 
 Do NOT include markdown code fences or any extra text in the file.
