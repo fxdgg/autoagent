@@ -13,7 +13,7 @@ The AI agent can do anything a developer can: edit code, run commands, read logs
 |----------|---------------------------|
 | **Fully autonomous** | No human in the loop. `completion_criteria` and `initial_hint` must be specific enough for the AI to act without clarification. |
 | **Context window limit** | Avoid tasks requiring extremely large files/outputs in a single step. |
-| **No shared conversation context between tasks and subtasks** | Tasks and subtasks **share the filesystem only**. Only a summary of the previous subtask is passed forward. Always persist intermediate results to files. |
+| **No shared conversation context between tasks and subtasks** | Tasks and subtasks **share the filesystem only**. Each subtask automatically receives a workflow overview and a summary of the previous step, but **detailed intermediate results must be persisted to files** — conversation context is NOT shared. |
 | **Sequential execution** | Top-level tasks run in ascending ID order. Task N+1 starts only after task N completes or exhausts retries. |
 | **Failed tasks don't block** | A failed task does NOT prevent subsequent tasks from running. Later tasks may depend on artifacts produced by earlier tasks. Design ordering carefully. |
 
@@ -28,14 +28,15 @@ The AI agent can do anything a developer can: edit code, run commands, read logs
 | `simple` | AI works autonomously, then self-evaluates completion | Top-level or subtask | Code changes, running tests, file analysis, quick builds |
 | `nested` | Sequential subtasks + AI evaluation of overall completion; When fails consecutively, retries with guidance | Top-level or subtask | Multi-step workflows where overall success depends on combined result |
 | `looping` | Repeat all subtasks for fixed N iterations; NO AI evaluation for overall completion | Top-level or subtask | Iterative optimization cycles (profile → optimize → benchmark) |
-| `long_running` | AI launches a long-running background command (e.g. training) via a tool called `autoagent-exec`, which avoids CLI or SDK timeout | Top-level or subtask | Any command that may take > 1 minute (builds, tests, benchmarks, training, profiling) |
+| `long_running` | AI launches a long-running background command (e.g. training) that runs without session timeout | Top-level or subtask | Any command that may take > 1 minute (builds, tests, benchmarks, training, profiling) |
 | `simple_once` | Like `simple`, but never re-executed once completed | Subtask only | One-time setup (env prep, dependency install, data download) |
 | `long_running_once` | Like `long_running`, but never re-executed once completed | Subtask only | Expensive one-time operations (Docker build, baseline profiling) |
 
 ### Key Notes
 
 - **Prefer `long_running` over `simple`** for any command that may take > 1 minute. If a command runs too long inside `simple`, the AI session may hit a timeout, wasting all progress. `long_running` runs the command in the background with proper monitoring — minimal overhead, prevents session timeouts.
-- **`*_once` types**: Use sparingly. Most subtasks SHOULD be re-executable. Don't use `*_once` if a subtask's output might become stale after other subtasks run.
+- **`*_once` types**: Use sparingly. Most subtasks SHOULD be re-executable. Don't use `*_once` if a subtask's output might become stale after other subtasks run. Use `long_running_once` instead of `long_running` when the command is **idempotent setup** (e.g., Docker build, baseline profiling) that should survive retries of later subtasks.
+- **Looping iteration failure stops the loop**: If any single iteration fails after exhausting its retry attempts, the remaining iterations are NOT executed. Design subtask `completion_criteria` to be tolerant of partial or unexpected results if you want the loop to continue through difficult iterations.
 - **Nested subtasks**: `nested`/`looping` can be used as subtask types for multi-level nesting. Keep nesting shallow (2–3 levels max).
 
 ---
@@ -149,6 +150,7 @@ description: |
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `initial_hint` | string | No | Context and guidance for the executor AI (file paths, commands, troubleshooting) |
+| `max_attempts` | int | No | Max retry attempts (default: 5). When a task fails, it is retried up to this many times with feedback from previous attempts. |
 
 **nested:**
 
@@ -231,7 +233,7 @@ subtasks:
     # round-trip. Keeping implement + build together is key.
   - id: 1.3
     name: "Benchmark, validate, make keep/discard decision, and write report"
-    max_attempts: 1    # fail fast → parent retries from 1.1
+    max_attempts: 1    # fail fast → parent decides retry strategy
 ```
 
 **Recommended pattern**: Group strongly dependent steps into one subtask, but **separate "thinking" from "doing"**:
@@ -269,10 +271,10 @@ Subtasks don't share conversation context. Use the filesystem:
 | Task type | Evaluation method |
 |-----------|-------------------|
 | `simple` / `long_running` | AI self-evaluates. Criteria must be **objectively verifiable by the AI**. |
-| `nested` | Only the top-level `completion_criteria` determines overall pass/fail. |
-| `looping` | No pass/fail evaluation. Done when all `repeat_count` iterations finish. |
+| `nested` | Subtask criteria determine subtask-level pass/fail. The top-level `completion_criteria` is then evaluated to determine overall pass/fail and whether more rounds are needed. |
+| `looping` | Subtask criteria determine subtask-level pass/fail, but no top-level pass/fail evaluation. Done when all `repeat_count` iterations finish. |
 
-> **Note:** While `looping` tasks do not have overall AI evaluation, their `completion_criteria` is still visible to subtask AI executors. This gives each subtask awareness of the overall goal of the parent task, so write meaningful criteria even for `looping` tasks.
+> **Note:** While `looping` tasks do not have overall AI evaluation, their top-level `completion_criteria` is still visible to subtask AI executors. This gives each subtask awareness of the overall goal of the parent task, so write meaningful criteria even for `looping` tasks.
 
 **Rules:**
 1. Be specific and measurable — the AI must be able to verify by reading files, checking output, or running tests.
@@ -374,6 +376,17 @@ Using `system_prompt_prefix` to restrict behavior is especially useful for execu
 
 ### 5.4 `max_attempts`
 
+**Scope of `max_attempts` differs by level:**
+
+| Level | Field | What counts as one attempt |
+|-------|-------|---------------------------|
+| Top-level `simple` / `long_running` | `max_attempts` | One full execution of the task |
+| Top-level `nested` | `max_attempts` | One full round: all subtasks run → overall evaluation |
+| Top-level `looping` | `max_attempts_per_loop` | One retry round within a single iteration |
+| Subtask (any type) | `max_attempts` | One execution of that subtask within the parent's current round |
+
+**Choosing a value:**
+
 | Value | When to use |
 |-------|-------------|
 | `1` | **Execution-only subtasks** that just run code written by a sibling (build, benchmark, test). If the command fails, the cause is in sibling code — retrying won't help. `max_attempts: 1` propagates failure immediately to the parent's failure analysis. |
@@ -435,255 +448,20 @@ When a subtask fails, earlier subtasks may be retried with guidance.
 - Align subtask boundaries with logical checkpoints — retrying from step 2 or 3 should be meaningful.
 - Avoid subtasks that silently fail — ensure errors are visible in output.
 
-### 6.4 Looping Tasks: Iteration Discipline
+## 7. Task-Type-Specific Best Practices
 
-Looping tasks repeat the same subtask sequence N times. Without careful design, the AI will forget what it tried in previous iterations (no shared context) and repeat the same failed strategies. The following patterns — proven in production — address this:
+The patterns above (§6.1–6.3) apply universally. For detailed patterns tailored to specific task types, read the relevant guide:
 
-**Pattern 1: Separate documentation commits from code commits.**
+| Task type | Guide | When to use |
+|-----------|-------|-------------|
+| **Build & Ship** | `build_and_ship.md` | Implement features, fix bugs, refactor code |
+| **Testing & Verification** | `testing_and_verification.md` | Run tests, fix failures, improve coverage |
+| **Iterative Optimization** | `iterative_optimization.md` | Profiling → optimize → benchmark → evaluate cycles |
+| **Data Pipelines / ETL** | `data_pipelines.md` | Extract, transform, load, and validate data |
+| **Setup & Deployment** | `setup_and_deployment.md` | Environment setup, dependency install, deployment |
+| **Research & Analysis** | `research_and_analysis.md` | Code analysis, architecture review, report writing |
 
-In an iteration that proposes an idea, implements it, and then evaluates it, commit the idea/hypothesis documentation *before* implementing code. This way, if the code is rolled back on failure, the documentation survives and informs the next iteration.
-
-```yaml
-# In the "propose hypothesis" subtask:
-initial_hint: |
-  Commit documentation SEPARATELY before implementation begins:
-    git add -A && git commit -m "doc: hypothesis for experiment 05"
-  This ensures the idea description survives a code rollback.
-```
-
-**Pattern 2: Maintain a failure pattern database.**
-
-Beyond a simple log, maintain a structured file that classifies *why* experiments failed. The AI should read this at the start of each iteration and update it at the end.
-
-```yaml
-# In the "propose hypothesis" subtask:
-initial_hint: |
-  Read failure_patterns.md FIRST to avoid repeating known failures.
-  If the last 3+ experiments all failed in the same category,
-  try a completely different direction.
-
-# In the "evaluate results" subtask:
-initial_hint: |
-  Update failure_patterns.md:
-  - If discarded: classify the failure (new pattern or existing?)
-  - If kept: add to "Promising Directions" with what worked and why
-```
-
-**Pattern 3: Re-evaluate the bottleneck every iteration.**
-
-Don't assume the bottleneck is the same as the previous round. Instruct the AI to compute a diagnostic metric at the start of each iteration to determine where to focus.
-
-```yaml
-initial_hint: |
-  Identify the current bottleneck EVERY round (don't assume it's the same):
-  - Compute ratio = E2E_error / baseline_error
-  - ratio > 5× → focus on module A
-  - ratio < 2× → focus on module B
-```
-
-**Pattern 4: Define a decision matrix for keep/discard.**
-
-Don't let the AI make subjective keep/discard decisions. Provide a structured decision matrix in the evaluation subtask's `initial_hint` or `system_prompt_prefix`:
-
-```yaml
-system_prompt_prefix: |
-  You are a strict experiment evaluator. Apply the decision matrix:
-  - exe or validation failed → MUST revert
-  - Primary metric improved ≥5% AND no other metric worsened >3% → keep
-  - All metrics within ±1% → discard (no meaningful change)
-  - Mixed results not covered above → discard
-```
-
-**Pattern 5: Reference on-demand deep docs.**
-
-For complex projects, not all documentation needs to be read every iteration. List deep docs in `initial_hint` with conditions for when to read them:
-
-```yaml
-initial_hint: |
-  On-demand docs (read ONLY if your idea involves these areas):
-  - NN₁ architecture changes → read docs/design/00_overview.md
-  - Loss function changes → read docs/design/05_training.md §8
-```
-
-**Pattern 6: Clean workspace at iteration start.**
-
-Since subtasks share the filesystem, the start of each iteration may find uncommitted changes or stashed work from a previous failed attempt. Instruct the first subtask to handle this:
-
-```yaml
-initial_hint: |
-  First: git status. If not clean:
-  - Documentation changes → commit them
-  - Code changes → git stash or git checkout
-```
-
-**Pattern 7: Consult history across branches or previous runs.**
-
-If the project has a history of previous optimization attempts (e.g., on other branches), instruct the AI to check those records to avoid re-trying known failures:
-
-```yaml
-initial_hint: |
-  Check if previous branch reports exist (e.g., optimization_report_1.md).
-  Reverted experiments = that direction didn't work. Don't retry unless
-  you have a fundamentally different approach.
-```
-
----
-
-## 7. YAML Examples
-
-A complete `todos.yaml` for a realistic iterative optimization project. Note how:
-- The `description` provides comprehensive project context (goal, architecture, constraints, naming rules, historical references).
-- Each subtask explicitly states what files it reads and writes, ensuring information flows correctly across context-isolated sessions.
-- Documentation commits are separated from code commits (Pattern 1 from §6.4), so hypothesis docs survive code rollbacks.
-- A failure pattern database is maintained across iterations (Pattern 2 from §6.4).
-
-```yaml
-description: "See §3.1"
-tasks:
-  # ── Task 1: Establish Baseline (one-time setup) ──────────────────────
-  - id: 1
-    name: "Build, validate, and record baseline performance"
-    type: nested
-    max_attempts: 3
-    completion_criteria: |
-      1. Simulator.exe exit code 0 (correctness test passes)
-      3. doc/optimization_results_N.tsv exists with baseline row
-    subtasks:
-      - id: 1.1
-        name: "Create optimization branch"
-        type: simple_once
-        model: lite
-        system_prompt_prefix: |
-          You are a build engineer. Do NOT modify any source code.
-        completion_criteria: |
-          1. On a new opt_<N> branch (N = next available number)
-          2. git branch confirms current branch
-        initial_hint: |
-          git branch -a | grep opt_ to determine next number.
-          git checkout -b opt_<N> main
-
-      - id: 1.2
-        name: "Build, run correctness tests, and record baseline"
-        type: simple
-        completion_criteria: |
-          1. cmake build succeeds
-          2. Simulator.exe exit code 0
-          4. doc/optimization_results_N.tsv created with header + baseline row
-          5. doc/optimization_log_N.md created with baseline profiling data
-          6. doc/failure_patterns.md created (from template if missing)
-          7. Changes committed
-        initial_hint: |
-          Build: cmake --build build --config Release
-          Test: build/Release/Simulator.exe
-          Extract N from branch name. Create results TSV and log MD.
-          If doc/failure_patterns.md doesn't exist, create it with template:
-            # Failure Patterns & Insights
-            ## Proven Failure Patterns
-            (none yet)
-            ## Promising Directions
-            (none yet)
-
-  # ── Task 2: Iterative Optimization Loop ──────────────────────────────
-  # Uses looping because the goal is "run N rounds of optimization"
-  - id: 2
-    name: "Iterative shader optimization"
-    type: looping
-    repeat_count: 20
-    max_attempts_per_loop: 5
-    completion_criteria: |
-      One complete cycle of: analyze → implement → benchmark → evaluate.
-    subtasks:
-      # ── 2.1 Analyze + Propose Hypothesis ────────────────────────────
-      # Reads: optimization_results_N.tsv, optimization_log_N.md,
-      #        failure_patterns.md, optimization_report_*.md (historical)
-      # Writes: optimization_log_N.md (appended hypothesis),
-      #         doc/ideas/<id>_<name>.md (detailed hypothesis doc)
-      - id: 2.1
-        name: "Analyze bottleneck and propose optimization hypothesis"
-        type: simple
-        system_prompt_prefix: |
-          You are a senior GPU performance engineer.
-          Be fully autonomous. Only read files relevant to the current bottleneck.
-        completion_criteria: |
-          1. Current bottleneck identified from profiling data
-          2. Hypothesis appended to optimization_log_N.md
-          3. Hypothesis doc committed SEPARATELY before implementation
-        initial_hint: |
-          Read optimization_results_N.tsv and optimization_log_N.md for history.
-          Read failure_patterns.md to avoid repeating known failures.
-          Check doc/optimization_report_*.md for previous branch history.
-          Propose one specific optimization hypothesis.
-          Commit documentation SEPARATELY before implementation:
-            git add -A && git commit -m "doc: hypothesis for exp <id>"
-          This ensures the hypothesis survives a code rollback.
-
-      # ── 2.2 Implement + Build + Test ────────────────────────────────
-      # Reads: optimization_log_N.md (latest hypothesis)
-      # Writes: code changes, committed to git
-      - id: 2.2
-        name: "Implement optimization, build, and verify correctness"
-        type: simple
-        completion_criteria: |
-          1. Code changes implement the latest hypothesis
-          2. cmake build succeeds
-          3. Simulator.exe exit code 0 (correctness preserved)
-          5. Changes committed: "opt: exp <id> - <description>"
-        initial_hint: |
-          Read optimization_log_N.md for the latest hypothesis.
-          Read only the source files you need to modify.
-          Implement, build, and test. If tests fail, fix before committing.
-
-      # ── 2.3 Benchmark ──────────────────────────────────────────────
-      # Reads: (current binary)
-      # Writes: benchmark output (captured by parent)
-      - id: 2.3
-        name: "Run benchmark"
-        type: simple
-        max_attempts: 1       # fail fast → parent retries from 2.1
-        model: lite           # use lite model for lower cost
-        system_prompt_prefix: |
-          You are a benchmark runner. Do NOT modify any source code.
-        completion_criteria: |
-          1. Benchmark completed, full performance profile captured
-        initial_hint: |
-          Run: build/Release/Simulator.exe
-          If failed, add --verbose and rerun for diagnostics.
-
-      # ── 2.4 Evaluate + Keep/Revert + Update Patterns ───────────────
-      # Reads: benchmark output, optimization_results_N.tsv (SOTA row)
-      # Writes: optimization_results_N.tsv (new row),
-      #         optimization_log_N.md (results + decision),
-      #         failure_patterns.md (updated learnings),
-      #         optimization_report_N.md (updated summary)
-      - id: 2.4
-        name: "Evaluate results, keep/revert, and update failure patterns"
-        type: simple
-        model: lite
-        max_attempts: 1
-        system_prompt_prefix: |
-          You are a performance analyst. Apply the decision rules strictly.
-          Correctness failure → MUST revert. No subjective judgments.
-        completion_criteria: |
-          1. New row appended to optimization_results_N.tsv
-          2. If revert: git revert of the code commit (doc commit preserved)
-          3. optimization_log_N.md updated with results and decision
-          4. failure_patterns.md updated with learnings from this round
-          5. All changes committed
-        initial_hint: |
-          Compare benchmark results against the SOTA row in optimization_results_N.tsv.
-          Decision rules:
-          - Correctness test failed → revert
-          - Performance improved → keep, update SOTA
-          - No improvement or regression → revert
-          If revert: git revert <code_commit> --no-edit
-            (The doc commit from 2.1 is preserved automatically.)
-          Append results to TSV regardless of decision.
-          Update failure_patterns.md:
-          - If reverted: classify the failure (new or existing pattern?)
-          - If kept: add to "Promising Directions" with what worked and why
-          Update optimization_report_N.md with current summary.
-          Commit: git add -A && git commit -m "doc: results for exp <id>"
-```
+> **Note:** Read only the guide relevant to your task — you don't need to read all of them.
 
 ---
 
@@ -701,3 +479,4 @@ tasks:
 | `max_attempts: 1` | For execution-only subtasks (build, benchmark) |
 | Subtask boundaries | Align with logical checkpoints and independent failure modes |
 | Don't over-decompose | 2–3 subtasks usually suffice; merge steps that succeed/fail together |
+| Type-specific patterns | Read the relevant guide in §7 for your task type (build, test, optimization, etc.) |

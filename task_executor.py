@@ -489,6 +489,21 @@ class SimpleTaskExecutor:
                             ):
                                 return True
                         completion_status = self._check_completion(result)
+                    else:
+                        # All nudges exhausted without a marker.  As a last
+                        # resort, check the signal file — the AI may have
+                        # launched autoagent-exec but never emitted the
+                        # LONG_RUNNING_IN_PROGRESS marker (or the LR task
+                        # finished during the nudge window).
+                        lr_synthetic = self._check_signal_file_for_running_task(task_id, include_finished=True)
+                        if lr_synthetic is not None:
+                            if self._handle_long_running_in_simple_task(
+                                lr_synthetic, task, task_id, attempts, client,
+                                state_manager, conv_logger=conv_logger,
+                                parent_task_id=parent_task_id,
+                                log_round=_log_round, parent_context=parent_context,
+                            ):
+                                return True
 
                 if completion_status is True:
                     summary = self._extract_summary(result)
@@ -823,23 +838,30 @@ class SimpleTaskExecutor:
         ]
         return any(p in response_lower for p in patterns)
 
-    def _check_signal_file_for_running_task(self, task_id: str) -> Optional[str]:
-        """Check if autoagent-exec has already created a signal file for this task.
+    def _check_signal_file_for_running_task(self, task_id: str, include_finished: bool = False) -> Optional[str]:
+        """Check if autoagent-exec has created a signal file for this task.
 
         When the AI calls autoagent-exec but forgets to output the
         LONG_RUNNING_IN_PROGRESS marker, we can detect this by checking
-        for the signal file.  If it exists with status "running", the
-        task is still in flight and we return a synthetic marker so the
-        caller can short-circuit the nudge loop (avoiding the risk that
-        a nudge causes the AI to re-launch the command).
+        for the signal file.
 
-        A "finished" signal file is NOT treated as evidence of a missing
-        marker — it means the LR task already completed and the result
-        was (or will be) analysed via the normal callback path.
+        By default (``include_finished=False``), only ``running`` status
+        is matched — this is used as a **pre-nudge** check to prevent
+        a nudge from accidentally re-launching the task.
+
+        When ``include_finished=True``, ``finished`` and ``error`` are
+        also matched — this is used as a **post-nudge fallback** to
+        catch the race condition where the background task finishes
+        during the AI's response or during the nudge window.
+
+        Args:
+            task_id: The task ID to look up the signal file for.
+            include_finished: If True, also match ``finished``/``error``
+                signal files (not just ``running``).
 
         Returns:
             A synthetic ``"⏳ LONG_RUNNING_IN_PROGRESS"`` string if a
-            *running* signal file is detected, or ``None`` otherwise.
+            signal file is detected, or ``None`` otherwise.
         """
         # Resolve session_dir
         session_dir = self.session_dir
@@ -862,7 +884,8 @@ class SimpleTaskExecutor:
             with open(signal_file, "r", encoding="utf-8") as f:
                 signal_data = json.load(f)
             status = signal_data.get("status")
-            if status == "running":
+            match_statuses = ("running", "finished", "error") if include_finished else ("running",)
+            if status in match_statuses:
                 logger.info(
                     f"Task {task_id}: signal file found with status={status}, "
                     f"returning synthetic LONG_RUNNING_IN_PROGRESS"
@@ -2475,13 +2498,7 @@ class SubtaskExecutor:
                         result = nudge_result
                         # Check for LONG_RUNNING_IN_PROGRESS first (may come
                         # from signal-file detection or AI's nudge response).
-                        # Jump back to the LR handling path above.
                         if self._check_long_running_in_progress(result):
-                            # Re-enter the LR handling block by continuing
-                            # the attempt loop — the LR check at the top of
-                            # the loop body will pick it up on next iteration.
-                            # But we can't just `continue` because we need the
-                            # same attempt number.  Instead, handle it inline:
                             print(f"      ⏳ Nudge detected long-running task, waiting for completion...")
                             import re as _re
                             lr_task_id = subtask_id
@@ -2518,6 +2535,41 @@ class SubtaskExecutor:
                             )
                             continue
                         completion_status = self.simple_executor._check_completion(result)
+                    else:
+                        # All nudges exhausted.  Last resort: check the
+                        # signal file — the AI may have launched
+                        # autoagent-exec but never emitted the marker.
+                        lr_synthetic = self.simple_executor._check_signal_file_for_running_task(subtask_id, include_finished=True)
+                        if lr_synthetic is not None:
+                            print(f"      ⏳ Signal file detected after nudge exhaustion, entering LR path...")
+                            signal_file = os.path.join(log_session_dir, "lr_tasks", f"lr_{subtask_id}_signal.json")
+                            output_log = os.path.join(log_session_dir, "lr_tasks", f"lr_{subtask_id}_output.log")
+                            monitor_status = self._poll_signal_file(
+                                subtask_id, signal_file,
+                                max_initial_wait=_load_fast_fail_timeout() * 2,
+                            )
+                            analyze_result = self._ai_analyze_long_running_result(
+                                subtask, client, state_manager,
+                                monitor_status, output_log,
+                                conv_logger=conv_logger, parent_task_id=parent_task_id,
+                                parent_context=parent_context, signal_file=signal_file,
+                                exec_script_path=exec_script_path,
+                                log_round=_log_round,
+                            )
+                            if analyze_result.success:
+                                return analyze_result
+                            state_manager.add_task_history(sk, {
+                                "attempt": attempt,
+                                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "result": "not_completed",
+                                "summary": analyze_result.output or "Long-running task did not meet completion criteria",
+                            })
+                            state_manager.mark_task_status(
+                                sk, "in_progress",
+                                attempts=attempt,
+                                last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+                            )
+                            continue
 
                 if completion_status is True:
                     summary = SimpleTaskExecutor._extract_summary(result)

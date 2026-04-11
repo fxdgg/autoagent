@@ -162,7 +162,8 @@
             "6":   {"status": "completed"},
             "6.1": {"status": "completed"},
             "6.2": {"status": "completed", "has_not_completed": true},
-            "6.3": {"status": "completed"}
+            "6.3": {"status": "completed"},
+            "7":   {"status": "completed"}
         },
         "compare_logs": true,
         "compare_state": true

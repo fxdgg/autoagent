@@ -10,6 +10,14 @@
 # Optional project-level description.
 # This is injected into every task's prompt so the AI always knows
 # the big picture, even when individual tasks are very fine-grained.
+#
+# Round-scoped descriptions:
+#   When new ideas add tasks to an existing todos.yaml, a scoped
+#   description field can be used to describe the new batch:
+#     description@3: |
+#       Second batch: add profiling and kernel optimization tasks.
+#   The executor picks the most relevant description for each task:
+#   tasks 1-2 see `description`, tasks 3+ see `description@3`.
 description: |
   Optimize a CUDA image-processing pipeline for maximum throughput.
   The project uses CMake + CUDA 12, targets an RTX 4090, and must
