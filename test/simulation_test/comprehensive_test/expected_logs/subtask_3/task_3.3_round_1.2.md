@@ -10,7 +10,10 @@
     you MUST use autoagent-exec instead of running it directly in Bash:
       "<autoagent-exec>" "<your entire command>"
     Always wrap the command in double quotes so that shell operators are passed correctly.
-    When autoagent-exec prints "TASK SUBMITTED", output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+    autoagent-exec has three possible outcomes:
+      - "TASK SUBMITTED" → the command is running in the background. Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+      - "[OK]" → the command finished quickly with exit code 0. Continue working — treat it as a normal completed command.
+      - "[FAST-FAIL]" → the command failed quickly. Read the error output, fix the issue, and retry.
     NEVER run long commands directly in Bash — the session may be killed due to timeout, wasting time or leaving the project in broken state.
     
     3. When you are done, end your response with EXACTLY one of:
@@ -85,9 +88,9 @@ Deployment submitted.
 
 ⏳ LONG_RUNNING_IN_PROGRESS
 
-[autoagent-exec] Starting command (watching for 10s)...
+[autoagent-exec] STARTING (PID <PID>)
    Command: python -c "import time; time.sleep(1)"
-   PID: <PID>
+   Do NOT launch another autoagent-exec until this task finishes.
 
 [OK] Command finished quickly (exit code 0).
    (no output captured)
@@ -122,7 +125,10 @@ The connection pool size needs to be increased in the staging config.
     you MUST use autoagent-exec instead of running it directly in Bash:
       "<autoagent-exec>" "<your entire command>"
     Always wrap the command in double quotes so that shell operators are passed correctly.
-    When autoagent-exec prints "TASK SUBMITTED", output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+    autoagent-exec has three possible outcomes:
+      - "TASK SUBMITTED" → the command is running in the background. Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+      - "[OK]" → the command finished quickly with exit code 0. Continue working — treat it as a normal completed command.
+      - "[FAST-FAIL]" → the command failed quickly. Read the error output, fix the issue, and retry.
     NEVER run long commands directly in Bash — the session may be killed due to timeout, wasting time or leaving the project in broken state.
     
     3. When you are done, end your response with EXACTLY one of:
@@ -206,9 +212,9 @@ Redeployment submitted with DB_POOL_SIZE=50.
 
 ⏳ LONG_RUNNING_IN_PROGRESS
 
-[autoagent-exec] Starting command (watching for 10s)...
+[autoagent-exec] STARTING (PID <PID>)
    Command: python -c "import time; time.sleep(1)"
-   PID: <PID>
+   Do NOT launch another autoagent-exec until this task finishes.
 
 [OK] Command finished quickly (exit code 0).
    (no output captured)

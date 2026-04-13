@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 _fast_fail_timeout_cache: int | None = None
+_show_console_cache: bool | None = None
 
 
 def _load_fast_fail_timeout() -> int:
@@ -65,6 +66,31 @@ def _load_fast_fail_timeout() -> int:
             pass
     _fast_fail_timeout_cache = 10
     return _fast_fail_timeout_cache
+
+
+def _load_show_console() -> bool:
+    """Load autoagent_exec_show_console from config.yaml (cached).
+
+    Returns:
+        True if the subprocess should get a visible console window (Windows).
+    """
+    global _show_console_cache
+    if _show_console_cache is not None:
+        return _show_console_cache
+
+    config_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "config.yaml"
+    )
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f) or {}
+            _show_console_cache = bool(config.get("autoagent_exec_show_console", False))
+            return _show_console_cache
+        except Exception:
+            pass
+    _show_console_cache = False
+    return _show_console_cache
 
 
 def _save_previous_subtask_summary(session_dir: str, summary: str) -> None:
@@ -184,6 +210,7 @@ def _write_autoagent_exec_script(
     session_dir: str,
     task_id: str,
     fast_fail_timeout: int = 10,
+    show_console: bool = False,
 ) -> str:
     """Write (or overwrite) the ``autoagent-exec`` convenience script.
 
@@ -203,6 +230,9 @@ def _write_autoagent_exec_script(
         task_id: Current task / subtask ID (e.g. ``"1"`` or ``"2.1"``).
         fast_fail_timeout: Seconds to wait before treating the command as
             long-running (default 10, from config.yaml ``fast_fail_timeout``).
+        show_console: If True, pass ``--show-console`` to autoagent_exec.py
+            so the subprocess gets a visible console window on Windows.
+            (from config.yaml ``autoagent_exec_show_console``).
 
     Returns:
         The absolute path to the generated script.
@@ -215,6 +245,8 @@ def _write_autoagent_exec_script(
     scripts_dir = os.path.join(session_dir, "scripts")
     os.makedirs(scripts_dir, exist_ok=True)
 
+    show_console_flag = " --show-console" if show_console else ""
+
     if os.name == "nt":
         script_name = "autoagent-exec.bat"
         # %* forwards all arguments.  The AI is instructed to wrap the
@@ -223,7 +255,7 @@ def _write_autoagent_exec_script(
         content = (
             "@echo off\r\n"
             f'python "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
-            f' --fast-fail-timeout {fast_fail_timeout} --cmd %*\r\n'
+            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} --cmd %*\r\n'
         )
     else:
         script_name = "autoagent-exec.sh"
@@ -234,7 +266,7 @@ def _write_autoagent_exec_script(
         content = (
             "#!/usr/bin/env bash\n"
             f'python3 "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
-            f' --fast-fail-timeout {fast_fail_timeout} --cmd "$*"\n'
+            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} --cmd "$*"\n'
         )
 
     script_path = os.path.join(scripts_dir, script_name)
@@ -397,6 +429,7 @@ class SimpleTaskExecutor:
                         session_dir=self.session_dir,
                         task_id=task_id,
                         fast_fail_timeout=_load_fast_fail_timeout(),
+                        show_console=_load_show_console(),
                     )
             else:
                 prompt, exec_script_path = self._build_prompt(
@@ -617,6 +650,7 @@ class SimpleTaskExecutor:
                 session_dir=log_session_dir,
                 task_id=str(task['id']),
                 fast_fail_timeout=_load_fast_fail_timeout(),
+                show_console=_load_show_console(),
             )
 
         return build_simple_task_prompt(
@@ -884,7 +918,7 @@ class SimpleTaskExecutor:
             with open(signal_file, "r", encoding="utf-8") as f:
                 signal_data = json.load(f)
             status = signal_data.get("status")
-            match_statuses = ("running", "finished", "error") if include_finished else ("running",)
+            match_statuses = ("starting", "running", "finished", "error") if include_finished else ("starting", "running")
             if status in match_statuses:
                 logger.info(
                     f"Task {task_id}: signal file found with status={status}, "
@@ -971,6 +1005,7 @@ class SimpleTaskExecutor:
             session_dir=log_session_dir,
             task_id=task_id,
             fast_fail_timeout=_load_fast_fail_timeout(),
+            show_console=_load_show_console(),
         )
 
         # Restart AI to analyze the result
@@ -2238,6 +2273,7 @@ class SubtaskExecutor:
             session_dir=log_session_dir,
             task_id=subtask_id,
             fast_fail_timeout=_load_fast_fail_timeout(),
+            show_console=_load_show_console(),
         )
         
         logger.info(f"Executing long-running subtask {subtask_id}: {subtask['name']}")
@@ -2263,45 +2299,68 @@ class SubtaskExecutor:
         # (i.e. a background task was already submitted), we should resume
         # polling or go straight to analysis — NOT send a continuation
         # prompt that would confuse the AI into re-submitting the task.
+        #
+        # We perform the signal-file check in TWO cases:
+        #   1. _interrupt_pending is set  (graceful Ctrl+C)
+        #   2. No interrupt_pending, but a signal file already exists with
+        #      status "starting" or "running"  (non-graceful termination
+        #      such as kill -9, OOM, power loss, or crash)
         _pending_lr_signal = None  # Will hold (signal_file, output_log, signal_status) if applicable
+        signal_file = os.path.join(log_session_dir, "lr_tasks", f"lr_{subtask_id}_signal.json")
+
         if _interrupt_pending:
             state_manager.update_task_field(sk, "interrupt_pending", None)
             if parent_task_id:
                 # Already consumed from parent above; clear subtask's own flag too
                 pass
 
-            # Check if a signal file exists for this subtask
-            signal_file = os.path.join(log_session_dir, "lr_tasks", f"lr_{subtask_id}_signal.json")
-            if os.path.isfile(signal_file):
-                try:
-                    with open(signal_file, "r", encoding="utf-8") as f:
-                        sig = json.load(f)
-                    sig_status = sig.get("status")
-                except Exception:
-                    sig_status = None
+        # Check signal file regardless of interrupt_pending — a running
+        # background task may survive a non-graceful process death.
+        if os.path.isfile(signal_file):
+            try:
+                with open(signal_file, "r", encoding="utf-8") as f:
+                    sig = json.load(f)
+                sig_status = sig.get("status")
+            except Exception:
+                sig_status = None
 
-                if sig_status in ("running", "finished", "error"):
-                    _pending_lr_signal = (signal_file, sig_status)
-                    should_reset = False
-                    logger.info(
-                        f"Long-running task {subtask_id}: interrupt_pending detected "
-                        f"with signal file status={sig_status} — will resume "
-                        f"{'polling' if sig_status == 'running' else 'analysis'}"
-                    )
-                    print(
-                        f"      🔄 Resuming long-running task {subtask_id} "
-                        f"(signal status: {sig_status})"
-                    )
-
-            # No signal file or unreadable — fall back to normal interrupt
-            # continuation prompt (the AI was interrupted before submitting)
-            if _pending_lr_signal is None and client.session_id:
-                last_timeout_type = "interrupt"
+            # Interrupt recovery: all statuses are relevant because the
+            # signal file reflects the *current* interrupted run — even
+            # "finished"/"error" means the task finished but analysis
+            # was never performed.
+            #
+            # Non-interrupt (orphan recovery): only "starting"/"running"
+            # indicate a truly orphaned background task.  "finished"/"error"
+            # from a previous attempt is expected and should be overwritten
+            # by the normal retry prompt + autoagent-exec cycle.
+            _match_statuses = (
+                ("starting", "running", "finished", "error")
+                if _interrupt_pending
+                else ("starting", "running")
+            )
+            if sig_status in _match_statuses:
+                _pending_lr_signal = (signal_file, sig_status)
                 should_reset = False
                 logger.info(
-                    f"Long-running task {subtask_id}: interrupt_pending detected "
-                    f"with no signal file — will continue in same session"
+                    f"Long-running task {subtask_id}: signal file detected "
+                    f"with status={sig_status} — will resume "
+                    f"{'polling' if sig_status in ('starting', 'running') else 'analysis'}"
                 )
+                print(
+                    f"      🔄 Resuming long-running task {subtask_id} "
+                    f"(signal status: {sig_status})"
+                )
+
+        # No signal file and interrupt_pending — fall back to normal
+        # interrupt continuation prompt (the AI was interrupted before
+        # submitting).
+        if _pending_lr_signal is None and _interrupt_pending and client.session_id:
+            last_timeout_type = "interrupt"
+            should_reset = False
+            logger.info(
+                f"Long-running task {subtask_id}: interrupt_pending detected "
+                f"with no signal file — will continue in same session"
+            )
 
         for attempt in range(1, max_attempts + 1):
             # Reset session before each retry to prevent context accumulation
@@ -2331,7 +2390,7 @@ class SubtaskExecutor:
                 _pending_lr_signal = None  # Consume — only applies once
                 _log_round = (parent_context or {}).get('round_label') or str(attempt)
 
-                if sig_status == "running":
+                if sig_status in ("starting", "running"):
                     print(f"      ⏳ Background task still running, resuming poll...")
                     monitor_status = self._poll_signal_file(
                         subtask_id, signal_file,
@@ -2741,7 +2800,7 @@ class SubtaskExecutor:
                         print(f"      [ERROR] Long-running task failed (exit code {ec_display})")
                         return "error"
                     
-                    # status == "running" — check if process is still alive
+                    # status == "starting" or "running" — check if process is still alive
                     if pid is None:
                         pid = signal_data.get("pid")
                     
@@ -2827,6 +2886,64 @@ class SubtaskExecutor:
                 except OSError:
                     return False
 
+    def _poll_and_reanalyze(
+        self,
+        subtask: dict,
+        client,
+        subtask_id: str,
+        signal_file: str,
+        output_log: str,
+        command_info: str,
+        conv_logger=None,
+        parent_task_id: str = None,
+        _log_round: str = "1",
+    ) -> tuple:
+        """Poll a re-submitted long-running task and re-analyze.
+
+        Called when AI re-submits a long-running task during callback
+        analysis (e.g. fixed a bug and re-launched training).  Polls
+        the signal file, then sends a fresh analysis prompt.
+
+        Returns:
+            (result_text, updated_command_info)
+        """
+        self._poll_signal_file(
+            subtask_id, signal_file,
+            max_initial_wait=_load_fast_fail_timeout() * 2,
+        )
+        # Re-read signal file for possibly updated command
+        if os.path.exists(signal_file):
+            try:
+                with open(signal_file, 'r', encoding='utf-8') as _f:
+                    _sig = json.load(_f)
+                _cmd = _sig.get('command', '')
+                if _cmd:
+                    command_info = f"\nCommand: {_cmd}"
+            except Exception:
+                pass
+        reanalyze_prompt = _build_lr_analysis_prompt(
+            output_log=output_log,
+            command_info=command_info,
+        )
+        if conv_logger:
+            conv_logger.log_prompt(
+                task_id=subtask_id,
+                task_name=subtask['name'],
+                prompt=reanalyze_prompt,
+                attempt=_log_round,
+                parent_task_id=parent_task_id,
+                metadata={"type": "long_running_analysis_retry"},
+            )
+        result = client.ask(reanalyze_prompt)
+        if conv_logger:
+            conv_logger.log_response(
+                task_id=subtask_id,
+                response=client.last_full_log or result,
+                parent_task_id=parent_task_id,
+                attempt=_log_round,
+            )
+        return result, command_info
+
     def _ai_analyze_long_running_result(
         self, subtask, client, state_manager, status, output_log,
         conv_logger=None, parent_task_id: str = None,
@@ -2895,7 +3012,18 @@ class SubtaskExecutor:
             # Reuse the same robust check logic from SimpleTaskExecutor
             completion_status = self.simple_executor._check_completion(result)
 
-            # Nudge for marker if missing (same logic as SimpleTaskExecutor)
+            # If AI re-submitted a long-running task during callback analysis
+            # (e.g. fixed a bug and re-launched training), poll for the new
+            # task and re-analyze — mirroring SimpleTaskExecutor.execute()
+            # lines 514-523.
+            if self.simple_executor._check_long_running_in_progress_static(result):
+                result, command_info = self._poll_and_reanalyze(
+                    subtask, client, subtask_id, signal_file, output_log,
+                    command_info, conv_logger, parent_task_id, _log_round,
+                )
+                completion_status = self.simple_executor._check_completion(result)
+
+            # Nudge for marker if still missing (same logic as SimpleTaskExecutor)
             if completion_status is None:
                 nudge_result = self.simple_executor._nudge_for_marker(
                     client, subtask, result,
@@ -2905,6 +3033,13 @@ class SubtaskExecutor:
                 )
                 if nudge_result is not None:
                     result = nudge_result
+                    # Nudge may also detect a re-submitted long-running task
+                    # (synthetic LONG_RUNNING_IN_PROGRESS from signal file)
+                    if self.simple_executor._check_long_running_in_progress_static(result):
+                        result, command_info = self._poll_and_reanalyze(
+                            subtask, client, subtask_id, signal_file, output_log,
+                            command_info, conv_logger, parent_task_id, _log_round,
+                        )
                     completion_status = self.simple_executor._check_completion(result)
 
             is_completed = completion_status is True
