@@ -2863,6 +2863,64 @@ class SubtaskExecutor:
                 except OSError:
                     return False
 
+    def _poll_and_reanalyze(
+        self,
+        subtask: dict,
+        client,
+        subtask_id: str,
+        signal_file: str,
+        output_log: str,
+        command_info: str,
+        conv_logger=None,
+        parent_task_id: str = None,
+        _log_round: str = "1",
+    ) -> tuple:
+        """Poll a re-submitted long-running task and re-analyze.
+
+        Called when AI re-submits a long-running task during callback
+        analysis (e.g. fixed a bug and re-launched training).  Polls
+        the signal file, then sends a fresh analysis prompt.
+
+        Returns:
+            (result_text, updated_command_info)
+        """
+        self._poll_signal_file(
+            subtask_id, signal_file,
+            max_initial_wait=_load_fast_fail_timeout() * 2,
+        )
+        # Re-read signal file for possibly updated command
+        if os.path.exists(signal_file):
+            try:
+                with open(signal_file, 'r', encoding='utf-8') as _f:
+                    _sig = json.load(_f)
+                _cmd = _sig.get('command', '')
+                if _cmd:
+                    command_info = f"\nCommand: {_cmd}"
+            except Exception:
+                pass
+        reanalyze_prompt = _build_lr_analysis_prompt(
+            output_log=output_log,
+            command_info=command_info,
+        )
+        if conv_logger:
+            conv_logger.log_prompt(
+                task_id=subtask_id,
+                task_name=subtask['name'],
+                prompt=reanalyze_prompt,
+                attempt=_log_round,
+                parent_task_id=parent_task_id,
+                metadata={"type": "long_running_analysis_retry"},
+            )
+        result = client.ask(reanalyze_prompt)
+        if conv_logger:
+            conv_logger.log_response(
+                task_id=subtask_id,
+                response=client.last_full_log or result,
+                parent_task_id=parent_task_id,
+                attempt=_log_round,
+            )
+        return result, command_info
+
     def _ai_analyze_long_running_result(
         self, subtask, client, state_manager, status, output_log,
         conv_logger=None, parent_task_id: str = None,
@@ -2931,7 +2989,18 @@ class SubtaskExecutor:
             # Reuse the same robust check logic from SimpleTaskExecutor
             completion_status = self.simple_executor._check_completion(result)
 
-            # Nudge for marker if missing (same logic as SimpleTaskExecutor)
+            # If AI re-submitted a long-running task during callback analysis
+            # (e.g. fixed a bug and re-launched training), poll for the new
+            # task and re-analyze — mirroring SimpleTaskExecutor.execute()
+            # lines 514-523.
+            if self.simple_executor._check_long_running_in_progress_static(result):
+                result, command_info = self._poll_and_reanalyze(
+                    subtask, client, subtask_id, signal_file, output_log,
+                    command_info, conv_logger, parent_task_id, _log_round,
+                )
+                completion_status = self.simple_executor._check_completion(result)
+
+            # Nudge for marker if still missing (same logic as SimpleTaskExecutor)
             if completion_status is None:
                 nudge_result = self.simple_executor._nudge_for_marker(
                     client, subtask, result,
@@ -2941,6 +3010,13 @@ class SubtaskExecutor:
                 )
                 if nudge_result is not None:
                     result = nudge_result
+                    # Nudge may also detect a re-submitted long-running task
+                    # (synthetic LONG_RUNNING_IN_PROGRESS from signal file)
+                    if self.simple_executor._check_long_running_in_progress_static(result):
+                        result, command_info = self._poll_and_reanalyze(
+                            subtask, client, subtask_id, signal_file, output_log,
+                            command_info, conv_logger, parent_task_id, _log_round,
+                        )
                     completion_status = self.simple_executor._check_completion(result)
 
             is_completed = completion_status is True
