@@ -195,29 +195,76 @@ def main():
     signal_file = os.path.join(lr_tasks_dir, f"lr_{task_id}_signal.json")
     output_log = os.path.join(lr_tasks_dir, f"lr_{task_id}_output.log")
 
-    # ── Guard: reject if a task is already starting or running ──
-    # This prevents the AI from accidentally launching a second background
-    # task in the same session, which would cause the first task's results
-    # to be lost (AutoAgent only polls one signal file per task_id).
-    if os.path.isfile(signal_file):
+    # ── Guard + Acquire: atomic check-and-lock via signal file ──
+    # We merge the concurrency guard and the initial signal write into
+    # one step so there is no window between "check passed" and "signal
+    # written" where a parallel invocation could slip through.
+    #
+    # Strategy: try to atomically create a .lock file (O_CREAT|O_EXCL).
+    # If it already exists, another autoagent-exec is in the middle of
+    # starting — treat that as a concurrent collision.  After we win the
+    # race we check the *existing* signal file for starting/running
+    # status (the normal guard), then overwrite it with our "starting"
+    # signal.
+    _lock_path = signal_file + ".lock"
+    try:
+        _lock_fd = os.open(_lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(_lock_fd)
+    except FileExistsError:
+        # Another autoagent-exec is writing right now — reject.
+        print(
+            f"[ERROR] Another autoagent-exec instance is starting for task-id '{task_id}'.\n"
+            f"   It is not allowed to have two long-running tasks in parallel.\n"
+            f"   Wait for the current autoagent-exec task to finish before launching another.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # We hold the lock (.lock exists, created by us).  Now check the
+    # existing signal file for an already-active task.
+    try:
+        if os.path.isfile(signal_file):
+            try:
+                with open(signal_file, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                if existing.get("status") in ("starting", "running"):
+                    existing_pid = existing.get("pid", "?")
+                    existing_cmd = existing.get("command", "?")
+                    print(
+                        f"[ERROR] A long-running task is already active for task-id '{task_id}'.\n"
+                        f"   Existing PID: {existing_pid}\n"
+                        f"   Existing command: {existing_cmd}\n"
+                        f"\n"
+                        f"   It is not allowed to have two long-running tasks in parallel.\n"
+                        f"   Wait for the current autoagent-exec task to finish before launching another.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+            except (json.JSONDecodeError, OSError):
+                pass  # Corrupted or unreadable — proceed normally
+
+        # Write the "starting" signal (PID unknown yet — filled in after Popen).
+        signal_data = {
+            "task_id": task_id,
+            "command": command_str,
+            "pid": None,
+            "output_log": output_log,
+            "status": "starting",
+            "description": (
+                f"Acquiring task slot. Subprocess not yet started."
+            ),
+            "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "finished_at": None,
+            "exit_code": None,
+        }
+        write_signal_file(signal_file, signal_data)
+    finally:
+        # Release the lock — remove the .lock file so future
+        # invocations can proceed normally.
         try:
-            with open(signal_file, "r", encoding="utf-8") as f:
-                existing = json.load(f)
-            if existing.get("status") in ("starting", "running"):
-                existing_pid = existing.get("pid", "?")
-                existing_cmd = existing.get("command", "?")
-                print(
-                    f"[ERROR] A long-running task is already active for task-id '{task_id}'.\n"
-                    f"   Existing PID: {existing_pid}\n"
-                    f"   Existing command: {existing_cmd}\n"
-                    f"\n"
-                    f"   It is not allowed to have two long-running tasks in parallel.\n"
-                    f"   Do NOT run long commands directly in Bash — use autoagent-exec.",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-        except (json.JSONDecodeError, OSError):
-            pass  # Corrupted or unreadable — proceed normally
+            os.remove(_lock_path)
+        except OSError:
+            pass
 
     # Open output log file in binary mode so that the subprocess's raw
     # bytes (which may be GBK on Chinese Windows) are preserved as-is.
@@ -262,14 +309,26 @@ def main():
         print(f"[ERROR] Failed to start command: {e}", file=sys.stderr)
         print(f"   Command: {command_str}", file=sys.stderr)
         log_fh.close()
+        # Clean up the signal file so a retry is not blocked.
+        signal_data = {
+            "task_id": task_id,
+            "command": command_str,
+            "pid": None,
+            "output_log": output_log,
+            "status": "error",
+            "description": f"Failed to start command: {e}",
+            "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "exit_code": None,
+        }
+        write_signal_file(signal_file, signal_data)
         sys.exit(1)
 
     pid = proc.pid
 
-    # ── Immediately write "starting" signal ──
-    # Defense: if the AI's Bash tool timeout < fast_fail_timeout, this
-    # signal file ensures the orchestrator can detect the running task
-    # even after autoagent-exec is killed.
+    # ── Update signal with real PID ──
+    # The signal file was written with pid=None before Popen.
+    # Now fill in the PID and update description.
     signal_data = {
         "task_id": task_id,
         "command": command_str,
