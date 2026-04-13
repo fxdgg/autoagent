@@ -8,7 +8,7 @@ def _normalize_log_content(text):
         '"<autoagent-exec>"',
         text,
     )
-    text = re.sub(r'PID: \d+', 'PID: <PID>', text)
+    text = re.sub(r'PID \d+', 'PID <PID>', text)
     text = re.sub(
         r'(?:(?:[A-Za-z]:)?[^"\n]*?/)?logs/(?:<SESSION>|[A-Za-z0-9_.-]+_[a-z0-9]+)/',
         'logs/<SESSION>/',

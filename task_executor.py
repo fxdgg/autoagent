@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 _fast_fail_timeout_cache: int | None = None
+_show_console_cache: bool | None = None
 
 
 def _load_fast_fail_timeout() -> int:
@@ -65,6 +66,31 @@ def _load_fast_fail_timeout() -> int:
             pass
     _fast_fail_timeout_cache = 10
     return _fast_fail_timeout_cache
+
+
+def _load_show_console() -> bool:
+    """Load autoagent_exec_show_console from config.yaml (cached).
+
+    Returns:
+        True if the subprocess should get a visible console window (Windows).
+    """
+    global _show_console_cache
+    if _show_console_cache is not None:
+        return _show_console_cache
+
+    config_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "config.yaml"
+    )
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f) or {}
+            _show_console_cache = bool(config.get("autoagent_exec_show_console", False))
+            return _show_console_cache
+        except Exception:
+            pass
+    _show_console_cache = False
+    return _show_console_cache
 
 
 def _save_previous_subtask_summary(session_dir: str, summary: str) -> None:
@@ -184,6 +210,7 @@ def _write_autoagent_exec_script(
     session_dir: str,
     task_id: str,
     fast_fail_timeout: int = 10,
+    show_console: bool = False,
 ) -> str:
     """Write (or overwrite) the ``autoagent-exec`` convenience script.
 
@@ -203,6 +230,9 @@ def _write_autoagent_exec_script(
         task_id: Current task / subtask ID (e.g. ``"1"`` or ``"2.1"``).
         fast_fail_timeout: Seconds to wait before treating the command as
             long-running (default 10, from config.yaml ``fast_fail_timeout``).
+        show_console: If True, pass ``--show-console`` to autoagent_exec.py
+            so the subprocess gets a visible console window on Windows.
+            (from config.yaml ``autoagent_exec_show_console``).
 
     Returns:
         The absolute path to the generated script.
@@ -215,6 +245,8 @@ def _write_autoagent_exec_script(
     scripts_dir = os.path.join(session_dir, "scripts")
     os.makedirs(scripts_dir, exist_ok=True)
 
+    show_console_flag = " --show-console" if show_console else ""
+
     if os.name == "nt":
         script_name = "autoagent-exec.bat"
         # %* forwards all arguments.  The AI is instructed to wrap the
@@ -223,7 +255,7 @@ def _write_autoagent_exec_script(
         content = (
             "@echo off\r\n"
             f'python "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
-            f' --fast-fail-timeout {fast_fail_timeout} --cmd %*\r\n'
+            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} --cmd %*\r\n'
         )
     else:
         script_name = "autoagent-exec.sh"
@@ -234,7 +266,7 @@ def _write_autoagent_exec_script(
         content = (
             "#!/usr/bin/env bash\n"
             f'python3 "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
-            f' --fast-fail-timeout {fast_fail_timeout} --cmd "$*"\n'
+            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} --cmd "$*"\n'
         )
 
     script_path = os.path.join(scripts_dir, script_name)
@@ -397,6 +429,7 @@ class SimpleTaskExecutor:
                         session_dir=self.session_dir,
                         task_id=task_id,
                         fast_fail_timeout=_load_fast_fail_timeout(),
+                        show_console=_load_show_console(),
                     )
             else:
                 prompt, exec_script_path = self._build_prompt(
@@ -617,6 +650,7 @@ class SimpleTaskExecutor:
                 session_dir=log_session_dir,
                 task_id=str(task['id']),
                 fast_fail_timeout=_load_fast_fail_timeout(),
+                show_console=_load_show_console(),
             )
 
         return build_simple_task_prompt(
@@ -884,7 +918,7 @@ class SimpleTaskExecutor:
             with open(signal_file, "r", encoding="utf-8") as f:
                 signal_data = json.load(f)
             status = signal_data.get("status")
-            match_statuses = ("running", "finished", "error") if include_finished else ("running",)
+            match_statuses = ("starting", "running", "finished", "error") if include_finished else ("starting", "running")
             if status in match_statuses:
                 logger.info(
                     f"Task {task_id}: signal file found with status={status}, "
@@ -971,6 +1005,7 @@ class SimpleTaskExecutor:
             session_dir=log_session_dir,
             task_id=task_id,
             fast_fail_timeout=_load_fast_fail_timeout(),
+            show_console=_load_show_console(),
         )
 
         # Restart AI to analyze the result
@@ -2238,6 +2273,7 @@ class SubtaskExecutor:
             session_dir=log_session_dir,
             task_id=subtask_id,
             fast_fail_timeout=_load_fast_fail_timeout(),
+            show_console=_load_show_console(),
         )
         
         logger.info(f"Executing long-running subtask {subtask_id}: {subtask['name']}")
@@ -2280,13 +2316,13 @@ class SubtaskExecutor:
                 except Exception:
                     sig_status = None
 
-                if sig_status in ("running", "finished", "error"):
+                if sig_status in ("starting", "running", "finished", "error"):
                     _pending_lr_signal = (signal_file, sig_status)
                     should_reset = False
                     logger.info(
                         f"Long-running task {subtask_id}: interrupt_pending detected "
                         f"with signal file status={sig_status} — will resume "
-                        f"{'polling' if sig_status == 'running' else 'analysis'}"
+                        f"{'polling' if sig_status in ('starting', 'running') else 'analysis'}"
                     )
                     print(
                         f"      🔄 Resuming long-running task {subtask_id} "
@@ -2331,7 +2367,7 @@ class SubtaskExecutor:
                 _pending_lr_signal = None  # Consume — only applies once
                 _log_round = (parent_context or {}).get('round_label') or str(attempt)
 
-                if sig_status == "running":
+                if sig_status in ("starting", "running"):
                     print(f"      ⏳ Background task still running, resuming poll...")
                     monitor_status = self._poll_signal_file(
                         subtask_id, signal_file,
@@ -2741,7 +2777,7 @@ class SubtaskExecutor:
                         print(f"      [ERROR] Long-running task failed (exit code {ec_display})")
                         return "error"
                     
-                    # status == "running" — check if process is still alive
+                    # status == "starting" or "running" — check if process is still alive
                     if pid is None:
                         pid = signal_data.get("pid")
                     

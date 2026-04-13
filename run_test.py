@@ -222,8 +222,8 @@ def _normalize_log_content(text):
         '"<autoagent-exec>"',
         text,
     )
-    # Normalize PIDs:  "   PID: 12345" → "   PID: <PID>"
-    text = re.sub(r'PID: \d+', 'PID: <PID>', text)
+    # Normalize PIDs:  "   PID 12345" → "   PID <PID>"
+    text = re.sub(r'PID \d+', 'PID <PID>', text)
     # Normalize log file paths that contain session IDs:
     #   .../logs/<session_id>/... → .../logs/<SESSION>/...
     text = re.sub(

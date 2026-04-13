@@ -74,9 +74,9 @@ Build pipeline submitted.
 
 ⏳ LONG_RUNNING_IN_PROGRESS
 
-[autoagent-exec] Starting command (watching for 10s)...
+[autoagent-exec] STARTING (PID <PID>)
    Command: python -c "import time; time.sleep(1)"
-   PID: <PID>
+   Do NOT launch another autoagent-exec until this task finishes.
 
 [OK] Command finished quickly (exit code 0).
    (no output captured)
