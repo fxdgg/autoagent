@@ -2299,45 +2299,68 @@ class SubtaskExecutor:
         # (i.e. a background task was already submitted), we should resume
         # polling or go straight to analysis — NOT send a continuation
         # prompt that would confuse the AI into re-submitting the task.
+        #
+        # We perform the signal-file check in TWO cases:
+        #   1. _interrupt_pending is set  (graceful Ctrl+C)
+        #   2. No interrupt_pending, but a signal file already exists with
+        #      status "starting" or "running"  (non-graceful termination
+        #      such as kill -9, OOM, power loss, or crash)
         _pending_lr_signal = None  # Will hold (signal_file, output_log, signal_status) if applicable
+        signal_file = os.path.join(log_session_dir, "lr_tasks", f"lr_{subtask_id}_signal.json")
+
         if _interrupt_pending:
             state_manager.update_task_field(sk, "interrupt_pending", None)
             if parent_task_id:
                 # Already consumed from parent above; clear subtask's own flag too
                 pass
 
-            # Check if a signal file exists for this subtask
-            signal_file = os.path.join(log_session_dir, "lr_tasks", f"lr_{subtask_id}_signal.json")
-            if os.path.isfile(signal_file):
-                try:
-                    with open(signal_file, "r", encoding="utf-8") as f:
-                        sig = json.load(f)
-                    sig_status = sig.get("status")
-                except Exception:
-                    sig_status = None
+        # Check signal file regardless of interrupt_pending — a running
+        # background task may survive a non-graceful process death.
+        if os.path.isfile(signal_file):
+            try:
+                with open(signal_file, "r", encoding="utf-8") as f:
+                    sig = json.load(f)
+                sig_status = sig.get("status")
+            except Exception:
+                sig_status = None
 
-                if sig_status in ("starting", "running", "finished", "error"):
-                    _pending_lr_signal = (signal_file, sig_status)
-                    should_reset = False
-                    logger.info(
-                        f"Long-running task {subtask_id}: interrupt_pending detected "
-                        f"with signal file status={sig_status} — will resume "
-                        f"{'polling' if sig_status in ('starting', 'running') else 'analysis'}"
-                    )
-                    print(
-                        f"      🔄 Resuming long-running task {subtask_id} "
-                        f"(signal status: {sig_status})"
-                    )
-
-            # No signal file or unreadable — fall back to normal interrupt
-            # continuation prompt (the AI was interrupted before submitting)
-            if _pending_lr_signal is None and client.session_id:
-                last_timeout_type = "interrupt"
+            # Interrupt recovery: all statuses are relevant because the
+            # signal file reflects the *current* interrupted run — even
+            # "finished"/"error" means the task finished but analysis
+            # was never performed.
+            #
+            # Non-interrupt (orphan recovery): only "starting"/"running"
+            # indicate a truly orphaned background task.  "finished"/"error"
+            # from a previous attempt is expected and should be overwritten
+            # by the normal retry prompt + autoagent-exec cycle.
+            _match_statuses = (
+                ("starting", "running", "finished", "error")
+                if _interrupt_pending
+                else ("starting", "running")
+            )
+            if sig_status in _match_statuses:
+                _pending_lr_signal = (signal_file, sig_status)
                 should_reset = False
                 logger.info(
-                    f"Long-running task {subtask_id}: interrupt_pending detected "
-                    f"with no signal file — will continue in same session"
+                    f"Long-running task {subtask_id}: signal file detected "
+                    f"with status={sig_status} — will resume "
+                    f"{'polling' if sig_status in ('starting', 'running') else 'analysis'}"
                 )
+                print(
+                    f"      🔄 Resuming long-running task {subtask_id} "
+                    f"(signal status: {sig_status})"
+                )
+
+        # No signal file and interrupt_pending — fall back to normal
+        # interrupt continuation prompt (the AI was interrupted before
+        # submitting).
+        if _pending_lr_signal is None and _interrupt_pending and client.session_id:
+            last_timeout_type = "interrupt"
+            should_reset = False
+            logger.info(
+                f"Long-running task {subtask_id}: interrupt_pending detected "
+                f"with no signal file — will continue in same session"
+            )
 
         for attempt in range(1, max_attempts + 1):
             # Reset session before each retry to prevent context accumulation
