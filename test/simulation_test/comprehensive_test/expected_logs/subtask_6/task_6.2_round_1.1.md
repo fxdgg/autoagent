@@ -10,7 +10,10 @@
     you MUST use autoagent-exec instead of running it directly in Bash:
       "<autoagent-exec>" "<your entire command>"
     Always wrap the command in double quotes so that shell operators are passed correctly.
-    When autoagent-exec prints "TASK SUBMITTED", output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+    autoagent-exec has three possible outcomes:
+      - "TASK SUBMITTED" → the command is running in the background. Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+      - "[OK]" → the command finished quickly with exit code 0. Continue working — treat it as a normal completed command.
+      - "[FAST-FAIL]" → the command failed quickly. Read the error output, fix the issue, and retry.
     NEVER run long commands directly in Bash — the session may be killed due to timeout, wasting time or leaving the project in broken state.
     
     3. When you are done, end your response with EXACTLY one of:
@@ -111,7 +114,10 @@ DETAIL 06: retry-stage=first-pass issue=parser-state drift=high observation=the 
     you MUST use autoagent-exec instead of running it directly in Bash:
       "<autoagent-exec>" "<your entire command>"
     Always wrap the command in double quotes so that shell operators are passed correctly.
-    When autoagent-exec prints "TASK SUBMITTED", output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+    autoagent-exec has three possible outcomes:
+      - "TASK SUBMITTED" → the command is running in the background. Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+      - "[OK]" → the command finished quickly with exit code 0. Continue working — treat it as a normal completed command.
+      - "[FAST-FAIL]" → the command failed quickly. Read the error output, fix the issue, and retry.
     NEVER run long commands directly in Bash — the session may be killed due to timeout, wasting time or leaving the project in broken state.
     
     3. When you are done, end your response with EXACTLY one of:

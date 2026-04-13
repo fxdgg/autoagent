@@ -215,8 +215,13 @@ def build_system_prompt_coding_agent(
             "you MUST use autoagent-exec instead of running it directly in Bash:\n"
             f'  "{exec_script_path}" "<your entire command>"\n'
             "Always wrap the command in double quotes so that shell operators are passed correctly.\n"
-            "When autoagent-exec prints \"TASK SUBMITTED\", output "
-            "⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.\n"
+            "autoagent-exec has three possible outcomes:\n"
+            "  - \"TASK SUBMITTED\" → the command is running in the background. "
+            "Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.\n"
+            "  - \"[OK]\" → the command finished quickly with exit code 0. "
+            "Continue working — treat it as a normal completed command.\n"
+            "  - \"[FAST-FAIL]\" → the command failed quickly. "
+            "Read the error output, fix the issue, and retry.\n"
             "NEVER run long commands directly in Bash — the session may be "
             "killed due to timeout, wasting time or leaving the project in broken state.\n"
         )
