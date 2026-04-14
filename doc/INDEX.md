@@ -14,6 +14,8 @@
 | **[API_REFERENCE.md](API_REFERENCE.md)** 🔧 | 完整 API 参考、类定义、状态类型 | 开发者 |
 | **[EXAMPLES.md](EXAMPLES.md)** 💡 | 实际使用示例（ML、代码质量、性能优化） | 所有人 |
 | **[FILES.md](FILES.md)** 📁 | 项目文件结构说明 | 开发者 |
+| **[AI Orchestrator 设计方案](ai_orchestrator/DESIGN.md)** 🤖 | AI 调度器设计方案（WIP） | 开发者 |
+| **[AI Orchestrator TASK_DESIGN_GUIDE 修改方案](ai_orchestrator/TASK_DESIGN_GUIDE_CHANGES.md)** 📝 | TASK_DESIGN_GUIDE 修改方案（WIP，实现后删除） | 开发者 |
 
 ## 🎯 按需求查找
 
@@ -28,6 +30,8 @@
 | 了解长时间任务处理 | [ARCHITECTURE.md](ARCHITECTURE.md) → 长时间任务处理 |
 | 查看 API 定义 | [API_REFERENCE.md](API_REFERENCE.md) |
 | 排查问题 | [USAGE.md](USAGE.md) → 故障排除 |
+| 了解 AI 调度器设计 | [AI Orchestrator 设计方案](ai_orchestrator/DESIGN.md) |
+| 了解 AI 调度模式的任务设计变更 | [TASK_DESIGN_GUIDE 修改方案](ai_orchestrator/TASK_DESIGN_GUIDE_CHANGES.md) |
 
 ## 📖 推荐阅读顺序
 
@@ -37,6 +41,7 @@
 
 ## 📝 文档更新记录
 
+- **2026-04-14 v5**: 添加 AI Orchestrator 设计方案
 - **2026-03-29 v4**: 添加 Preset 配置文档
 - **2026-03-24 v3**: 精简索引页，去除重复内容
 - **2026-03-23 v2**: 更新为统一任务模型
