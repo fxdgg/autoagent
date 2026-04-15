@@ -1,4 +1,4 @@
-# AI Orchestrator 设计方案
+﻿# AI Orchestrator 设计方案
 
 ## 1. 动机与目标
 
@@ -140,7 +140,7 @@ tasks:
   - `simple task` 的默认推荐方案
   - `nested task` 也可以使用，但前提是最后一个 subtask 必须是面向调度器的总结类 subtask
   - `looping task` 一般不推荐使用
-- **注意**：如果预计 response 可能被截断，或任务天然更适合显式维护结果文件，应优先使用 `type=file`
+- **注意**：如果预计 response 可能被截断，或任务天然更适合显式维护结果文件，应优先使用 `type=file`。截断策略和 config.yaml 中的 `previous_subtask_summary` 字段相同。
 
 #### `type=file` 的定位
 
@@ -313,9 +313,7 @@ AI 调度器的职责到“选择哪个 task”结束，不参与 task 内部 wo
 这是 AI 调度模式需要明确补充的关键规则。
 
 1. **同一调度轮次内的断点恢复**：如果 task 在本轮执行过程中被中断，允许用已有 `session_id` 恢复，延续本轮未完成工作。
-
-若调度执行期间被中断，则使用当前调度的 `session_id` 恢复，延续未完成的调度工作。
-
+2. **调度 AI 的会话管理**：每轮调度使用独立 session；若调度执行期间被中断，则使用已有的 `session_id` 恢复，延续未完成的调度工作。
 2. **同一个 task 被下一次重新调度时**：必须视为一次全新的 task 执行，创建新的顶层 session，不复用上一次调度的 `session_id`。
 3. **原因**：不同调度轮次之间，调度器已经做出了新的全局决策；继续复用旧 session 会把上一次 task 的局部上下文错误带入新的调度轮次。
 4. **实现语义**：恢复只发生在“未完成的同一轮 task”；重新调度则是“新的 schedule round”，需要干净上下文。
@@ -334,16 +332,19 @@ orchestrator:
   current_round: 5            # 当前轮次
   max_rounds: 30              # 最大轮次
   status: in_progress         # "in_progress" | "completed" | "stopped"
+  session_id: "sched_abc"     # 调度 AI 的 session id
   schedule_history:           # 调度历史记录
     - round: 1
       task_id: "1"
       task_name: "Baseline training"
+      session_id: "sched_r1"      
       result: success             # "success" | "failed"
       reasoning: "首先建立 baseline"
       timestamp: "2026-04-14 18:00:00"
     - round: 2
       task_id: "2"
       task_name: "Optimization experiment"
+      session_id: "sched_r2"
       result: success
       reasoning: "Baseline 已建立，开始优化"
       timestamp: "2026-04-14 18:20:00"
@@ -355,15 +356,38 @@ orchestrator:
 
 tasks:
   # 现有的 task 状态
+  "1":
+    status: completed
+    attempts: 1
+    session_id: "task_1_latest"
+
+  # 使用新的 round_scoped key（详见 4.5）
+  "3.1.2@1.1":
+    status: completed
+    attempts: 1
+    session_id: "subtask_3_1_2_round_1_1"
+
+  # *_once 类型的 task 依然使用 plain key
+  "1.9":
+    status: completed
+    attempts: 1
 ```
 
 ### 4.2 断点续传
 
 中断恢复时：
-1. 读取 `orchestrator.current_round`、`orchestrator.status` 和 `orchestrator.schedule_history`
+1. 读取 `orchestrator.current_round`、`orchestrator.status`、`orchestrator.session_id` 和 `orchestrator.schedule_history`
 2. 如果 `orchestrator.status` 已是 `completed` 或 `stopped`，则 `--continue` 不应继续执行
-3. 如果最后一轮任务未完成，先恢复执行该任务
-4. 如果最后一轮任务已完成且整体仍为 `in_progress`，则继续下一轮调度
+3. 如果当前轮次的调度决策尚未完成，则优先用 `orchestrator.session_id` 恢复该轮调度 AI 会话，避免重复做出新的调度决策
+4. 如果最后一轮任务未完成，先恢复执行该任务
+5. 如果最后一轮任务已完成且整体仍为 `in_progress`，则继续下一轮调度
+
+#### `orchestrator.session_id` 的语义
+
+- 它表示“当前未完成调度轮次”的调度 AI 会话，而不是某个 task 的执行会话
+- 它只用于恢复同一轮调度决策；一旦该轮决策完成并进入 task 执行，可以清空或滚动更新到下一轮
+- 当进入新的 schedule round 时，应创建新的调度 session，而不是复用上一轮的 `orchestrator.session_id`
+- `tasks.<id>.session_id` 与之分离：前者属于顶层 task 执行上下文，后者属于调度器自身上下文
 
 ### 4.3 重复调度同一 task 时的状态规则
 
@@ -371,6 +395,7 @@ tasks:
 - 顶层 task 自身状态会进入新一轮执行
 - 该 task 本轮产生的 round-scoped subtask 状态使用新的 schedule-round 前缀，与历史轮次隔离
 - 顶层 task 的 `session_id` 不复用旧轮次，重新创建新 session
+- 调度器自己的 `orchestrator.session_id` 也不跨轮次复用；每个 schedule round 都有独立的调度会话
 - `*_once` subtasks 仍沿用现有语义：它们使用 plain key，不因 task 被再次调度而重复执行
 
 也就是说：**重复调度会重跑 task，但不会重跑已经完成的 `*_once` subtasks。**
@@ -492,6 +517,9 @@ X.Y.Z @ A.B
 AI 调度模式下建议扩展为包含 schedule round 的命名：
 
 - `schedule_1_task_1.1_round_1.1.md`
+- `schedule_1_failure_analysis_1.1_round_1.1.md`
+- `schedule_1_main_task_evaluation_1.1_round_1.1.md`
+...
 
 这样做的好处：
 
@@ -502,7 +530,7 @@ AI 调度模式下建议扩展为包含 schedule round 的命名：
 说明：
 
 - 普通 task / subtask 日志采用新的 schedule-aware 文件名
-- `lr_*` 信号文件和输出文件仍可保持现有命名与覆盖策略，不强制改动
+- `lr_*` 信号文件和输出文件仍可保持现有命名与覆盖策略，不强制改动（因为先前的设计也是反复覆盖这些文件的）
 
 ### 4.7 round_scoped description 行为
 
@@ -535,9 +563,82 @@ description@3: |
 
 ---
 
-## 5. Prompt 设计
+## 5. config.yaml 格式变更
 
-### 5.1 调度 Prompt 结构
+为了避免在文档不同章节零散写“config.yaml 可配置”，AI 调度模式新增或涉及的配置项统一在本节说明。实现时建议把这些项集中加入 `config.yaml`，并在 CLI / preset / 代码默认值之间维持一致优先级。
+
+### 5.1 新增配置项
+
+```yaml
+# AI scheduler model role. If omitted, fall back to model.default.
+model:
+  plan: claude-opus-4.6
+  default: claude-sonnet-4.6
+  lite: glm-4-flash
+  evaluation: claude-opus-4.6
+  scheduler: claude-opus-4.6
+
+# Maximum number of recent schedule_history entries included in scheduler prompt.
+scheduler_history_limit: 10
+
+# Maximum number of decision-parse retries when scheduler returns invalid JSON
+# or references an invalid task_id.
+scheduler_decision_max_retries: 3
+```
+
+### 5.2 配置项说明
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `model.scheduler` | string | 继承 `model.default` | 调度 AI 专用模型角色；只用于“选择下一个 task / stop”，不参与 task 内部执行 |
+| `scheduler_history_limit` | int | 10 | 调度 prompt 中保留的 `schedule_history` 轮次数 |
+| `scheduler_decision_max_retries` | int | 3 | 调度 AI 返回无效 JSON、非法 `task_id` 等决策格式错误时的最大重试次数 |
+
+### 5.3 与现有配置的关系
+
+- `ai_orchestrator.max_rounds` 仍然放在 `todos.yaml` 中，因为它属于任务实例本身的执行约束，而不是全局运行时配置。
+- `backoff_max_wait` 继续复用现有 `config.yaml` 配置，用于调度 AI 和执行 AI 的底层调用失败重试。
+- `truncation_limits.max` 继续作为 `task description` 等长文本字段的统一截断上限，不额外为 scheduler 单独引入一套文本截断配置，除非后续实测表明需要拆分。
+- Ideas Watcher 在 AI 调度模式下切换指南文件是功能逻辑，不需要单独新增 `config.yaml` 开关。
+
+### 5.4 model 角色约定调整
+
+现有 model 角色从：
+
+```yaml
+model:
+  plan: ...
+  default: ...
+  lite: ...
+  evaluation: ...
+```
+
+调整为：
+
+```yaml
+model:
+  plan: ...
+  default: ...
+  lite: ...
+  evaluation: ...
+  scheduler: ...
+```
+
+语义分工：
+
+- `plan`：Ideas Watcher 的任务分解 / 审查 / 修订流程
+- `default`：普通 task / subtask 的默认执行模型
+- `lite`：低成本执行任务
+- `evaluation`：主任务评估、failure analysis 等评估型调用
+- `scheduler`：AI Orchestrator 的顶层调度决策
+
+如果 `model.scheduler` 未显式配置，建议回退到 `model.default`，保证向后兼容。
+
+---
+
+## 6. Prompt 设计
+
+### 6.1 调度 Prompt 结构
 
 ```
 You are an AI task scheduler. Your job is to decide which task to execute
@@ -582,7 +683,7 @@ You must choose exactly ONE task per round.
             (tasks not yet executed do not show Last Result line)
     </available_tasks>
 
-    <schedule_history> (last 10 rounds)
+    <schedule_history> (last {scheduler_history_limit} rounds)
         - Round {n}: ✅
             Task {id} ({name})
             Reasoning: {reasoning}
@@ -602,29 +703,29 @@ You must choose exactly ONE task per round.
 3. **Conditional Last Result display**: Show `Last Result` only after a task has run at least once. Use `success (See {path})` or `failed (See {path})`. For `type=file`, append `(Not found, probably due to task failures)` if the file is missing at runtime. For `type=none`, omit the line. For `type=response`, the path points to the auto-saved truncated response file such as `.autoagent/<run>/task_results/result_1.txt`.
 4. **Schedule History includes outcome markers**: Each round records success/failure markers so the scheduler can quickly understand prior execution outcomes without reading every result file.
 
-### 5.2 Prompt 截断策略
+### 6.2 Prompt 截断策略
 
-- `schedule_history`：保留最近 10 轮的完整记录（config.yaml 可配置）
+- `schedule_history`：保留最近 `scheduler_history_limit` 轮的完整记录
 - `task description`：截断到 `truncation_limits.max` 字符
 
 ---
 
 ---
 
-## 6. 与现有功能的交互
+## 7. 与现有功能的交互
 
-### 6.1 Ideas Watcher
+### 7.1 Ideas Watcher
 
 AI 调度模式与 Ideas Watcher 兼容：
 - Ideas 生成的新任务追加到 `tasks` 列表后，AI 调度器在下一轮可以看到新任务
 - `reload_todos()` 后，调度器自动获取更新的任务列表
 
-### 6.2 `--continue` / `--resume`
+### 7.2 `--continue` / `--resume`
 
 - 断点续传时，从 `orchestrator` 状态恢复调度进度。
 - 如果 orchestrator 已经 `stopped` 或 `completed`，`--continue` / `--resume` 不应继续执行。
 
-### 6.3 `--status`
+### 7.3 `--status`
 
 状态显示增加调度信息：
 ```
@@ -634,11 +735,11 @@ AI 调度模式与 Ideas Watcher 兼容：
    Schedule: Task 1 ✅ → Task 2 ✅ → Task 2 ✅ → Task 3 ❌ → Task 2 ✅
 ```
 
-### 6.4 `--reset`
+### 7.4 `--reset`
 
 重置时同时清除 `orchestrator` 状态。
 
-### 6.5 `--task`、`skip_completed` 等旧控制参数
+### 7.5 `--task`、`skip_completed` 等旧控制参数
 
 这些参数原本服务于线性调度模型，但在 AI 调度模式下语义变得不自然：
 
@@ -653,11 +754,11 @@ AI 调度模式与 Ideas Watcher 兼容：
 
 ---
 
-## 7. 边界情况处理
+## 8. 边界情况处理
 
 | 场景 | 处理方式 |
 |------|----------|
-| AI 返回无效 JSON | 重试解析，最多 3 次（config.yaml 可配置），失败则停止 |
+| AI 返回无效 JSON | 重试解析，最多 `scheduler_decision_max_retries` 次，失败则停止 |
 | AI 选择了不存在的 task_id | 提示错误，要求重新选择 |
 | 所有可调度 task 都为空 | 自动停止 |
 | AI 调用失败（网络错误等） | 使用现有的 backoff 重试机制 |
@@ -667,7 +768,7 @@ AI 调度模式与 Ideas Watcher 兼容：
 
 ---
 
-## 8. 示例：NeuralBasisField 优化场景
+## 9. 示例：NeuralBasisField 优化场景
 
 ```yaml
 description: |
@@ -738,15 +839,15 @@ tasks:
 
 ---
 
-## 9. 测试计划
+## 10. 测试计划
 
-### 9.1 单元测试
+### 10.1 单元测试
 
 - `_load_todos()` 正确解析 `ai_orchestrator` 字段
 - `last_result` schema 正确处理 `path` 的单路径和多路径两种 `type=file` 形式
 - `state_manager` 正确读写 `orchestrator` 状态
 
-### 9.2 仿真测试
+### 10.2 仿真测试
 
 使用 `TestProvider` 创建仿真测试：
 - 基本调度流程：AI 选择任务 → 执行 → 选择下一个 → 停止
@@ -755,13 +856,13 @@ tasks:
 - 最大轮次限制
 - AI 返回无效决策的错误处理
 
-### 9.3 集成测试
+### 10.3 集成测试
 
 使用真实 AI provider 测试完整的调度流程。
 
 ---
 
-## 10. 文档更新计划
+## 11. 文档更新计划
 
 | 文档 | 更新内容 |
 |------|----------|
