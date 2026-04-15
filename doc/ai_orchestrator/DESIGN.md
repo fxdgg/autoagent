@@ -17,15 +17,16 @@
 
 ### 1.2 解决方案
 
-引入 **AI 调度器（AI Orchestrator）**：用户只定义任务集合（无需定义执行顺序），每次执行完一个任务后，由 AI 根据当前状态决定下一个执行的任务（或停止执行）。
+引入 **AI 调度器（AI Orchestrator）**：用户只定义任务集合，不定义顶层执行顺序；每次执行完一个 task 后，由 AI 根据当前状态决定下一个执行的 task，或停止执行。
 
 ### 1.3 设计原则
 
 1. **向后兼容**：没有 `ai_orchestrator` 字段时，行为与现有完全一致
 2. **职责边界清晰**：AI 只决定 task 级别的调度顺序，不干涉单个 task 内部的 subtask 工作流
 3. **最小侵入**：复用现有的 task 执行器（SimpleTaskExecutor、NestedTaskExecutor、LoopingTaskExecutor），只替换外层调度循环
-4. **可观测**：所有调度决策记录在状态文件中，可审计和回溯
+4. **可观测**：所有调度决策记录在状态文件和日志中，可审计和回溯
 5. **可恢复**：支持断点续传，中断后能从上次调度状态恢复
+6. **任务 schema 尽量干净**：AI 调度相关配置尽量聚合在 `ai_orchestrator` 顶层；task 层只新增确实属于 task 本身的字段
 
 ---
 
@@ -53,32 +54,33 @@ ai_orchestrator:
   stop_condition: |
     当 E2E NRMSE < 0.03 或已完成 30 轮优化时停止。
 
-  # 每个 task 完成后的结果文件配置（可选）
-  # 调度 AI 通过读取这些文件了解任务执行结果，从而做出下一步决策
+  # 每个 task 的“最近一次结果文件”配置（可选）
+  # 两种类型本质上都会给调度 AI 提供一个文件路径：
+  # - type=file: 用户指定文件路径
+  # - type=response: 系统自动生成结果文件路径
   last_result:
     1:
       type: file                          # "none" | "response" | "file"
-      path: D:/project/results/baseline.txt  # 仅 type=file 时需要，必须是绝对路径
+      path: D:/project/results/baseline.txt  # 仅 type=file 时需要；可为绝对路径字符串或绝对路径列表
     2:
       type: file
       path: D:/project/results/experiment_result.txt
     3:
-      type: response                      # 使用 AI 原始 response 的摘要文件
+      type: response                      # 系统自动保存最近一次 response 到结果文件
     4:
       type: none                          # 不需要结果
 
 tasks:
-  # tasks 定义保持不变，但在 ai_orchestrator 模式下：
+  # tasks 定义整体保持不变，但在 ai_orchestrator 模式下：
   # - 任务不再按 ID 顺序执行
   # - AI 每轮从可用任务中选择一个执行
-  # - 同一个任务可以被多次调度（除非标记为 once）
+  # - 同一个任务可以被多次调度
   - id: 1
     name: "Baseline training"
     description: |  # 新增必填字段：对 task 本身的详细描述，供调度 AI 了解任务内容
       Run the baseline training pipeline with default hyperparameters.
       Produces baseline_metrics.txt containing E2E NRMSE and training time.
     type: nested
-    once: true  # 新增可选字段：只允许被调度一次
     ...
 
   - id: 2
@@ -86,7 +88,7 @@ tasks:
     description: |
       Run one cycle of hyperparameter optimization experiment.
       Each run tries a different configuration and records results to experiment_result.txt.
-    type: looping
+    type: nested
     ...
 
   - id: 3
@@ -103,7 +105,6 @@ tasks:
       Generate a comprehensive final report summarizing all experiments,
       the best configuration found, and key metrics.
     type: simple
-    once: true
     ...
 ```
 
@@ -114,31 +115,74 @@ tasks:
 | `ai_orchestrator.strategy` | string | ✅ | - | 调度策略描述，注入 AI prompt |
 | `ai_orchestrator.max_rounds` | int | ❌ | 50 | 最大调度轮次 |
 | `ai_orchestrator.stop_condition` | string | ❌ | `""` | 停止条件描述 |
-| `ai_orchestrator.last_result` | dict | ❌ | `{}` | 每个 task 的结果文件配置 |
+| `ai_orchestrator.last_result` | dict | ❌ | `{}` | 每个 task 的最近结果文件配置 |
 | `ai_orchestrator.last_result.<id>.type` | string | ✅ | - | `"none"` / `"response"` / `"file"` |
-| `ai_orchestrator.last_result.<id>.path` | string | 条件必填 | - | 仅 `type=file` 时需要，必须是绝对路径 |
+| `ai_orchestrator.last_result.<id>.path` | string \| list[string] | 条件必填 | - | `type=file` 时需要；可为单个绝对路径，或按顺序提供多个绝对路径 |
 | `tasks[].description` | string | ✅（AI 调度模式） | - | 对 task 本身的详细描述，供调度 AI 了解任务内容 |
-| `tasks[].once` | bool | ❌ | `false` | 是否只允许被调度一次 |
 
 #### `last_result.type` 说明
 
-| type | 含义 | Last Result 来源 |
-|------|------|------------------|
-| `none` | 不需要结果 | 调度 prompt 中不显示 Last Result |
-| `response` | 使用 AI 最终 response 的截断版本 | 自动保存到 `.autoagent/<run>/task_results/result_<task_id>.txt` |
-| `file` | 用户指定的结果文件 | 读取 `path` 指定的文件内容 |
+| type | 含义 | 调度 AI 看到的结果 |
+|------|------|--------------------|
+| `none` | 不需要结果 | prompt 中不显示 Last Result |
+| `response` | 系统把最近一次执行的 response 保存为结果文件 | 自动生成的结果文件路径 |
+| `file` | 用户指定结果文件路径或文件集合 | `path` 指定的文件路径 |
 
 #### `type=response` 保存机制
 
-- **保存内容**：AI 最终 response 文本的前 4000 字节截断版本
-- **保存来源**：始终保存最后一个执行单元的 response：
+- **保存内容**：最近一次执行单元的 AI 最终 response 文本截断版本
+- **保存位置**：`.autoagent/<run>/task_results/result_<task_id>.txt`
+- **保存来源**：
   - `simple` 任务：保存该任务的 AI response
-  - `nested` 任务：保存最后一个 subtask 的 AI response
-  - `looping` 任务：保存最后一轮最后一个 subtask 的 AI response
-- **注意**：`nested` 任务通常不应使用 `type=response`，因为最后一个 subtask 的 response 往往不能代表整个任务的结果。推荐使用 `type=file`，在最后一个 subtask 中生成汇总文件
-- **与代码中已有行为一致**：此截断保存逻辑与现有 `SubtaskResult.response_text` 的处理方式一致
+  - `nested` 任务：保存最后一个真正执行的 subtask 的 AI response
+  - `looping` 任务：保存最后一轮最后一个真正执行的 subtask 的 AI response
+- **定位**：
+  - `simple task` 的默认推荐方案
+  - `nested task` 也可以使用，但前提是最后一个 subtask 必须是面向调度器的总结类 subtask
+  - `looping task` 一般不推荐使用
+- **注意**：如果预计 response 可能被截断，或任务天然更适合显式维护结果文件，应优先使用 `type=file`
 
-> **Schema 校验规则**：当 `type=file` 时，`path` 必须存在且为绝对路径（`os.path.isabs(path)` 为 True）。
+#### `type=file` 的定位
+
+`type=file` 不是冗余设计。虽然理论上可以把“总结输出”塞进 task 内部最后一个 subtask 来实现，但调度器仍然需要一个稳定、结构化、可声明的“这个 task 的结果文件在哪里”的接口。`type=file` 的价值在于：
+
+1. 把“调度器该读哪个文件”声明在 `ai_orchestrator`，而不是散落在 task 内部实现细节里
+2. 让 task 内部如何生成该文件保持自由，调度器只关心读取路径
+3. 对于 `nested` / `looping` task，它提供了比原始 response 更稳定、可控的调度接口
+4. 当 `type=response` 可能受截断影响时，`type=file` 应视为优先方案
+
+#### 不同 task 类型的推荐选择
+
+1. **simple task**：默认推荐 `type=response`
+2. **nested task**：
+   - 可以用 `type=response`，但最后一个 subtask 必须是总结类 subtask，确保最终 response 适合给调度器阅读
+   - 也可以用 `type=file`，由 task 内部显式维护结果文件
+3. **looping task**：
+   - 首选 `type=file`
+   - 设计 nested/loop 内部流程时，应明确谁负责更新结果文件，以及是覆盖写还是结构化追加
+   - 如果对总结质量要求更高，可以额外添加 summary task，但这不是 schema 层面的强制要求
+4. **截断优先级**：只要 `type=response` 可能因为长度而丢失关键信息（比如不只是让调度 AI 知道任务已经完成的结果时），就应改用 `type=file`，并在 task 设计中明确要求 AI 将结果写入文件
+
+#### `type=file` 支持多个文件
+
+对于 `looping task` 或其他需要同时传递多个产物的场景，`type=file` 应支持通过同一个 `path` 字段引用多个文件，而不是额外引入一个平行字段。建议 schema 语义为：
+
+- 单文件场景：`path: <absolute_path>`
+- 多文件场景：`path: [<absolute_path_1>, <absolute_path_2>, ...]`
+
+调度器读取时应按列表声明顺序提供这些文件路径，并在 prompt 中明确这是同一 task 的结果文件集合。
+
+#### Schema 校验规则
+
+| 规则 | 说明 |
+|------|------|
+| `type` 必须是 `none` / `response` / `file` 之一 | 其他值报 `ConfigError` |
+| `type=file` 时 `path` 必填 | 缺少 `path` 报 `ConfigError` |
+| `type=file` 时 `path` 可以是绝对路径字符串，或非空的绝对路径列表 | 任一项非法时报 `ConfigError` |
+| `type=response` 或 `type=none` 时 `path` 被忽略 | 即使提供也不使用 |
+| `last_result` 中的 task_id 必须在 `tasks` 中存在 | 引用不存在的 task_id 报 `ConfigError` |
+
+> 注意：`type=file` 在配置加载时**不要求目标文件已经存在**。文件是否存在是运行期信息，不是 schema 有效性的前置条件。
 
 ### 2.3 与现有模式的关系
 
@@ -218,9 +262,63 @@ AI 返回一个 JSON 格式的决策：
 }
 ```
 
-### 3.4 任务执行
+### 3.4 任务执行边界
 
-选定任务后，调用现有的 `execute_task()` 方法执行。执行器内部的 subtask 工作流、重试逻辑、AI 评估等完全不变。
+选定 task 后，调用现有 `execute_task()` 逻辑。执行器内部的 subtask 工作流、重试逻辑、主任务评估、failure analysis 等行为保持不变。
+
+AI 调度器的职责到“选择哪个 task”结束，不参与 task 内部 workflow 编排。
+
+### 3.5 原有 task prompt 的修改计划
+
+`tasks[].description` 不应只注入调度 AI prompt，也应注入原先执行 task 时使用的 task prompt。原因是这个字段本质上属于 task 自身元信息，不只是调度器专用说明。
+
+建议把原有 task prompt 的 `<task>` 段调整为：
+
+```xml
+[system_prompt_prefix]
+
+<task>
+    <task_name>
+        [task_name]
+    </task_name>
+
+    <task_description>
+        [task_description]
+    </task_description>
+
+    <completion_criteria>
+        [completion_criteria]
+    </completion_criteria>
+
+    <initial_hint>
+        [initial_hint]
+    </initial_hint>
+</task>
+
+<context>
+（后面保持不变）
+```
+
+这里的语义分工应明确为：
+
+1. `task_name`：简短标签，便于快速识别任务
+2. `task_description`：说明 task 做什么、产出什么、处于什么上下文
+3. `completion_criteria`：约束“什么算完成”
+4. `initial_hint`：给执行 AI 的起始建议，而不是 task 定义本身
+
+这样可以避免把 task 背景、任务目标、完成标准、执行提示混在一个字段里，也让 `tasks[].description` 在调度 AI 和执行 AI 两侧保持一致语义。
+
+### 3.6 会话生命周期
+
+这是 AI 调度模式需要明确补充的关键规则。
+
+1. **同一调度轮次内的断点恢复**：如果 task 在本轮执行过程中被中断，允许用已有 `session_id` 恢复，延续本轮未完成工作。
+
+若调度执行期间被中断，则使用当前调度的 `session_id` 恢复，延续未完成的调度工作。
+
+2. **同一个 task 被下一次重新调度时**：必须视为一次全新的 task 执行，创建新的顶层 session，不复用上一次调度的 `session_id`。
+3. **原因**：不同调度轮次之间，调度器已经做出了新的全局决策；继续复用旧 session 会把上一次 task 的局部上下文错误带入新的调度轮次。
+4. **实现语义**：恢复只发生在“未完成的同一轮 task”；重新调度则是“新的 schedule round”，需要干净上下文。
 
 ---
 
@@ -256,29 +354,26 @@ orchestrator:
     "4": 0
 
 tasks:
-  # 现有的 task 状态（保持不变）
-  "1": { status: completed, ... }
-  "2": { status: in_progress, ... }
+  # 现有的 task 状态
 ```
 
 ### 4.2 断点续传
 
 中断恢复时：
-1. 读取 `orchestrator.current_round` 和 `orchestrator.schedule_history`
-2. 检查最后一轮的任务是否完成（通过 `tasks` 中的状态判断）
+1. 读取 `orchestrator.current_round`、`orchestrator.status` 和 `orchestrator.schedule_history`
+2. 如果 `orchestrator.status` 已是 `completed` 或 `stopped`，则 `--continue` 不应继续执行
 3. 如果最后一轮任务未完成，先恢复执行该任务
-4. 任务完成后，继续下一轮调度
+4. 如果最后一轮任务已完成且整体仍为 `in_progress`，则继续下一轮调度
 
-### 4.3 `once` 任务的处理
+### 4.3 重复调度同一 task 时的状态规则
 
-- 标记 `once: true` 的任务，在 `task_execution_counts` 中计数达到 1 后，不再出现在可用任务列表中
-- 这与现有的 `simple_once` / `long_running_once` 不同：后者是 subtask 级别的，前者是 task 级别的
+在 AI 调度模式下，同一个 task 可能被多次执行。每次被重新调度时：
+- 顶层 task 自身状态会进入新一轮执行
+- 该 task 本轮产生的 round-scoped subtask 状态使用新的 schedule-round 前缀，与历史轮次隔离
+- 顶层 task 的 `session_id` 不复用旧轮次，重新创建新 session
+- `*_once` subtasks 仍沿用现有语义：它们使用 plain key，不因 task 被再次调度而重复执行
 
-### 4.4 任务状态重置
-
-在 AI 调度模式下，同一个任务可能被多次执行。每次被调度时：
-- 非 `once` 任务：重置该任务的状态为 `pending`（清除上一次的 subtask 状态），然后执行
-- `once` 任务：只执行一次，后续调度时跳过
+也就是说：**重复调度会重跑 task，但不会重跑已经完成的 `*_once` subtasks。**
 
 ### 4.5 round_scoped key 格式
 
@@ -388,7 +483,28 @@ X.Y.Z @ A.B
 - `@A.B` 部分与 Linear 模式完全一致，复用现有的 round_label 机制
 - 在 Linear 模式下，`X` 层级不存在，保持现有的 `Y.Z@A.B` 格式不变
 
-### 4.6 round_scoped description 行为
+### 4.6 日志命名
+
+现有日志文件名只有 task/subtask 维度，例如：
+
+- `task_1.1_round_1.1.md`
+
+AI 调度模式下建议扩展为包含 schedule round 的命名：
+
+- `schedule_1_task_1.1_round_1.1.md`
+
+这样做的好处：
+
+1. 人工排查时能直接看出日志属于哪一次顶层调度
+2. 同一个 task 被多次调度时，不会在文件名层面混淆
+3. 与 `X.Y.Z@A.B` 的 state key 语义一致
+
+说明：
+
+- 普通 task / subtask 日志采用新的 schedule-aware 文件名
+- `lr_*` 信号文件和输出文件仍可保持现有命名与覆盖策略，不强制改动
+
+### 4.7 round_scoped description 行为
 
 在 AI 调度模式下，`description@N` 的语义与 Linear 模式不同：
 
@@ -479,16 +595,16 @@ You must choose exactly ONE task per round.
 </context>
 ```
 
-#### Prompt 设计说明
+#### Prompt Notes
 
-1. **System prompt 精简**：去除了冗余规则（如 "Consider the scheduling strategy and stop condition" 和 "Tasks marked once: true can only be executed once"），因为前者是废话，后者已通过从 available_tasks 中移除已执行的 once 任务来保证。
-2. **XML 结构化**：使用 `<context>` 包裹所有上下文信息，内部使用语义化标签，便于 AI 解析。
-3. **Last Result 条件显示**：只有任务运行过至少一次时才显示 `Last Result` 行。显示格式为 `✅ success (See {path})` 或 `❌ failed (See {path})`。对于 `type=file`，如果文件不存在则追加 `(Not found, probably due to task failures)`。对于 `type=none` 的任务，不显示 `Last Result` 行。对于 `type=response` 的任务，路径是自动保存的 response 截断文件（如 `.autoagent/<run>/task_results/result_1.txt`）。
-4. **Schedule History 包含执行结果**：每轮记录包含 ✅/❌ 标记，让调度 AI 快速了解历史执行情况，无需逐个读取 Last Result 文件。
+1. **System prompt simplification**: Remove redundant instructions such as "Consider the scheduling strategy and stop condition" because they add prompt noise without adding information.
+2. **XML structure**: Wrap all context in `<context>` and use semantic inner tags so the scheduler model can parse the state reliably.
+3. **Conditional Last Result display**: Show `Last Result` only after a task has run at least once. Use `success (See {path})` or `failed (See {path})`. For `type=file`, append `(Not found, probably due to task failures)` if the file is missing at runtime. For `type=none`, omit the line. For `type=response`, the path points to the auto-saved truncated response file such as `.autoagent/<run>/task_results/result_1.txt`.
+4. **Schedule History includes outcome markers**: Each round records success/failure markers so the scheduler can quickly understand prior execution outcomes without reading every result file.
 
 ### 5.2 Prompt 截断策略
 
-- `schedule_history`：保留最近 10 轮的完整记录，更早的只保留 task_id
+- `schedule_history`：保留最近 10 轮的完整记录（config.yaml 可配置）
 - `task description`：截断到 `truncation_limits.max` 字符
 
 ---
@@ -503,15 +619,12 @@ AI 调度模式与 Ideas Watcher 兼容：
 - Ideas 生成的新任务追加到 `tasks` 列表后，AI 调度器在下一轮可以看到新任务
 - `reload_todos()` 后，调度器自动获取更新的任务列表
 
-### 6.2 `--task` 参数
+### 6.2 `--continue` / `--resume`
 
-指定 `--task N` 时，即使配置了 `ai_orchestrator`，也直接执行指定任务（跳过调度）。
+- 断点续传时，从 `orchestrator` 状态恢复调度进度。
+- 如果 orchestrator 已经 `stopped` 或 `completed`，`--continue` / `--resume` 不应继续执行。
 
-### 6.3 `--continue` / `--resume`
-
-断点续传时，从 `orchestrator` 状态恢复调度进度，继续执行。
-
-### 6.4 `--status`
+### 6.3 `--status`
 
 状态显示增加调度信息：
 ```
@@ -521,9 +634,22 @@ AI 调度模式与 Ideas Watcher 兼容：
    Schedule: Task 1 ✅ → Task 2 ✅ → Task 2 ✅ → Task 3 ❌ → Task 2 ✅
 ```
 
-### 6.5 `--reset`
+### 6.4 `--reset`
 
 重置时同时清除 `orchestrator` 状态。
+
+### 6.5 `--task`、`skip_completed` 等旧控制参数
+
+这些参数原本服务于线性调度模型，但在 AI 调度模式下语义变得不自然：
+
+- `--task` 绕过调度器，破坏“由系统决定怎么做”的原则。
+- `skip_completed` 假设“完成过一次就不该再执行”，与 AI 调度下同一 task 可被重复调度、且每次都创建新 session 的设计冲突。
+
+因此建议：
+
+1. 在线性模式保留现有行为，避免破坏兼容性。
+2. 在 AI 调度模式中不再暴露或不再支持这类参数。
+3. 文档中明确：AI 调度模式的顶层执行入口就是“让 orchestrator 自己调度”，而不是人工挑 task。
 
 ---
 
@@ -531,12 +657,13 @@ AI 调度模式与 Ideas Watcher 兼容：
 
 | 场景 | 处理方式 |
 |------|----------|
-| AI 返回无效 JSON | 重试解析，最多 3 次（config.yaml可配置），失败则停止 |
-| AI 选择了不存在的 task_id | 提示错误，要求重新选择，不重置上下文 |
-| AI 选择了已用尽的 `once` 任务 | 提示错误，要求重新选择，不重置上下文 |
-| 所有 `once` 任务已完成，非 `once` 任务为空 | 自动停止 |
+| AI 返回无效 JSON | 重试解析，最多 3 次（config.yaml 可配置），失败则停止 |
+| AI 选择了不存在的 task_id | 提示错误，要求重新选择 |
+| 所有可调度 task 都为空 | 自动停止 |
 | AI 调用失败（网络错误等） | 使用现有的 backoff 重试机制 |
 | 调度 AI 的 session 超时 | 每轮调度使用独立 session，无累积风险 |
+| `type=file` 配置的结果文件在运行期不存在 | 记录为“结果文件缺失”，但不视为 schema 错误 |
+| 同一 task 被重复调度 | 新建 session；`*_once` subtasks 仍不重复执行 |
 
 ---
 
@@ -580,7 +707,6 @@ tasks:
       baseline training with default hyperparameters. Produces
       baseline_metrics.txt with E2E NRMSE and training time.
     type: nested
-    once: true
     ...
 
   - id: 2
@@ -598,7 +724,6 @@ tasks:
       Compile all experiment results into a comprehensive final report
       including best configuration, key metrics, and recommendations.
     type: simple
-    once: true
     ...
 
   - id: 4
@@ -618,15 +743,14 @@ tasks:
 ### 9.1 单元测试
 
 - `_load_todos()` 正确解析 `ai_orchestrator` 字段
-- `_validate_task()` 正确处理 `once` 字段
-- `_get_available_tasks()` 正确过滤已用尽的 `once` 任务
+- `last_result` schema 正确处理 `path` 的单路径和多路径两种 `type=file` 形式
 - `state_manager` 正确读写 `orchestrator` 状态
 
 ### 9.2 仿真测试
 
 使用 `TestProvider` 创建仿真测试：
 - 基本调度流程：AI 选择任务 → 执行 → 选择下一个 → 停止
-- `once` 任务只执行一次
+- 同一 task 被重复调度时会新建 session，且 `*_once` subtasks 不重复执行
 - 断点续传：中断后恢复调度进度
 - 最大轮次限制
 - AI 返回无效决策的错误处理
