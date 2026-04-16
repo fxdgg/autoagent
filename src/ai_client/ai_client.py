@@ -25,6 +25,7 @@ from typing import Union, Optional, List
 
 from ai_client.ai_providers import AIProvider, CodeBuddyProvider, get_provider
 from ai_client.ai_client_common import AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
+from util.truncation_limits import limits
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,7 @@ class AIClient:
             f"[{self.context_id}] Calling {self.provider.name} "
             f"(session_id={self.session_id or 'new'}, model={self.provider.model}, timeout={effective_timeout}s)"
         )
-        logger.debug(f"[{self.context_id}] Prompt: {prompt[:200]}...")
+        logger.debug(f"[{self.context_id}] Prompt: {prompt[:limits.get('log_promptlike_preview')]}...")
         logger.debug(f"[{self.context_id}] Command: {cmd_args}")
 
         # Write prompt to a temp file to avoid shell escaping issues
@@ -287,7 +288,7 @@ class AIClient:
             # Session is now active (session_id captured from stream events)
             self._consecutive_failures = 0  # Reset backoff on success
             logger.info(f"[{self.context_id}] Got response ({len(response)} chars)")
-            logger.debug(f"[{self.context_id}] Response: {response[:200]}...")
+            logger.debug(f"[{self.context_id}] Response: {response[:limits.get('log_promptlike_preview')]}...")
 
             if expect_json:
                 return self._parse_json_response(response)
@@ -394,7 +395,7 @@ class AIClient:
 
         event_type = event.get("type", "")
         # DEBUG: Log the stream json (disabled currently)
-        # logger.debug(f"[{self.context_id}] Event content: {json.dumps(event, ensure_ascii=False)[:500]}")
+        # logger.debug(f"[{self.context_id}] Event content: {json.dumps(event, ensure_ascii=False)}")
 
         # Capture session_id as early as possible from any event that
         # carries it (system/init, assistant, result, step_start).
@@ -519,8 +520,8 @@ class AIClient:
             )
             if content:
                 error_marker = " ❌" if is_error else ""
-                log_content = content[:2000]
-                if len(content) > 2000:
+                log_content = content[:limits.get('log_tool_result')]
+                if len(content) > limits.get('log_tool_result'):
                     log_content += f"\n... ({len(content)} chars total)"
                 full_log_parts.append(
                     f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
@@ -537,8 +538,8 @@ class AIClient:
                         is_error = block.get("is_error", False)
                         if isinstance(content, str) and content:
                             error_marker = " ❌" if is_error else ""
-                            log_content = content[:2000]
-                            if len(content) > 2000:
+                            log_content = content[:limits.get('log_tool_result')]
+                            if len(content) > limits.get('log_tool_result'):
                                 log_content += f"\n... ({len(content)} chars total)"
                             full_log_parts.append(
                                 f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
@@ -680,8 +681,8 @@ class AIClient:
                         is_error = exit_code is not None and exit_code != 0
                         sys.stdout.flush()
                         error_marker = " ❌" if is_error else ""
-                        log_content = output[:2000]
-                        if len(output) > 2000:
+                        log_content = output[:limits.get('log_tool_result')]
+                        if len(output) > limits.get('log_tool_result'):
                             log_content += f"\n... ({len(output)} chars total)"
                         full_log_parts.append(
                             f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
@@ -706,8 +707,8 @@ class AIClient:
                 is_error = item.get("is_error", False)
                 if isinstance(output, str) and output:
                     error_marker = " ❌" if is_error else ""
-                    log_content = output[:2000]
-                    if len(output) > 2000:
+                    log_content = output[:limits.get('log_tool_result')]
+                    if len(output) > limits.get('log_tool_result'):
                         log_content += f"\n... ({len(output)} chars total)"
                     full_log_parts.append(
                         f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
@@ -770,8 +771,8 @@ class AIClient:
             result = f"\n📝 **[{tool_name}]** `{path}`\n"
             if content:
                 # Truncate very long edits for readability
-                preview = content[:1000]
-                if len(content) > 1000:
+                preview = content[:limits.get('log_tool_result')]
+                if len(content) > limits.get('log_tool_result'):
                     preview += f"\n... ({len(content)} chars total)"
                 result += f"```\n{preview}\n```\n"
             return result
@@ -790,11 +791,11 @@ class AIClient:
         elif tool_name_lower in ("taskcreate", "taskupdate"):
             task_desc = tool_input.get("description", tool_input.get("task", ""))
             if isinstance(task_desc, str) and task_desc:
-                return f"\n🔧 **[{tool_name}]** {task_desc[:200]}\n"
+                return f"\n🔧 **[{tool_name}]** {task_desc[:limits.get('log_tool_result')]}\n"
             return f"\n🔧 **[{tool_name}]**\n"
         else:
             # Generic tool
-            summary = json.dumps(tool_input, ensure_ascii=False)[:200]
+            summary = json.dumps(tool_input, ensure_ascii=False)[:limits.get('log_tool_result')]
             return f"\n🔧 **[{tool_name}]** {summary}\n"
 
     @staticmethod
@@ -903,7 +904,7 @@ class AIClient:
 
         raise AICallError(
             f"Failed to parse JSON from CodeBuddy response. "
-            f"Response preview: {response[:500]}"
+            f"Response preview: {response[:limits.get('previous_subtask_summary')]}"
         )
 
     def reset_session(self):

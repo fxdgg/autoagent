@@ -14,6 +14,7 @@ from ai_client.ai_client_common import (
     SessionTimeoutError,
     StreamTimeoutError,
 )
+from util.truncation_limits import limits
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +140,7 @@ class AIClientSDK:
             f"[{self.context_id}] Calling CodeBuddy SDK "
             f"(session_id={self.session_id or 'new'}, model={self.provider.model}, timeout={effective_timeout}s)"
         )
-        logger.debug(f"[{self.context_id}] Prompt: {prompt[:200]}...")
+        logger.debug(f"[{self.context_id}] Prompt: {prompt[:limits.get('log_promptlike_preview')]}...")
 
         try:
             response, full_log = self._run_query(prompt, effective_timeout)
@@ -165,7 +166,7 @@ class AIClientSDK:
         self._consecutive_failures = 0  # Reset backoff on success
 
         logger.info(f"[{self.context_id}] Got response ({len(response)} chars)")
-        logger.debug(f"[{self.context_id}] Response: {response[:200]}...")
+        logger.debug(f"[{self.context_id}] Response: {response[:limits.get('log_promptlike_preview')]}...")
 
         if expect_json:
             return self._parse_json_response(response)
@@ -294,7 +295,7 @@ class AIClientSDK:
                             self._display_tool_use(tool_name, tool_input)
                             full_log_parts.append(
                                 f"\n🔧 [Tool: {tool_name}] Input: "
-                                f"{json.dumps(tool_input, ensure_ascii=False)[:500]}\n"
+                                f"{json.dumps(tool_input, ensure_ascii=False)[:limits.get('log_tool_result')]}\n"
                             )
                         elif isinstance(block, ToolResultBlock):
                             content = block.content or ""
@@ -305,7 +306,7 @@ class AIClientSDK:
                                     else str(c)
                                     for c in content
                                 )
-                            preview = str(content)[:500]
+                            preview = str(content)[:limits.get('log_tool_result')]
                             full_log_parts.append(f"   Result: {preview}\n")
 
                 elif isinstance(message, ResultMessage):
@@ -398,8 +399,8 @@ class AIClientSDK:
             content = tool_input.get("content", tool_input.get("new_string", ""))
             result = f"\n📝 **[{tool_name}]** `{path}`\n"
             if content:
-                preview = content[:1000]
-                if len(content) > 1000:
+                preview = content[:limits.get('log_tool_result')]
+                if len(content) > limits.get('log_tool_result'):
                     preview += f"\n... ({len(content)} chars total)"
                 result += f"```\n{preview}\n```\n"
             return result
@@ -418,10 +419,10 @@ class AIClientSDK:
         elif tool_name_lower in ("taskcreate", "taskupdate"):
             task_desc = tool_input.get("description", tool_input.get("task", ""))
             if isinstance(task_desc, str) and task_desc:
-                return f"\n🔧 **[{tool_name}]** {task_desc[:200]}\n"
+                return f"\n🔧 **[{tool_name}]** {task_desc[:limits.get('log_tool_result')]}\n"
             return f"\n🔧 **[{tool_name}]**\n"
         else:
-            summary = json.dumps(tool_input, ensure_ascii=False)[:200]
+            summary = json.dumps(tool_input, ensure_ascii=False)[:limits.get('log_tool_result')]
             return f"\n🔧 **[{tool_name}]** {summary}\n"
 
     def _parse_json_response(self, response: str) -> dict:
@@ -463,7 +464,7 @@ class AIClientSDK:
 
         raise AICallError(
             f"Failed to parse JSON from CodeBuddy response. "
-            f"Response preview: {response[:500]}"
+            f"Response preview: {response[:limits.get('previous_subtask_summary')]}"
         )
 
     def reset_session(self):

@@ -427,7 +427,7 @@ def build_previous_attempt_output_section(output: str) -> str:
     """
     if not output:
         return ""
-    max_len = limits.get('previous_attempt_output')
+    max_len = limits.get('previous_subtask_summary')
     if len(output) > max_len:
         output = "...(truncated)\n" + output[-max_len:]
     return output

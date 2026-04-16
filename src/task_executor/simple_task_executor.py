@@ -291,7 +291,7 @@ class SimpleTaskExecutor:
                         summary = (
                             f"Cannot find {self._SIMPLE_TASK_MARKERS} "
                             f"in previous response. "
-                            f"(The last line in your response is: {last_line[:200]}) "
+                            f"(The last line in your response is: {last_line[:limits.get('history_summary')]}) "
                             f"Please include the required status marker."
                         )
                         print(f"   ⚠️ No completion marker found in response for task {task_id}")
@@ -423,10 +423,10 @@ class SimpleTaskExecutor:
                 break
         
         if meaningful_lines:
-            return ' '.join(meaningful_lines)[:300]
+            return ' '.join(meaningful_lines)[:limits.get('history_summary')]
         
         # Fallback: just take the last 300 chars
-        return ai_response.strip()[-300:]
+        return ai_response.strip()[-limits.get('history_summary'):]
 
     def _check_completion(self, response: str) -> Optional[bool]:
         """
@@ -581,7 +581,7 @@ class SimpleTaskExecutor:
 
                 logger.info(
                     f"Task {task_id}: nudge {i} still no marker, "
-                    f"response: {result.strip()[:120]}"
+                    f"response: {result.strip()[:limits.get('history_summary')]}"
                 )
             except AICallError as e:
                 logger.warning(f"Task {task_id}: nudge {i} failed: {e}")

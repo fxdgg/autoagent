@@ -600,7 +600,7 @@ class SubtaskExecutor:
                     summary = (
                         f"Cannot find {self.simple_executor._LONG_RUNNING_MARKERS} "
                         f"in previous response. "
-                        f"(The last line in your response is: {last_line[:200]}) "
+                        f"(The last line in your response is: {last_line[:limits.get('history_summary')]}) "
                         f"Please include the required status marker."
                     )
                     print(f"      ⚠️ No completion/long-running marker found in response for task {subtask_id}")
@@ -1021,7 +1021,7 @@ class SubtaskExecutor:
                     summary = (
                         f"Cannot find {self.simple_executor._SIMPLE_TASK_MARKERS} "
                         f"in previous response. "
-                        f"(The last line in your response is: {last_line[:200]}) "
+                        f"(The last line in your response is: {last_line[:limits.get('history_summary')]}) "
                         f"Please include the required status marker."
                     )
                     print(f"      ⚠️ No completion marker found in response for task {subtask_id}")

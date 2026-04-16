@@ -415,9 +415,9 @@ class NestedTaskExecutor:
                 )
 
             decision = client.ask(effective_prompt, expect_json=True)
-            print(f"      AI Analysis: {decision.get('analysis', 'N/A')[:200]}")
+            print(f"      AI Analysis: {decision.get('analysis', 'N/A')[:limits.get('log_promptlike_preview')]}")
             print(f"      AI Decision: retry_from = {decision.get('retry_from', failed_id)}")
-            print(f"      Suggested Fix: {decision.get('suggested_fix', 'N/A')[:200]}")            # Append response to log AFTER AI returns
+            print(f"      Suggested Fix: {decision.get('suggested_fix', 'N/A')[:limits.get('log_promptlike_preview')]}")            # Append response to log AFTER AI returns
             if conv_logger:
                 import json
                 response_for_log = client.last_full_log or json.dumps(decision, indent=2, ensure_ascii=False)
@@ -522,7 +522,7 @@ class NestedTaskExecutor:
             evaluation = client.ask(prompt, expect_json=True)
             completed = evaluation.get('main_task_completed', False)
             print(f"      AI Evaluation: {'✅ COMPLETED' if completed else '❌ NOT COMPLETED'}")
-            print(f"      Analysis: {evaluation.get('analysis', 'N/A')[:200]}")
+            print(f"      Analysis: {evaluation.get('analysis', 'N/A')[:limits.get('log_promptlike_preview')]}")
             # Append response to log AFTER AI returns
             if conv_logger:
                 import json

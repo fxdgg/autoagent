@@ -8,6 +8,7 @@ from typing import Union, Optional
 
 from ai_client.ai_providers import AIProvider, TestProvider
 from ai_client.ai_client_common import AICallError
+from util.truncation_limits import limits
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,7 @@ class AIClientTest:
             f"[{self.context_id}] TestClient.ask() called "
             f"(remaining rules: {self.provider.peek_remaining()})"
         )
-        logger.debug(f"[{self.context_id}] Prompt: {prompt[:200]}...")
+        logger.debug(f"[{self.context_id}] Prompt: {prompt[:limits.get('log_promptlike_preview')]}...")
 
         # Get next response from provider
         response = self.provider.get_next_response()
@@ -126,7 +127,7 @@ class AIClientTest:
         print(
             f"\n🧪 [TestProvider] Rule #{self.provider._rule_index}/{len(self.provider._rules)}"
         )
-        print(f"   Response: {response[:200]}{'...' if len(response) > 200 else ''}")
+        print(f"   Response: {response[:limits.get('log_promptlike_preview')]}{'...' if len(response) > limits.get('log_promptlike_preview') else ''}")
 
         # For long_running tasks: if the response contains an autoagent-exec
         # command, actually execute it so signal files are created.
@@ -336,7 +337,7 @@ class AIClientTest:
 
         raise AICallError(
             f"Failed to parse JSON from test response. "
-            f"Response preview: {response[:500]}"
+            f"Response preview: {response[:limits.get('previous_subtask_summary')]}"
         )
 
     def reset_session(self):

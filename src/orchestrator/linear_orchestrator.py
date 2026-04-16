@@ -44,6 +44,7 @@ from prompts.scheduler import (
     SCHEDULER_SYSTEM_PROMPT,
     _get_response_result_path,
 )
+from util.truncation_limits import limits
 
 logger = logging.getLogger(__name__)
 
@@ -762,7 +763,7 @@ class TodoOrchestrator:
             print(f"\n{'─' * 60}")
             print(f"📋 Task {tid}: {task['name']}")
             print(f"   Type: {task['type']}")
-            print(f"   Criteria: {task['completion_criteria'][:100]}...")
+            print(f"   Criteria: {task['completion_criteria'][:limits.get('log_promptlike_preview')]}...")
             print(f"{'─' * 60}")
             
             try:

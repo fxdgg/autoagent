@@ -10,9 +10,11 @@ import yaml
 
 _DEFAULTS = {
     'previous_subtask_summary': 4000,
-    'previous_attempt_output': 4000,
     'history_summary': 300,
     'max': 50000,
+    'log_promptlike_preview': 200,
+    'log_tool_result': 1000,
+    'idea_yaml_preview': 4000,
 }
 
 

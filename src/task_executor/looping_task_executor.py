@@ -378,7 +378,7 @@ class LoopingTaskExecutor:
                 )
 
             decision = client.ask(effective_prompt, expect_json=True)
-            print(f"      AI Analysis: {decision.get('analysis', 'N/A')[:200]}")
+            print(f"      AI Analysis: {decision.get('analysis', 'N/A')[:limits.get('log_promptlike_preview')]}")
             print(f"      AI Decision: retry_from = {decision.get('retry_from', failed_id)}")
 
             if conv_logger:
