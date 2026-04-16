@@ -216,6 +216,23 @@ class StateManager:
         self.save_state()
         logger.info("State reset")
 
+    def get_orchestrator_state(self) -> dict | None:
+        """Get the orchestrator state (AI scheduling mode).
+
+        Returns:
+            dict: Orchestrator state, or None if not present.
+        """
+        return self.state.get("orchestrator")
+
+    def save_orchestrator_state(self, orch_state: dict):
+        """Save the orchestrator state (AI scheduling mode).
+
+        Args:
+            orch_state: Orchestrator state dict to save.
+        """
+        self.state["orchestrator"] = orch_state
+        self.save_state()
+
     def get_summary(self) -> dict:
         """
         Get a summary of all task states.

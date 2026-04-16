@@ -41,6 +41,8 @@ def build_long_running_prompt(
     # ── Section 1: Task ──────────────────────────────────────────────
     inner = []
     inner.append(f"    <task_name>\n{indent_block(subtask['name'], I8)}\n    </task_name>")
+    if subtask.get('description'):
+        inner.append(f"    <task_description>\n{indent_block(subtask['description'], I8)}\n    </task_description>")
     inner.append(f"    <completion_criteria>\n{indent_block(subtask['completion_criteria'], I8)}\n    </completion_criteria>")
     if subtask.get('initial_hint'):
         inner.append(f"    <initial_hint>\n{indent_block(subtask['initial_hint'], I8)}\n    </initial_hint>")

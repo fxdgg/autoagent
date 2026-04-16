@@ -626,7 +626,7 @@ def list_providers() -> dict:
 
 
 # Valid model roles for multimodel support
-MODEL_ROLES = ("plan", "default", "lite", "evaluation")
+MODEL_ROLES = ("plan", "default", "lite", "evaluation", "scheduler")
 
 
 def parse_model_spec(model_spec) -> dict:

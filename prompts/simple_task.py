@@ -45,6 +45,8 @@ def build_simple_task_prompt(
     # ── Section 1: Task ──────────────────────────────────────────────
     inner = []
     inner.append(f"    <task_name>\n{indent_block(task['name'], I8)}\n    </task_name>")
+    if task.get('description'):
+        inner.append(f"    <task_description>\n{indent_block(task['description'], I8)}\n    </task_description>")
     inner.append(f"    <completion_criteria>\n{indent_block(task['completion_criteria'], I8)}\n    </completion_criteria>")
     if task.get('initial_hint'):
         inner.append(f"    <initial_hint>\n{indent_block(task['initial_hint'], I8)}\n    </initial_hint>")
