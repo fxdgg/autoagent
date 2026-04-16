@@ -230,6 +230,8 @@ graph TD
     DONE_AI --> SUMMARY
 ```
 
+注：long_running 顶层 task 进入后台运行时，会等待 long_running 顶层 task 完成，不会直接进入下一轮调度，也即没有并行调度。
+
 ### 3.2 调度决策的输入
 
 每轮调度时，AI 收到以下信息：
@@ -312,11 +314,11 @@ AI 调度器的职责到“选择哪个 task”结束，不参与 task 内部 wo
 
 这是 AI 调度模式需要明确补充的关键规则。
 
-1. **同一调度轮次内的断点恢复**：如果 task 在本轮执行过程中被中断，允许用已有 `session_id` 恢复，延续本轮未完成工作。
-2. **调度 AI 的会话管理**：每轮调度使用独立 session；若调度执行期间被中断，则使用已有的 `session_id` 恢复，延续未完成的调度工作。
-2. **同一个 task 被下一次重新调度时**：必须视为一次全新的 task 执行，创建新的顶层 session，不复用上一次调度的 `session_id`。
-3. **原因**：不同调度轮次之间，调度器已经做出了新的全局决策；继续复用旧 session 会把上一次 task 的局部上下文错误带入新的调度轮次。
-4. **实现语义**：恢复只发生在“未完成的同一轮 task”；重新调度则是“新的 schedule round”，需要干净上下文。
+1. **调度 AI 的会话管理**：每轮调度使用独立 session；若调度执行期间被中断，则使用已有的 `session_id` 恢复，延续未完成的调度工作。
+2. **同一调度轮次内的断点恢复**：如果 task 在本轮执行过程中被中断，允许用已有 `session_id` 恢复，延续本轮未完成工作。
+3. **同一个 task 被下一次重新调度时**：必须视为一次全新的 task 执行，创建新的顶层 session，不复用上一次调度的 `session_id`。
+4. **原因**：不同调度轮次之间，调度器已经做出了新的全局决策；继续复用旧 session 会把上一次 task 的局部上下文错误带入新的调度轮次。
+5. **实现语义**：恢复只发生在“未完成的同一轮 task”；重新调度则是“新的 schedule round”，需要干净上下文。
 
 ---
 
@@ -332,12 +334,12 @@ orchestrator:
   current_round: 5            # 当前轮次
   max_rounds: 30              # 最大轮次
   status: in_progress         # "in_progress" | "completed" | "stopped"
-  session_id: "sched_abc"     # 调度 AI 的 session id
+  session_id: "sched_abc"     # 当前 Active 的调度 AI 的 session id（每轮更新）
   schedule_history:           # 调度历史记录
     - round: 1
       task_id: "1"
       task_name: "Baseline training"
-      session_id: "sched_r1"      
+      session_id: "sched_r1"      # 调度 AI 的 session id    
       result: success             # "success" | "failed"
       reasoning: "首先建立 baseline"
       timestamp: "2026-04-14 18:00:00"
@@ -367,7 +369,7 @@ tasks:
     attempts: 1
     session_id: "subtask_3_1_2_round_1_1"
 
-  # *_once 类型的 task 依然使用 plain key
+  # *_once 类型的 subtask 依然使用 plain key（不带 X. 前缀）
   "1.9":
     status: completed
     attempts: 1
@@ -392,17 +394,18 @@ tasks:
 ### 4.3 重复调度同一 task 时的状态规则
 
 在 AI 调度模式下，同一个 task 可能被多次执行。每次被重新调度时：
+- 清除上一次调度的 previous_subtask_summary 
 - 顶层 task 自身状态会进入新一轮执行
 - 该 task 本轮产生的 round-scoped subtask 状态使用新的 schedule-round 前缀，与历史轮次隔离
 - 顶层 task 的 `session_id` 不复用旧轮次，重新创建新 session
 - 调度器自己的 `orchestrator.session_id` 也不跨轮次复用；每个 schedule round 都有独立的调度会话
-- `*_once` subtasks 仍沿用现有语义：它们使用 plain key，不因 task 被再次调度而重复执行
+- `*_once` subtasks 仍沿用现有语义：它们使用 plain key（不带 `X.` 前缀），不因 task 被再次调度而重复执行。日志文件名仍会加上 `schedule_x` 前缀以便区分。
 
 也就是说：**重复调度会重跑 task，但不会重跑已经完成的 `*_once` subtasks。**
 
-### 4.5 round_scoped key 格式
+### 4.4 round_scoped key 格式
 
-#### 4.5.1 背景：现有 round_scoped key 格式（Linear 模式）
+#### 4.4.1 背景：现有 round_scoped key 格式（Linear 模式）
 
 在现有的 Linear 模式中，`todos_state.yaml` 中的子任务状态使用 **round-scoped key** 格式：
 
@@ -439,7 +442,7 @@ subtask_id @ A.B
 
 > **注意**：`*_once` 类型的子任务使用 plain key（不带 `@`），跨所有轮次共享状态。
 
-#### 4.5.2 AI 调度模式：subtask_id 扩展为 `X.Y.Z`
+#### 4.4.2 AI 调度模式：subtask_id 扩展为 `X.Y.Z`
 
 在 AI 调度模式下，subtask_id 从现有的二级格式 `Y.Z` 扩展为三级格式 `X.Y.Z`：
 
@@ -449,6 +452,10 @@ subtask_id @ A.B
 | `Y` | 任务 ID（task_id） | `1`, `2`, `3`, ... |
 | `Z` | 子任务 ID（subtask_id），与原有格式一致 | `1`, `2`, `3`, ... |
 
+简单来说，就是在 Linear 模式的基础上为所有的 key 加上一个调度轮次的前缀。
+
+> **`*_once` subtask 例外**：`*_once` subtask 的 state key 仍然使用 plain key（不带 `X.` 前缀），与 Linear 模式一致，以保证跨调度轮次的全局唯一性语义。日志文件名仍会加上 `schedule_x` 前缀以便区分，但 state key 不变。
+
 **subtask_id 示例**：
 
 ```
@@ -457,7 +464,7 @@ subtask_id @ A.B
   1.1.2  — 调度轮次 1，Task 1，Subtask 2
 
 调度轮次 2 → 执行 Task 2（simple）
-  2.2    — 调度轮次 2，Task 2（simple 任务没有 Z 层级）
+  2.2    — 调度轮次 2，Task 2（simple 任务没有 Z 层级，也没有 @A.B 部分，因为 simple task 不存在 round_label。这不会和 Linear 模式产生歧义，因为这两种模式不能同时运行）
 
 调度轮次 3 → 执行 Task 2（再次调度，nested）
   3.2.1  — 调度轮次 3，Task 2，Subtask 1
@@ -468,7 +475,7 @@ subtask_id @ A.B
   4.1.2  — 调度轮次 4，Task 1，Subtask 2
 ```
 
-#### 4.5.3 完整的 state key 格式：`X.Y.Z@A.B`
+#### 4.4.3 完整的 state key 格式：`X.Y.Z@A.B`
 
 在 AI 调度模式下，完整的 round-scoped state key 是 **subtask_id + `@` + round_label** 的组合：
 
@@ -490,11 +497,17 @@ X.Y.Z @ A.B
 "1.1.1@2.1":   # main_task_evaluation 后 → main round 2
 
 # 调度轮次 2 → 执行 Task 2（simple）
-"2.2@1.1":     # 调度轮次 2, Task 2（simple）, round 1.1
+"2.2":         # 调度轮次 2, Task 2（simple task 没有 round_label，使用 plain X.Y 格式）
 
 # 调度轮次 3 → 再次执行 Task 1（nested）
 "3.1.1@1.1":   # 调度轮次 3, Task 1, Subtask 1, main round 1, failure sub-round 1
 "3.1.2@1.1":   # 调度轮次 3, Task 1, Subtask 2, main round 1, failure sub-round 1
+
+# 调度轮次 4 → 执行 Task 3 (looping)
+"4.3.1@1.1":   # 调度轮次 4, Task 3, Subtask 1, main round 1, failure sub-round 1
+"4.3.2@1.1":   # 调度轮次 4, Task 3, Subtask 2, main round 1, failure sub-round 1
+"4.3.1@2.1":   # 调度轮次 4, Task 3, Subtask 1, main round 2, failure sub-round 1
+"4.3.2@2.1":   # 调度轮次 4, Task 3, Subtask 2, main round 2, failure sub-round 1
 ```
 
 > **对比**：同一个 Task 1 的 Subtask 1 在不同调度轮次中的 state key：
@@ -508,7 +521,7 @@ X.Y.Z @ A.B
 - `@A.B` 部分与 Linear 模式完全一致，复用现有的 round_label 机制
 - 在 Linear 模式下，`X` 层级不存在，保持现有的 `Y.Z@A.B` 格式不变
 
-### 4.6 日志命名
+### 4.5 日志命名
 
 现有日志文件名只有 task/subtask 维度，例如：
 
@@ -521,6 +534,8 @@ AI 调度模式下建议扩展为包含 schedule round 的命名：
 - `schedule_1_main_task_evaluation_1.1_round_1.1.md`
 ...
 
+也即在原有文件名的基础上加上 `schedule_x` 前缀。`*_once` subtask 的日志文件名也加上此前缀以便区分，但其 state key 仍使用 plain key（不带 `X.` 前缀），保证全局只运行一次的语义不变。
+
 这样做的好处：
 
 1. 人工排查时能直接看出日志属于哪一次顶层调度
@@ -532,7 +547,7 @@ AI 调度模式下建议扩展为包含 schedule round 的命名：
 - 普通 task / subtask 日志采用新的 schedule-aware 文件名
 - `lr_*` 信号文件和输出文件仍可保持现有命名与覆盖策略，不强制改动（因为先前的设计也是反复覆盖这些文件的）
 
-### 4.7 round_scoped description 行为
+### 4.6 round_scoped description 行为
 
 在 AI 调度模式下，`description@N` 的语义与 Linear 模式不同：
 
@@ -700,7 +715,7 @@ You must choose exactly ONE task per round.
 
 1. **System prompt simplification**: Remove redundant instructions such as "Consider the scheduling strategy and stop condition" because they add prompt noise without adding information.
 2. **XML structure**: Wrap all context in `<context>` and use semantic inner tags so the scheduler model can parse the state reliably.
-3. **Conditional Last Result display**: Show `Last Result` only after a task has run at least once. Use `success (See {path})` or `failed (See {path})`. For `type=file`, append `(Not found, probably due to task failures)` if the file is missing at runtime. For `type=none`, omit the line. For `type=response`, the path points to the auto-saved truncated response file such as `.autoagent/<run>/task_results/result_1.txt`.
+3. **Conditional Last Result display**: Show `Last Result` only after a task has run at least once. Use `success (See {path})` or `failed (See {path})`. For `type=file`, append `(Not found, probably due to task failures)` if the file is missing at runtime. For `type=none`, omit the line. For `type=response`, the path points to the auto-saved truncated response file such as `.autoagent/<run>/task_results/result_1.txt`; if the file does not exist yet (e.g. the task has been scheduled but the response was not saved), generate the file from the stored response before building the prompt, rather than showing a "Not found" hint.
 4. **Schedule History includes outcome markers**: Each round records success/failure markers so the scheduler can quickly understand prior execution outcomes without reading every result file.
 
 ### 6.2 Prompt 截断策略
@@ -723,7 +738,7 @@ AI 调度模式与 Ideas Watcher 兼容：
 ### 7.2 `--continue` / `--resume`
 
 - 断点续传时，从 `orchestrator` 状态恢复调度进度。
-- 如果 orchestrator 已经 `stopped` 或 `completed`，`--continue` / `--resume` 不应继续执行。
+- 如果 orchestrator 已经 `stopped` 或 `completed`，`--continue` / `--resume` 不应继续执行，并提示 "AI Orchestrator has already completed/stopped."
 
 ### 7.3 `--status`
 
@@ -758,13 +773,14 @@ AI 调度模式与 Ideas Watcher 兼容：
 
 | 场景 | 处理方式 |
 |------|----------|
-| AI 返回无效 JSON | 重试解析，最多 `scheduler_decision_max_retries` 次，失败则停止 |
+| AI 返回无效 JSON | 重试解析（同一调度 session），最多 `scheduler_decision_max_retries` 次，失败则停止 |
 | AI 选择了不存在的 task_id | 提示错误，要求重新选择 |
 | 所有可调度 task 都为空 | 自动停止 |
 | AI 调用失败（网络错误等） | 使用现有的 backoff 重试机制 |
 | 调度 AI 的 session 超时 | 每轮调度使用独立 session，无累积风险 |
 | `type=file` 配置的结果文件在运行期不存在 | 记录为“结果文件缺失”，但不视为 schema 错误 |
 | 同一 task 被重复调度 | 新建 session；`*_once` subtasks 仍不重复执行 |
+| 中途切换执行模式（Linear ↔ AI 调度） | **不允许**。一旦 `todos_state.yaml` 中已存在 `orchestrator` 状态，就不能移除 `ai_orchestrator` 字段改回 Linear 模式运行，反之亦然。如需切换，必须先 `--reset` 清除全部状态 |
 
 ---
 

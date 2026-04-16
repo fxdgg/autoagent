@@ -52,7 +52,7 @@
         [task_name]
     </task_name>
 
-    <task_description>
+    <task_description>  （仅在包含 task_description 时出现）
         [task_description]
     </task_description>
 
@@ -106,7 +106,7 @@ Ideas Watcher 在生成和审查任务时，需要根据当前 `todos.yaml` 是�
 
 ```python
 def load_task_design_guide(mode: str = linear) -> str:
-    if mode == ai_scheduled:
+    if mode == "ai_scheduled":
         return _load_guide(TASK_DESIGN_GUIDE_AI_SCHED.md)
     return _load_guide(TASK_DESIGN_GUIDE.md)
 ```
