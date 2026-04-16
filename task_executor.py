@@ -1167,7 +1167,6 @@ class NestedTaskExecutor:
                 'next_strategy': next_strategy,
             }
 
-            context_isolation = task.get('context_isolation', True)
             # Restore previous_subtask_summary from disk so that retries
             # within the same round have context.  For the first attempt
             # of a new round, start fresh (don't carry stale context).
@@ -1212,7 +1211,7 @@ class NestedTaskExecutor:
                 # subtask can send a lightweight follow-up instead of replaying
                 # the full prompt.
                 parent_interrupt_pending = state_manager.get_task_state(task_id).get('interrupt_pending')
-                if context_isolation and previous_subtask_summary and not parent_interrupt_pending:
+                if previous_subtask_summary and not parent_interrupt_pending:
                     client.reset_session()
 
                 parent_context['previous_subtask_summary'] = previous_subtask_summary
@@ -1796,7 +1795,6 @@ class LoopingTaskExecutor:
                 'project_description': project_description,
             }
 
-            context_isolation = task.get('context_isolation', True)
             # Restore previous_subtask_summary from disk so that retries
             # within the same round have context.  For the first attempt
             # of a new round, start fresh (don't carry stale context).
@@ -1839,7 +1837,7 @@ class LoopingTaskExecutor:
                 # Skip reset when parent was interrupted (Ctrl+C) — session
                 # needs to stay alive for the lightweight follow-up.
                 parent_interrupt_pending = state_manager.get_task_state(task_id).get('interrupt_pending')
-                if context_isolation and previous_subtask_summary and not parent_interrupt_pending:
+                if previous_subtask_summary and not parent_interrupt_pending:
                     client.reset_session()
 
                 parent_context['previous_subtask_summary'] = previous_subtask_summary

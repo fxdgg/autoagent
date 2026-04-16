@@ -10,7 +10,6 @@ Usage:
     python orchestrator.py --config my.yaml    # Use custom config file
     python orchestrator.py --task 2            # Run only task 2
     python orchestrator.py --reset             # Reset all state
-    python orchestrator.py --status            # Show current status
 """
 
 import os
@@ -549,14 +548,12 @@ class TodoOrchestrator:
     def run(
         self,
         task_id: int = None,
-        skip_completed: bool = True,
     ) -> dict:
         """
         Run tasks from the configuration.
         
         Args:
             task_id: Execute only this task (None = all tasks)
-            skip_completed: Whether to skip already completed tasks
             
         Returns:
             dict: Execution results summary
@@ -585,12 +582,11 @@ class TodoOrchestrator:
             tid = str(task['id'])
             
             # Check if task is already completed
-            if skip_completed:
-                task_state = self.state_manager.get_task_state(tid)
-                if task_state.get('status') == 'completed':
-                    print(f"\n⏭️  Task {tid}: {task['name']} (already completed, skipping)")
-                    results[tid] = True
-                    continue
+            task_state = self.state_manager.get_task_state(tid)
+            if task_state.get('status') == 'completed':
+                print(f"\n⏭️  Task {tid}: {task['name']} (already completed, skipping)")
+                results[tid] = True
+                continue
             
             print(f"\n{'─' * 60}")
             print(f"📋 Task {tid}: {task['name']}")
@@ -779,54 +775,6 @@ class TodoOrchestrator:
             self.state_manager.mark_task_status(task_id, "failed", error=str(e))
             return False
 
-    def get_status(self) -> dict:
-        """
-        Get current execution status.
-        
-        Returns:
-            dict: Status summary of all tasks
-        """
-        status = {"tasks": []}
-        
-        for task in self.todos:
-            tid = str(task['id'])
-            state = self.state_manager.get_task_state(tid)
-            
-            task_status = {
-                "id": tid,
-                "name": task['name'],
-                "type": task['type'],
-                "status": state.get('status', 'pending'),
-                "attempts": state.get('attempts', 0),
-            }
-            
-            # Add subtask info for nested/looping tasks
-            if task['type'] in ('nested', 'looping') and 'subtasks' in task:
-                task_status["subtasks"] = self._collect_subtask_status(task['subtasks'])
-            
-            status["tasks"].append(task_status)
-        
-        return status
-
-    def _collect_subtask_status(self, subtasks: list) -> list:
-        """Recursively collect status for subtasks (supports nested subtasks)."""
-        result = []
-        for st in subtasks:
-            st_id = str(st['id'])
-            st_state = self.state_manager.get_task_state(st_id)
-            entry = {
-                "id": st_id,
-                "name": st['name'],
-                "type": st['type'],
-                "status": st_state.get('status', 'pending'),
-                "attempts": st_state.get('attempts', 0),
-            }
-            # Recurse into nested/looping subtasks
-            if st['type'] in ('nested', 'looping') and 'subtasks' in st:
-                entry["subtasks"] = self._collect_subtask_status(st['subtasks'])
-            result.append(entry)
-        return result
-
     def reset(self):
         """Reset all task states by removing the entire session directory."""
         import shutil
@@ -947,7 +895,6 @@ class TodoOrchestrator:
     def run_with_idle(
         self,
         task_id: int = None,
-        skip_completed: bool = True,
     ):
         """
         Run tasks, then enter idle mode waiting for new ideas.
@@ -961,7 +908,6 @@ class TodoOrchestrator:
         
         Args:
             task_id: Execute only this task (None = all tasks)
-            skip_completed: Whether to skip already completed tasks
         """
         print(f"{'=' * 60}")
         print(f"  AutoAgent (Idle Mode)")
@@ -977,11 +923,11 @@ class TodoOrchestrator:
             new_ideas_count = self.check_and_process_ideas()
             
             # Step 2: Run any pending tasks
-            pending = self._get_pending_tasks(task_id, skip_completed)
+            pending = self._get_pending_tasks(task_id)
             
             if pending:
                 print(f"\n📋 Found {len(pending)} pending task(s) to execute")
-                results = self.run(task_id=task_id, skip_completed=skip_completed)
+                results = self.run(task_id=task_id)
             elif new_ideas_count == 0:
                 # No new ideas and no pending tasks - enter idle
                 pass
@@ -995,7 +941,7 @@ class TodoOrchestrator:
             except KeyboardInterrupt:
                 raise
 
-    def _get_pending_tasks(self, task_id: int = None, skip_completed: bool = True) -> list:
+    def _get_pending_tasks(self, task_id: int = None) -> list:
         """
         Get list of tasks that still need to be executed.
         
@@ -1010,10 +956,9 @@ class TodoOrchestrator:
         pending = []
         for task in candidates:
             tid = str(task['id'])
-            if skip_completed:
-                state = self.state_manager.get_task_state(tid)
-                if state.get('status') == 'completed':
-                    continue
+            state = self.state_manager.get_task_state(tid)
+            if state.get('status') == 'completed':
+                continue
             pending.append(task)
         
         return pending
@@ -1066,46 +1011,6 @@ def setup_logging(verbose: bool = False, log_file: str = None):
     )
 
 
-def print_status(orchestrator: TodoOrchestrator):
-    """Print current task status in a formatted way."""
-    status = orchestrator.get_status()
-    
-    print(f"\n{'=' * 60}")
-    print(f"  Task Status")
-    print(f"{'=' * 60}")
-    
-    def _print_subtasks(subtasks, indent=1):
-        """Recursively print subtask status."""
-        prefix = "   " * indent
-        for st in subtasks:
-            st_icon = {
-                'pending': '⏳',
-                'in_progress': '🔄',
-                'completed': '✅',
-                'failed': '❌',
-            }.get(st['status'], '❓')
-            
-            print(f"{prefix}{st_icon} Subtask {st['id']}: {st['name']}")
-            print(f"{prefix}   Type: {st['type']} | Status: {st['status']} | Attempts: {st['attempts']}")
-            
-            if 'subtasks' in st:
-                _print_subtasks(st['subtasks'], indent + 1)
-    
-    for task in status['tasks']:
-        status_icon = {
-            'pending': '⏳',
-            'in_progress': '🔄',
-            'completed': '✅',
-            'failed': '❌',
-        }.get(task['status'], '❓')
-        
-        print(f"\n{status_icon} Task {task['id']}: {task['name']}")
-        print(f"   Type: {task['type']} | Status: {task['status']} | Attempts: {task['attempts']}")
-        
-        if 'subtasks' in task:
-            _print_subtasks(task['subtasks'])
-    
-    print(f"\n{'=' * 60}")
 
 
 def _ensure_utf8_stdio():
@@ -1211,7 +1116,6 @@ def _merge_preset_with_args(args, preset):
         'include_directories': 'include_directories',
         'test_rules': 'test_rules',
         'verbose': 'verbose',
-        'no_skip': 'no_skip',
         'no_idle': 'no_idle',
         'use_cli': 'use_cli',
         'ideas_only': 'ideas_only',
@@ -1227,7 +1131,6 @@ def _merge_preset_with_args(args, preset):
         'workspace': '.',
         'idle_interval': 30,
         'verbose': False,
-        'no_skip': False,
         'no_idle': False,
         'use_cli': False,
         'ideas_only': False,
@@ -1319,7 +1222,6 @@ Examples:
   python orchestrator.py --provider gemini --model gemini-3-flash  # Use Gemini CLI
   python orchestrator.py --config my_tasks.yaml          # Use custom config
   python orchestrator.py --task 2                        # Run only task 2
-  python orchestrator.py --status                        # Show current status
   python orchestrator.py --reset                         # Reset all state
   python orchestrator.py --verbose                       # Enable debug logging
   python orchestrator.py --ideas ideas.md                # Watch ideas.md for new ideas
@@ -1398,19 +1300,9 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         help=f'Session timeout for AI calls in seconds (default: {default_session_timeout}, from config.yaml session_timeout)',
     )
     parser.add_argument(
-        '--status',
-        action='store_true',
-        help='Show current task status and exit',
-    )
-    parser.add_argument(
         '--reset',
         action='store_true',
         help='Reset all task states and exit',
-    )
-    parser.add_argument(
-        '--no-skip',
-        action='store_true',
-        help='Do not skip completed tasks',
     )
     parser.add_argument(
         '--validate',
@@ -1670,9 +1562,6 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
             orchestrator.reset()
             return
         
-        if args.status:
-            print_status(orchestrator)
-            return
         
         # Process ideas before running tasks (if ideas file is configured)
         if orchestrator.ideas_watcher:
@@ -1692,13 +1581,11 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
             # Idle mode: run tasks then wait for new ideas
             orchestrator.run_with_idle(
                 task_id=args.task,
-                skip_completed=not args.no_skip,
             )
         else:
             # Normal mode: run tasks and exit
             results = orchestrator.run(
                 task_id=args.task,
-                skip_completed=not args.no_skip,
             )
             
             # Finalize conversation logs

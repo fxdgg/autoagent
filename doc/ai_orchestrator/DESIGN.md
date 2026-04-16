@@ -284,7 +284,7 @@ AI 调度器的职责到“选择哪个 task”结束，不参与 task 内部 wo
         [task_name]
     </task_name>
 
-    <task_description>
+    <task_description>   （仅在 task_description 存在时）
         [task_description]
     </task_description>
 
@@ -300,6 +300,8 @@ AI 调度器的职责到“选择哪个 task”结束，不参与 task 内部 wo
 <context>
 （后面保持不变）
 ```
+
+需要同时修改 `simple_task.py` 和 `long_running_task.py`。
 
 这里的语义分工应明确为：
 
@@ -692,7 +694,7 @@ You must choose exactly ONE task per round.
             Description:
                 {description}
             Executed: {count} time(s)
-            Last Result: ❌ failed (See {last_result_path}) (Not found, probably due to task failures)
+            Last Result: ❌ failed (See {last_result_path}) (Not found, probably due to task failures) 
         - Task {id}: {name}
             ...
             (tasks not yet executed do not show Last Result line)
@@ -734,39 +736,26 @@ You must choose exactly ONE task per round.
 AI 调度模式与 Ideas Watcher 兼容：
 - Ideas 生成的新任务追加到 `tasks` 列表后，AI 调度器在下一轮可以看到新任务
 - `reload_todos()` 后，调度器自动获取更新的任务列表
+- **强制重启**：如果调度器已经 `stopped`，但 Ideas Watcher 添加了新 task，调度器必须自动重启（将 `orchestrator.status` 从 `stopped` 重置为 `in_progress`），使新 task 有机会被调度执行
 
 ### 7.2 `--continue` / `--resume`
 
 - 断点续传时，从 `orchestrator` 状态恢复调度进度。
 - 如果 orchestrator 已经 `stopped` 或 `completed`，`--continue` / `--resume` 不应继续执行，并提示 "AI Orchestrator has already completed/stopped."
 
-### 7.3 `--status`
-
-状态显示增加调度信息：
-```
-📊 AI Orchestrator Status
-   Mode: AI-scheduled
-   Round: 5 / 30
-   Schedule: Task 1 ✅ → Task 2 ✅ → Task 2 ✅ → Task 3 ❌ → Task 2 ✅
-```
-
-### 7.4 `--reset`
+### 7.3 `--reset`
 
 重置时同时清除 `orchestrator` 状态。
 
-### 7.5 `--task`、`skip_completed` 等旧控制参数
+### 7.4 `--task` 等旧控制参数
 
-这些参数原本服务于线性调度模型，但在 AI 调度模式下语义变得不自然：
-
-- `--task` 绕过调度器，破坏“由系统决定怎么做”的原则。
-- `skip_completed` 假设“完成过一次就不该再执行”，与 AI 调度下同一 task 可被重复调度、且每次都创建新 session 的设计冲突。
+`--task` 原本服务于线性调度模型，在 AI 调度模式下语义变得不自然——它绕过调度器，破坏"由系统决定怎么做"的原则。
 
 因此建议：
 
 1. 在线性模式保留现有行为，避免破坏兼容性。
-2. 在 AI 调度模式中不再暴露或不再支持这类参数。
-3. 文档中明确：AI 调度模式的顶层执行入口就是“让 orchestrator 自己调度”，而不是人工挑 task。
-
+2. 在 AI 调度模式中不再支持 `--task` 参数，如果指定了该参数则直接报错。
+3. 文档中明确：AI 调度模式的顶层执行入口就是"让 orchestrator 自己调度"，而不是人工挑 task。
 ---
 
 ## 8. 边界情况处理
@@ -781,6 +770,7 @@ AI 调度模式与 Ideas Watcher 兼容：
 | `type=file` 配置的结果文件在运行期不存在 | 记录为“结果文件缺失”，但不视为 schema 错误 |
 | 同一 task 被重复调度 | 新建 session；`*_once` subtasks 仍不重复执行 |
 | 中途切换执行模式（Linear ↔ AI 调度） | **不允许**。一旦 `todos_state.yaml` 中已存在 `orchestrator` 状态，就不能移除 `ai_orchestrator` 字段改回 Linear 模式运行，反之亦然。如需切换，必须先 `--reset` 清除全部状态 |
+| 调度器已 `stopped` 但 Ideas Watcher 添加了新 task | 强制重启调度器：将 `orchestrator.status` 从 `stopped` 重置为 `in_progress`，使新 task 有机会被调度执行 |
 
 ---
 
