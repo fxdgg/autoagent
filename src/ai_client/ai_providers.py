@@ -22,24 +22,6 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
-def _load_default_model():
-    """Load default model from config.yaml."""
-    config_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "config.yaml"
-    )
-    if os.path.isfile(config_path):
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f) or {}
-            return config.get("default_model", "deepseek-v3.2")
-        except Exception:
-            pass
-    return "deepseek-v3.2"
-
-
-# Default model loaded from config.yaml, fallback to deepseek-v3.2
-DEFAULT_MODEL = _load_default_model()
-
 
 class AIProvider:
     """
