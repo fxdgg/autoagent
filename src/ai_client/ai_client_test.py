@@ -1,3 +1,17 @@
+import re
+import sys
+import json
+import time
+import logging
+import subprocess
+from typing import Union, Optional
+
+from ai_client.ai_providers import AIProvider, TestProvider
+from ai_client.ai_client_common import AICallError
+
+logger = logging.getLogger(__name__)
+
+
 class AIClientTest:
     """
     Test client that returns pre-defined responses from a TestProvider.
@@ -17,7 +31,7 @@ class AIClientTest:
     any AI CLI tool to be installed.
 
     Usage:
-        from ai_providers import TestProvider
+        from ai_client.ai_providers import TestProvider
         provider = TestProvider(test_rules_file="test_rules.txt")
         client = AIClientTest(provider=provider, context_id="task_1")
         response = client.ask("some prompt")  # Returns first rule
@@ -32,7 +46,7 @@ class AIClientTest:
         bash_timeout: int = 300,
         context_id: str = None,
     ):
-        from ai_providers import TestProvider
+        from ai_client.ai_providers import TestProvider
 
         if not isinstance(provider, TestProvider):
             raise ValueError(

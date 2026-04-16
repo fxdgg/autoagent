@@ -1,10 +1,44 @@
 
+import os
+import json
+import time
+import logging
+
+from ai_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
+from logger import ConversationLogger
+from task_executor.task_executor_common import (
+    ConfigError,
+    SubtaskResult,
+    _state_key,
+    _write_autoagent_exec_script,
+    _load_fast_fail_timeout,
+    _load_show_console,
+    _read_log_file_smart,
+)
+from prompts.shared import build_system_prompt_coding_agent, prepend_system_prompt_prefix
+from prompts.long_running_task import (
+    build_long_running_prompt as _build_lr_prompt,
+    build_long_running_analysis_prompt as _build_lr_analysis_prompt,
+)
+from prompts.timeout_continuation import (
+    BASH_TIMEOUT_CONTINUATION_PROMPT,
+    STREAM_TIMEOUT_CONTINUATION_PROMPT,
+    INTERRUPT_CONTINUATION_PROMPT,
+)
+from util.truncation_limits import limits
+
+logger = logging.getLogger(__name__)
+
+
 class SubtaskExecutor:
     """
     Dispatches subtask execution based on type (simple or long_running).
     """
 
     def __init__(self, session_dir: str = None, model_roles: dict = None):
+        # Lazy import to break circular dependency:
+        # subtask_executor <-> simple_task_executor
+        from task_executor.simple_task_executor import SimpleTaskExecutor
         self.simple_executor = SimpleTaskExecutor(session_dir=session_dir)
         # Back-reference so SimpleTaskExecutor can delegate long-running
         # handling (poll + callback) when AI uses autoagent-exec in a simple task
@@ -111,6 +145,9 @@ class SubtaskExecutor:
         conv_logger=None, parent_context: dict = None,
     ) -> SubtaskResult:
         """Execute a nested subtask by delegating to NestedTaskExecutor."""
+        # Lazy import to break circular dependency:
+        # subtask_executor <-> nested_task_executor
+        from task_executor.nested_task_executor import NestedTaskExecutor
         project_description = (parent_context or {}).get('project_description', '')
         executor = NestedTaskExecutor(
             session_dir=self.session_dir, model_roles=self.model_roles,
@@ -133,6 +170,9 @@ class SubtaskExecutor:
         conv_logger=None, parent_context: dict = None,
     ) -> SubtaskResult:
         """Execute a looping subtask by delegating to LoopingTaskExecutor."""
+        # Lazy import to break circular dependency:
+        # subtask_executor <-> looping_task_executor
+        from task_executor.looping_task_executor import LoopingTaskExecutor
         project_description = (parent_context or {}).get('project_description', '')
         executor = LoopingTaskExecutor(
             session_dir=self.session_dir, model_roles=self.model_roles,
@@ -544,7 +584,7 @@ class SubtaskExecutor:
                             continue
 
                 if completion_status is True:
-                    summary = SimpleTaskExecutor._extract_summary(result)
+                    summary = self.simple_executor._extract_summary(result)
                     print(f"      ✅ Long-running task {subtask_id} completed directly!")
                     state_manager.mark_task_status(
                         sk, "completed",
@@ -558,14 +598,14 @@ class SubtaskExecutor:
                 if completion_status is None:
                     last_line = result.strip().rsplit('\n', 1)[-1].strip() if result.strip() else '(empty)'
                     summary = (
-                        f"Cannot find {SimpleTaskExecutor._LONG_RUNNING_MARKERS} "
+                        f"Cannot find {self.simple_executor._LONG_RUNNING_MARKERS} "
                         f"in previous response. "
                         f"(The last line in your response is: {last_line[:200]}) "
                         f"Please include the required status marker."
                     )
                     print(f"      ⚠️ No completion/long-running marker found in response for task {subtask_id}")
                 else:
-                    summary = SimpleTaskExecutor._extract_summary(result)
+                    summary = self.simple_executor._extract_summary(result)
                     print(f"      ⏳ Not completed yet, retrying...")
                 state_manager.add_task_history(sk, {
                     "attempt": attempt,
@@ -630,7 +670,7 @@ class SubtaskExecutor:
             exec_script_path=exec_script_path,
             attempt=attempt,
             state=state,
-            extract_summary_fn=SimpleTaskExecutor._extract_summary,
+            extract_summary_fn=self.simple_executor._extract_summary,
             parent_context=parent_context,
             project_description=(parent_context or {}).get('project_description', ''),
         )
@@ -968,7 +1008,7 @@ class SubtaskExecutor:
                     log_content = "(failed to read log file)"
             
             if is_completed:
-                summary = SimpleTaskExecutor._extract_summary(result)
+                summary = self.simple_executor._extract_summary(result)
                 state_manager.mark_task_status(
                     sk, "completed",
                     last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -979,14 +1019,14 @@ class SubtaskExecutor:
                 if completion_status is None:
                     last_line = result.strip().rsplit('\n', 1)[-1].strip() if result.strip() else '(empty)'
                     summary = (
-                        f"Cannot find {SimpleTaskExecutor._SIMPLE_TASK_MARKERS} "
+                        f"Cannot find {self.simple_executor._SIMPLE_TASK_MARKERS} "
                         f"in previous response. "
                         f"(The last line in your response is: {last_line[:200]}) "
                         f"Please include the required status marker."
                     )
                     print(f"      ⚠️ No completion marker found in response for task {subtask_id}")
                 else:
-                    summary = SimpleTaskExecutor._extract_summary(result)
+                    summary = self.simple_executor._extract_summary(result)
                     print(f"      ❌ Long-running task {subtask_id} did not meet criteria")
                 state_manager.mark_task_status(
                     sk, "failed",

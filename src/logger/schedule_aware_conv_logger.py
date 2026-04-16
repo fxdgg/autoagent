@@ -1,5 +1,8 @@
 
-class _ScheduleAwareConvLogger:
+from logger.conversation_logger import ConversationLogger
+
+
+class ScheduleAwareConvLogger:
     """Wrapper around ConversationLogger that prefixes log filenames with schedule round.
 
     In AI scheduling mode, log files are named with a ``schedule_N_`` prefix

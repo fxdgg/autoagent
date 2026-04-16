@@ -32,16 +32,21 @@ import subprocess
 # =============================================================================
 
 def get_script_dir():
-    """Get the directory containing this script (autoagent/)."""
+    """Get the directory containing this script (autoagent/test/)."""
     return os.path.dirname(os.path.abspath(__file__))
+
+
+def get_src_dir():
+    """Get the src directory (autoagent/src/)."""
+    return os.path.join(os.path.dirname(get_script_dir()), "src")
 
 
 def get_default_test_root():
     """Get the default test root directory based on this script's location.
 
-    Default: <script_dir>/test/simulation_test/
+    Default: <script_dir>/simulation_test/
     """
-    return os.path.join(get_script_dir(), "test", "simulation_test")
+    return os.path.join(get_script_dir(), "simulation_test")
 
 
 def load_test_schema(test_root):
@@ -578,7 +583,7 @@ Examples:
         return
 
     # Resolve paths
-    autoagent_dir = get_script_dir()  # run_test.py lives in autoagent/
+    autoagent_dir = get_src_dir()  # run_test.py lives in autoagent/test/, src is at autoagent/src/
     log_dir = os.path.abspath(os.path.join(test_root, "logs"))
 
     # Validate that we can import yaml

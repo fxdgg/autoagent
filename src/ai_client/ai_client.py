@@ -23,7 +23,8 @@ import time
 import asyncio
 from typing import Union, Optional, List
 
-from ai_providers import AIProvider, CodeBuddyProvider, get_provider
+from ai_client.ai_providers import AIProvider, CodeBuddyProvider, get_provider
+from ai_client.ai_client_common import AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
 
 logger = logging.getLogger(__name__)
 

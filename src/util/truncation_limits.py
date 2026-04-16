@@ -17,7 +17,7 @@ _DEFAULTS = {
 
 
 def _load():
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml")
     if os.path.isfile(config_path):
         try:
             with open(config_path, 'r', encoding='utf-8') as f:

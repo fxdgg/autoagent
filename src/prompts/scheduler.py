@@ -10,7 +10,7 @@ import os
 import logging
 
 from prompts.shared import indent_block
-from truncation_limits import limits
+from util.truncation_limits import limits
 
 logger = logging.getLogger(__name__)
 

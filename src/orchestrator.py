@@ -1,4 +1,31 @@
 
+#!/usr/bin/env python3
+"""
+AutoAgent Orchestrator - Main entry point.
+
+AI-driven task execution system that supports multiple AI providers
+(CodeBuddy, Claude Code, Gemini CLI, OpenCode).
+"""
+
+import os
+import sys
+import logging
+import argparse
+
+import yaml
+
+from orchestrator.linear_orchestrator import TodoOrchestrator
+from ai_client.ai_providers import (
+    get_provider,
+    list_providers,
+    parse_model_spec,
+    PROVIDER_ALIASES,
+)
+from task_executor import ConfigError
+
+logger = logging.getLogger(__name__)
+
+
 def setup_logging(verbose: bool = False, log_file: str = None):
     """Configure logging.
     
@@ -37,7 +64,7 @@ def _load_config():
     Returns:
         dict: Configuration values. Empty dict if file not found.
     """
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.yaml")
     if os.path.isfile(config_path):
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
@@ -489,7 +516,6 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         if not args.use_cli:
             resolved_provider = args.provider.lower()
             # Resolve aliases
-            from ai_providers import PROVIDER_ALIASES
             resolved_provider = PROVIDER_ALIASES.get(resolved_provider, resolved_provider)
             if resolved_provider not in ('codebuddy', 'test'):
                 # Non-codebuddy providers don't support SDK, force CLI mode
@@ -517,7 +543,6 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         # When using Gemini with ideas, auto-include the todos.yaml parent directory
         # so that Gemini's sandbox allows writing the temp tasks file there.
         resolved_provider_name = args.provider.lower()
-        from ai_providers import PROVIDER_ALIASES
         resolved_provider_name = PROVIDER_ALIASES.get(resolved_provider_name, resolved_provider_name)
         if resolved_provider_name == 'gemini' and args.ideas:
             todos_parent = os.path.dirname(os.path.abspath(args.config))

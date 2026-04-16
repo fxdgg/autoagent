@@ -1,3 +1,38 @@
+import os
+import json
+import time
+import logging
+import yaml
+from typing import Optional
+
+from ai_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
+from state_manager import StateManager
+from logger import ConversationLogger
+from task_executor.task_executor_common import (
+    _state_key,
+    _write_autoagent_exec_script,
+    _load_fast_fail_timeout,
+    _load_show_console,
+    _read_log_file_smart,
+    SubtaskResult,
+)
+from prompts.shared import build_system_prompt_coding_agent, prepend_system_prompt_prefix
+from prompts.simple_task import build_simple_task_prompt
+from prompts.long_running_task import (
+    build_long_running_prompt as _build_lr_prompt,
+    build_long_running_analysis_prompt as _build_lr_analysis_prompt,
+)
+from prompts.marker_nudge import MAX_MARKER_NUDGES, MARKER_NUDGE_PROMPT
+from prompts.timeout_continuation import (
+    BASH_TIMEOUT_CONTINUATION_PROMPT,
+    STREAM_TIMEOUT_CONTINUATION_PROMPT,
+    INTERRUPT_CONTINUATION_PROMPT,
+)
+from util.truncation_limits import limits
+
+logger = logging.getLogger(__name__)
+
+
 class SimpleTaskExecutor:
     """
     Executes simple tasks using AI self-evaluation loop.
@@ -662,6 +697,9 @@ class SimpleTaskExecutor:
 
         # Ensure we have a SubtaskExecutor for poll + callback logic
         if subtask_exec is None:
+            # Lazy import to break circular dependency:
+            # simple_task_executor <-> subtask_executor
+            from task_executor.subtask_executor import SubtaskExecutor
             subtask_exec = SubtaskExecutor(session_dir=log_session_dir)
         
         print(f"   ⏳ AI submitted long-running task in simple task, waiting for completion...")

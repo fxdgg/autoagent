@@ -9,7 +9,7 @@ Covers both *nested* and *looping* task types.  Corresponds to
 from typing import List, Optional, Tuple
 
 from prompts.shared import indent_block
-from truncation_limits import limits
+from util.truncation_limits import limits
 
 # Role definition for failure analysis prompts
 ROLE_FAILURE_ANALYST = (

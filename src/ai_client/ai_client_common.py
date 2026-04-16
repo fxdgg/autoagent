@@ -1,3 +1,7 @@
+import os
+import yaml
+
+
 class AICallError(Exception):
     """AI call error (auth failure, response parse failure, etc.)"""
 
@@ -37,7 +41,7 @@ class StreamTimeoutError(AICallError):
 def _load_default_model():
     """Load default model from config.yaml."""
     config_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "config.yaml"
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml"
     )
     if os.path.isfile(config_path):
         try:

@@ -19,6 +19,8 @@ from typing import Optional, List
 
 import yaml
 
+from ai_client.ai_client_common import DEFAULT_MODEL
+
 logger = logging.getLogger(__name__)
 
 

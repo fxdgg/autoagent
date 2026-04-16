@@ -17,23 +17,9 @@ from typing import Optional, Tuple
 
 import yaml
 
-from codebuddy_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
+from ai_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
 from state_manager import StateManager
-from prompts.shared import build_system_prompt_coding_agent, prepend_system_prompt_prefix
-from prompts.simple_task import build_simple_task_prompt
-from prompts.long_running_task import (
-    build_long_running_prompt as _build_lr_prompt,
-    build_long_running_analysis_prompt as _build_lr_analysis_prompt,
-)
-from prompts.failure_analysis import build_failure_analysis_prompt
-from prompts.main_evaluation import build_main_evaluation_prompt
-from prompts.marker_nudge import MAX_MARKER_NUDGES, MARKER_NUDGE_PROMPT
-from prompts.timeout_continuation import (
-    BASH_TIMEOUT_CONTINUATION_PROMPT,
-    STREAM_TIMEOUT_CONTINUATION_PROMPT,
-    INTERRUPT_CONTINUATION_PROMPT,
-)
-from truncation_limits import limits
+from util.truncation_limits import limits
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +39,7 @@ def _load_fast_fail_timeout() -> int:
         return _fast_fail_timeout_cache
 
     config_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "config.yaml"
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml"
     )
     if os.path.isfile(config_path):
         try:
@@ -79,7 +65,7 @@ def _load_show_console() -> bool:
         return _show_console_cache
 
     config_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "config.yaml"
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml"
     )
     if os.path.isfile(config_path):
         try:
@@ -238,7 +224,7 @@ def _write_autoagent_exec_script(
         The absolute path to the generated script.
     """
     exec_py = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "autoagent_exec.py"
+        os.path.dirname(os.path.abspath(__file__)), "..", "util", "autoagent_exec.py"
     ).replace("\\", "/")
     log_dir = session_dir.replace("\\", "/")
 

@@ -33,9 +33,9 @@ def _str_representer(dumper, data):
 
 _BlockStyleDumper.add_representer(str, _str_representer)
 
-from codebuddy_client import AIClient, AICallError
-from conversation_logger import ConversationLogger
-from truncation_limits import limits
+from ai_client import AIClient, AICallError
+from logger import ConversationLogger
+from util.truncation_limits import limits
 from prompts.ideas_decompose import build_ideas_decompose_prompt
 from prompts.ideas_review import (
     build_ideas_review_prompt,
@@ -56,7 +56,7 @@ def _load_ideas_config() -> dict:
         'max_plan_retries': 3,
     }
     config_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "config.yaml"
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml"
     )
     if os.path.isfile(config_path):
         try:

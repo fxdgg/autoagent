@@ -5,7 +5,7 @@ Corresponds to ``IdeasWatcher._review_tasks()`` and the revision block
 inside ``IdeasWatcher._human_review_loop()`` in ideas_watcher.py.
 """
 
-from truncation_limits import limits
+from util.truncation_limits import limits
 from prompts.shared import (
     load_task_design_guide,
     indent_block,

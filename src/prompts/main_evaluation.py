@@ -8,7 +8,7 @@ in task_executor.py.
 from typing import List
 
 from prompts.shared import indent_block
-from truncation_limits import limits
+from util.truncation_limits import limits
 
 # Role definition for main-task evaluation prompts
 ROLE_MAIN_EVALUATOR = (

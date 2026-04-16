@@ -25,8 +25,8 @@ import logging
 import yaml
 from typing import Optional, List
 
-from codebuddy_client import AIClient, AIClientSDK, AIClientTest, AICallError
-from ai_providers import get_provider, list_providers, AIProvider, TestProvider, parse_model_spec
+from ai_client import AIClient, AIClientSDK, AIClientTest, AICallError
+from ai_client.ai_providers import get_provider, list_providers, AIProvider, TestProvider, parse_model_spec
 from task_executor import (
     SimpleTaskExecutor,
     NestedTaskExecutor,
@@ -36,8 +36,8 @@ from task_executor import (
     ExecutionError,
 )
 from state_manager import StateManager
-from conversation_logger import ConversationLogger
-from ideas_watcher import IdeasWatcher
+from logger import ConversationLogger, ScheduleAwareConvLogger
+from ideas import IdeasWatcher
 from prompts.scheduler import (
     build_scheduler_prompt,
     save_response_result,
@@ -1249,7 +1249,7 @@ class TodoOrchestrator:
                 context_id=context_id,
             )
             client._fallback_exec_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "autoagent_exec.py"
+                os.path.dirname(os.path.abspath(__file__)), "..", "util", "autoagent_exec.py"
             )
             client._fallback_log_dir = self.session_dir
         elif self.use_cli:
@@ -1337,7 +1337,7 @@ class TodoOrchestrator:
             task_description = self._get_latest_description()
 
             # Create a schedule-aware conv_logger wrapper
-            sched_conv_logger = _ScheduleAwareConvLogger(
+            sched_conv_logger = ScheduleAwareConvLogger(
                 self.conv_logger, schedule_round
             ) if self.conv_logger else None
 
@@ -1545,7 +1545,7 @@ class TodoOrchestrator:
             # even when the prompt doesn't contain them (e.g. simple tasks
             # where AI remembers the paths from context)
             client._fallback_exec_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "autoagent_exec.py"
+                os.path.dirname(os.path.abspath(__file__)), "..", "util", "autoagent_exec.py"
             )
             client._fallback_log_dir = self.session_dir
         elif self.use_cli:

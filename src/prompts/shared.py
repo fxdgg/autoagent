@@ -10,7 +10,7 @@ import os
 import logging
 import yaml
 
-from truncation_limits import limits
+from util.truncation_limits import limits
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def load_system_prompt_prefix() -> str:
         return _system_prompt_prefix_cache
 
     config_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "config.yaml"
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml"
     )
     try:
         with open(config_path, "r", encoding="utf-8") as f:
@@ -113,7 +113,7 @@ _task_design_guide_cache: str | None = None
 
 # Directory containing the task design guide and its sub-guides.
 _GUIDE_DIR = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "task_design_guide")
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "task_design_guide")
 )
 
 
