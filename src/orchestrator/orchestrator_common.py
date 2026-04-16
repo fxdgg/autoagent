@@ -1,9 +1,332 @@
 """Orchestrator common utilities and shared types.
 
-Re-exports ConfigError so that other modules can import it from the
-orchestrator package without depending on task_executor directly.
+Contains session management helpers, AI client factory, and config loading
+that are shared between the linear orchestrator and the AI orchestrator.
 """
 
+import os
+import sys
+import csv
+import time
+import string
+import random
+import logging
+import yaml
+
+from ai_client import AIClient, AIClientSDK, AIClientTest, AICallError
+from ai_client.ai_providers import AIProvider, TestProvider
 from task_executor.task_executor_common import ConfigError, ExecutionError
 
-__all__ = ["ConfigError", "ExecutionError"]
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "ConfigError",
+    "ExecutionError",
+    "SessionHelper",
+    "create_ai_client",
+    "load_orchestrator_config",
+]
+
+
+# ── Config loading ──────────────────────────────────────────────────
+
+def load_orchestrator_config() -> dict:
+    """Load config.yaml from the project root (two levels up from this file).
+
+    Returns:
+        dict: Configuration values. Empty dict if file not found.
+    """
+    config_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml"
+    )
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f) or {}
+            logger.debug(f"Loaded config from {config_path}: {config}")
+            return config
+        except Exception as e:
+            logger.warning(f"Failed to load config.yaml: {e}")
+    return {}
+
+
+# ── AI client factory ───────────────────────────────────────────────
+
+def create_ai_client(
+    provider: AIProvider,
+    workspace: str,
+    timeout: int,
+    bash_timeout: int,
+    context_id: str,
+    use_cli: bool = False,
+    backoff_max_wait: int = 300,
+    session_dir: str = None,
+):
+    """Create an AI client instance for the given context.
+
+    Centralises client creation logic used by both task execution
+    and the AI scheduler.
+
+    Args:
+        provider: AI provider instance.
+        workspace: Working directory for AI tool.
+        timeout: Session timeout in seconds.
+        bash_timeout: No-new-output timeout in seconds.
+        context_id: Context identifier for the client.
+        use_cli: If True, use CLI subprocess instead of SDK.
+        backoff_max_wait: Max wait time for exponential backoff.
+        session_dir: Session directory (used for TestProvider fallback paths).
+
+    Returns:
+        An AIClient, AIClientSDK, or AIClientTest instance.
+    """
+    if isinstance(provider, TestProvider):
+        client = AIClientTest(
+            provider=provider,
+            workspace=workspace,
+            timeout=timeout,
+            bash_timeout=bash_timeout,
+            context_id=context_id,
+        )
+        client._fallback_exec_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "util", "autoagent_exec.py"
+        )
+        client._fallback_log_dir = session_dir or ""
+    elif use_cli:
+        client = AIClient(
+            provider=provider,
+            workspace=workspace,
+            timeout=timeout,
+            bash_timeout=bash_timeout,
+            context_id=context_id,
+        )
+        client._backoff_max = backoff_max_wait
+    else:
+        client = AIClientSDK(
+            provider=provider,
+            workspace=workspace,
+            timeout=timeout,
+            bash_timeout=bash_timeout,
+            context_id=context_id,
+        )
+        client._backoff_max = backoff_max_wait
+    return client
+
+
+# ── Session management helpers ──────────────────────────────────────
+
+class SessionHelper:
+    """Static helper methods for session directory management.
+
+    These were originally ``@staticmethod`` methods on ``TodoOrchestrator``.
+    They are grouped here so both the linear and AI orchestrators can
+    share them without duplicating code.
+    """
+
+    SESSIONS_FILE = "sessions.csv"
+
+    @staticmethod
+    def generate_session_name(workspace: str) -> str:
+        """Generate a new session directory name: ``<basename>_<random8>``."""
+        basename = os.path.basename(os.path.abspath(workspace))
+        rand_suffix = "".join(
+            random.choices(string.ascii_lowercase + string.digits, k=8)
+        )
+        return f"{basename}_{rand_suffix}"
+
+    @staticmethod
+    def read_marker(workspace: str) -> str:
+        """Read the session subdir name from ``.autoagent_log``.
+
+        Returns the name (e.g. ``cufftdx_optimization_4jvowsl3``)
+        or empty string if the marker doesn't exist or is empty.
+        """
+        marker = os.path.join(workspace, ".autoagent_log")
+        if os.path.exists(marker):
+            try:
+                with open(marker, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception:
+                pass
+        return ""
+
+    @staticmethod
+    def write_marker(workspace: str, subdir_name: str):
+        """Write *subdir_name* into ``<workspace>/.autoagent_log``."""
+        marker = os.path.join(workspace, ".autoagent_log")
+        try:
+            with open(marker, "w", encoding="utf-8") as f:
+                f.write(subdir_name + "\n")
+        except Exception as e:
+            logger.warning(f"Failed to write {marker}: {e}")
+
+    @staticmethod
+    def append_sessions_csv(log_dir: str, subdir_name: str, workspace: str):
+        """Append a row to ``<log_dir>/sessions.csv``."""
+        csv_path = os.path.join(log_dir, SessionHelper.SESSIONS_FILE)
+        write_header = not os.path.exists(csv_path)
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            with open(csv_path, "a", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f, delimiter="\t")
+                if write_header:
+                    writer.writerow(["session_id", "workspace", "created_at"])
+                writer.writerow([
+                    subdir_name,
+                    workspace,
+                    time.strftime("%Y-%m-%dT%H:%M:%S"),
+                ])
+        except Exception as e:
+            logger.warning(f"Failed to append to {csv_path}: {e}")
+
+    @staticmethod
+    def load_sessions_csv(log_dir: str) -> list:
+        """Load all rows from ``sessions.csv``.
+
+        Returns a list of dicts with keys ``session_id``, ``workspace``,
+        ``created_at``.
+        """
+        csv_path = os.path.join(log_dir, SessionHelper.SESSIONS_FILE)
+        if not os.path.isfile(csv_path):
+            return []
+        rows = []
+        try:
+            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f, delimiter="\t")
+                for row in reader:
+                    rows.append(row)
+        except Exception as e:
+            logger.warning(f"Failed to read {csv_path}: {e}")
+        return rows
+
+    @staticmethod
+    def resolve_session_dir(
+        log_dir: str,
+        workspace: str,
+        mode: str = "new",
+        resume_id: str = None,
+    ) -> str:
+        """Resolve the session directory path.
+
+        Args:
+            log_dir: Absolute path to the log root (e.g. ``.autoagent``).
+            workspace: Absolute path to the workspace.
+            mode: One of ``"new"``, ``"continue"``, ``"resume"``.
+            resume_id: Session suffix or full name (only for ``mode="resume"``).
+
+        Returns:
+            Absolute path to the session directory.
+
+        Raises:
+            SystemExit on error (no marker, session not found, etc.)
+        """
+        sh = SessionHelper
+
+        if mode == "continue":
+            subdir = sh.read_marker(workspace)
+            if not subdir:
+                print("❌ No active session found (.autoagent_log missing or empty).")
+                print("   Use --resume <session_id> or run without --continue to start fresh.")
+                sys.exit(1)
+            session_dir = os.path.join(log_dir, subdir)
+            if not os.path.isdir(session_dir):
+                print(f"❌ Session directory not found: {session_dir}")
+                print(f"   The session '{subdir}' may have been deleted.")
+                sys.exit(1)
+            return session_dir
+
+        if mode == "resume":
+            if not resume_id:
+                print("❌ --resume requires a session ID.")
+                sys.exit(1)
+            # Search sessions.csv
+            rows = sh.load_sessions_csv(log_dir)
+            matches = []
+            for row in rows:
+                sid = row.get("session_id", "")
+                # Match by full name or by suffix (the random part)
+                if sid == resume_id or sid.endswith(f"_{resume_id}"):
+                    matches.append(sid)
+            if not matches:
+                # Also try scanning log_dir directly
+                if os.path.isdir(log_dir):
+                    for d in os.listdir(log_dir):
+                        if d == resume_id or d.endswith(f"_{resume_id}"):
+                            matches.append(d)
+            if not matches:
+                print(f"❌ Session '{resume_id}' not found.")
+                print(f"   Use --list-sessions to see available sessions.")
+                sys.exit(1)
+            if len(matches) > 1:
+                print(f"❌ Ambiguous session ID '{resume_id}', matches: {matches}")
+                print(f"   Please use the full session ID.")
+                sys.exit(1)
+            subdir = matches[0]
+            session_dir = os.path.join(log_dir, subdir)
+            if not os.path.isdir(session_dir):
+                print(f"❌ Session directory not found: {session_dir}")
+                sys.exit(1)
+            # Update .autoagent_log to point to this session
+            sh.write_marker(workspace, subdir)
+            return session_dir
+
+        # mode == "new"
+        subdir = sh.generate_session_name(workspace)
+        sh.write_marker(workspace, subdir)
+        sh.append_sessions_csv(log_dir, subdir, workspace)
+        return os.path.join(log_dir, subdir)
+
+    @staticmethod
+    def get_session_status(session_dir: str) -> str:
+        """Read todos_state.yaml and return a brief status string.
+
+        Examples: ``"1.2 (round 3/10)"``, ``"completed"``, ``"no state"``.
+        """
+        state_file = os.path.join(session_dir, "todos_state.yaml")
+        if not os.path.isfile(state_file):
+            return "no state"
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                state = yaml.safe_load(f)
+        except Exception:
+            return "error reading state"
+        if not state or "tasks" not in state:
+            return "empty"
+
+        # Check for AI orchestrator state
+        orch = state.get("orchestrator")
+        if orch:
+            orch_status = orch.get("status", "unknown")
+            cr = orch.get("current_round", 0)
+            mr = orch.get("max_rounds", "?")
+            if orch_status in ("completed", "stopped"):
+                return f"ai_sched: {orch_status} ({cr}/{mr} rounds)"
+            return f"ai_sched: round {cr}/{mr}"
+
+        tasks = state["tasks"]
+        # Find the deepest in_progress task
+        in_progress = None
+        for key, val in tasks.items():
+            if val.get("status") == "in_progress":
+                # Prefer the one with the longest key (deepest subtask)
+                if in_progress is None or len(key) > len(in_progress[0]):
+                    in_progress = (key, val)
+
+        if in_progress:
+            key, val = in_progress
+            # Strip round-scoped suffix for display
+            display_id = key.split("@")[0] if "@" in key else key
+            round_info = ""
+            cr = val.get("current_round")
+            mr = val.get("max_attempts") or val.get("repeat_count")
+            if cr and mr:
+                round_info = f" (round {cr}/{mr})"
+            return f"{display_id}{round_info}"
+
+        # Check if all top-level tasks are completed
+        top_tasks = {k: v for k, v in tasks.items() if "@" not in k and "." not in k}
+        if top_tasks and all(v.get("status") == "completed" for v in top_tasks.values()):
+            return "completed"
+
+        # Some tasks pending, none in progress
+        return "pending"
