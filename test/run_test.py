@@ -426,7 +426,14 @@ def verify_test(test_case, session_dir, actual_exit_code):
     tasks = state["tasks"]
 
     def _find_task_state(task_key):
-        """Find a task's state, checking plain key first, then @-suffixed keys."""
+        """Find a task's state, checking plain key first, then round-prefixed keys.
+
+        In linear mode, keys are plain: "1", "1.1", "1.2".
+        In AI mode, keys are round-prefixed: "1.1" (round 1, task 1),
+        "1.1.1" (round 1, task 1, subtask 1), etc.
+        When multiple round-prefixed keys exist for the same task,
+        the latest (highest round) is returned.
+        """
         if task_key in tasks:
             return tasks[task_key]
         # Search for round-scoped keys (e.g., "1.1@2.1")
@@ -437,6 +444,22 @@ def verify_test(test_case, session_dir, actual_exit_code):
         )
         if round_keys:
             return tasks[round_keys[-1]]
+        # Search for AI-mode round-prefixed keys.
+        # For task_key "1", look for keys like "N.1" where N is a round number.
+        # For task_key "1.2", look for keys like "N.1.2".
+        # We match keys ending with ".{task_key}" where the prefix is a round number.
+        ai_candidates = []
+        for k in tasks:
+            # Check if k ends with ".{task_key}" and the prefix is a digit
+            suffix = "." + task_key
+            if k.endswith(suffix):
+                round_part = k[: -len(suffix)]
+                if round_part.isdigit():
+                    ai_candidates.append((int(round_part), k))
+        if ai_candidates:
+            # Return the state from the latest round
+            ai_candidates.sort(key=lambda x: x[0])
+            return tasks[ai_candidates[-1][1]]
         return None
 
     for task_id, expected in test_case["expected_tasks"].items():
@@ -468,9 +491,15 @@ def verify_test(test_case, session_dir, actual_exit_code):
         # Check across ALL round keys for this task (history may be spread)
         if expected.get("has_not_completed"):
             all_history = list(task_state.get("history", []))
+            # Check @-suffixed keys (linear mode round-scoped)
             prefix = str(task_id) + "@"
             for k, v in tasks.items():
                 if k.startswith(prefix):
+                    all_history.extend(v.get("history", []))
+            # Check AI-mode round-prefixed keys (N.task_id)
+            suffix = "." + str(task_id)
+            for k, v in tasks.items():
+                if k.endswith(suffix) and k[:-len(suffix)].isdigit():
                     all_history.extend(v.get("history", []))
             has_nc = any(
                 h.get("result") == "not_completed" for h in all_history
@@ -655,6 +684,12 @@ Examples:
                 ))
             else:
                 extra_args.append(arg)
+
+        # AI strategy: when test_schema specifies ai_strategy, add
+        # --mode ai and --ai-strategy to the orchestrator args
+        ai_strategy = tc.get("ai_strategy")
+        if ai_strategy:
+            extra_args.extend(["--mode", "ai", "--ai-strategy", ai_strategy])
 
         # Run
         test_timeout = tc.get("timeout", 30)

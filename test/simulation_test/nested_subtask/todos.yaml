@@ -19,9 +19,23 @@
 #   - Outer task 1 evaluates and completes
 # =============================================================================
 
+description: |
+  Test project for multi-level nested subtask support.
+
+ai_orchestrator:
+  strategy: |
+    Execute tasks sequentially.
+  max_rounds: 5
+  stop_condition: |
+    All tasks completed.
+  last_result:
+    1:
+      type: response
+
 tasks:
   - id: 1
     name: "Test nested subtask within nested task"
+    description: "Test that a subtask of type nested works correctly within a parent nested task."
     type: nested
     max_attempts: 3
     completion_criteria: |

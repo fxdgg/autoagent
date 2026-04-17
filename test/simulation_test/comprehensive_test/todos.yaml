@@ -50,6 +50,28 @@ description: >
   Comprehensive test project exercising all prompt-building paths
   for nested and looping task executors.
 
+ai_orchestrator:
+  strategy: |
+    Execute tasks sequentially.
+  max_rounds: 10
+  stop_condition: |
+    All tasks completed.
+  last_result:
+    1:
+      type: response
+    2:
+      type: response
+    3:
+      type: response
+    4:
+      type: response
+    5:
+      type: response
+    6:
+      type: response
+    7:
+      type: response
+
 description@7: >
   Round-scoped description for task 7: validates that the orchestrator
   selects description@7 over the root-level description.
@@ -60,6 +82,7 @@ tasks:
   # ==========================================================================
   - id: 1
     name: "Nested comprehensive coverage"
+    description: "Comprehensive nested task testing all prompt-building paths."
     type: nested
     max_attempts: 100
     completion_criteria: |
@@ -124,6 +147,7 @@ tasks:
   # ==========================================================================
   - id: 2
     name: "Looping comprehensive coverage"
+    description: "Comprehensive looping task testing all prompt-building paths."
     type: looping
     repeat_count: 2
     max_attempts_per_loop: 3
@@ -167,6 +191,7 @@ tasks:
   # ==========================================================================
   - id: 3
     name: "Nested edge case coverage"
+    description: "Nested task testing edge cases with long_running subtasks."
     type: nested
     max_attempts: 100
     completion_criteria: |
@@ -220,6 +245,7 @@ tasks:
   # ==========================================================================
   - id: 4
     name: "Looping max attempts exhaustion"
+    description: "Looping task testing max_attempts exhaustion with long_running subtask."
     type: looping
     repeat_count: 2
     max_attempts_per_loop: 2
@@ -253,6 +279,7 @@ tasks:
   # ==========================================================================
   - id: 5
     name: "Nested invalid JSON fallback coverage"
+    description: "Nested task testing invalid JSON fallback handling."
     type: nested
     max_attempts: 3
     completion_criteria: |
@@ -295,6 +322,7 @@ tasks:
   # ==========================================================================
   - id: 6
     name: "Prompt truncation coverage"
+    description: "Nested task testing prompt truncation with oversized context."
     type: nested
     max_attempts: 100
     completion_criteria: |
@@ -339,6 +367,7 @@ tasks:
   #        description. Verifies _get_description_for_task() selects correctly.
   - id: 7
     name: "Round-scoped description validation"
+    description: "Simple task testing round-scoped description selection."
     type: simple
     completion_criteria: |
       Round-scoped description verified in prompt context.

@@ -33,6 +33,10 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
         Round-scoped description validation
     </task_name>
 
+    <task_description>
+        Simple task testing round-scoped description selection.
+    </task_description>
+
     <completion_criteria>
         Round-scoped description verified in prompt context.
     </completion_criteria>

@@ -120,6 +120,27 @@ class AIClientTest:
         )
         logger.debug(f"[{self.context_id}] Prompt: {prompt[:limits.get('log_promptlike_preview')]}...")
 
+        # Auto-generate scheduler decisions for sequential AI strategy.
+        # When the provider has ai_strategy set and this is a scheduler call
+        # (context_id starts with "scheduler_round_"), return an auto-generated
+        # decision instead of consuming a test rule.
+        scheduler_decision = None
+        if (self.context_id and self.context_id.startswith("scheduler_round_")
+                and hasattr(self.provider, 'get_scheduler_decision')):
+            scheduler_decision = self.provider.get_scheduler_decision()
+
+        if scheduler_decision is not None:
+            response = scheduler_decision
+            print(
+                f"\n🧪 [TestProvider] Auto-generated scheduler decision "
+                f"(ai_strategy={self.provider.ai_strategy})"
+            )
+            print(f"   Response: {response}")
+            self.last_full_log = response
+            if expect_json:
+                return self._parse_json_response(response)
+            return response
+
         # Get next response from provider
         response = self.provider.get_next_response()
 

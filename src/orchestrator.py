@@ -410,6 +410,14 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
              'Rules are consumed in order, one per ask() call.',
     )
     parser.add_argument(
+        '--ai-strategy',
+        default=None,
+        help='AI scheduling strategy for test mode. When set to "sequential", '
+             'the TestProvider auto-generates scheduler decisions (execute tasks '
+             'in order, then stop) so the same test_rules file can be reused '
+             'for AI-mode tests. Only used with --provider test.',
+    )
+    parser.add_argument(
         '--preset',
         default='default',
         help='Preset configuration name from config.yaml (default: default). '
@@ -562,6 +570,7 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
             extra_args=args.extra_args,
             test_rules_file=getattr(args, 'test_rules', None),
             include_directories=include_dirs,
+            ai_strategy=getattr(args, 'ai_strategy', None),
         )
         
         logger.info(f"Using AI provider: {provider}")

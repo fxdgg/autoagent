@@ -17,9 +17,25 @@
 #     - 2.2: simple (always succeeds)
 # =============================================================================
 
+description: |
+  Test project for looping task and invalid JSON fallback behavior.
+
+ai_orchestrator:
+  strategy: |
+    Execute tasks sequentially.
+  max_rounds: 5
+  stop_condition: |
+    All tasks completed.
+  last_result:
+    1:
+      type: response
+    2:
+      type: response
+
 tasks:
   - id: 1
     name: "Test looping task with invalid JSON in failure analysis"
+    description: "Test looping task execution with invalid JSON in failure analysis fallback."
     type: looping
     repeat_count: 2
     max_attempts_per_loop: 3
@@ -41,6 +57,7 @@ tasks:
 
   - id: 2
     name: "Test nested task with invalid JSON in evaluation"
+    description: "Test nested task execution with invalid JSON in main task evaluation fallback."
     type: nested
     max_attempts: 2
     completion_criteria: |

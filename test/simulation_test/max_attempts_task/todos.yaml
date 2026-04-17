@@ -19,9 +19,25 @@
 #   - Task 2 still executes and succeeds
 # =============================================================================
 
+description: |
+  Test project for max_attempts exhaustion behavior.
+
+ai_orchestrator:
+  strategy: |
+    Execute tasks sequentially.
+  max_rounds: 5
+  stop_condition: |
+    All tasks completed.
+  last_result:
+    1:
+      type: response
+    2:
+      type: response
+
 tasks:
   - id: 1
     name: "Task that will exhaust max_attempts"
+    description: "A nested task that will exhaust its max_attempts due to a failing subtask."
     type: nested
     max_attempts: 2
     completion_criteria: |
@@ -42,6 +58,7 @@ tasks:
 
   - id: 2
     name: "Task after failed task"
+    description: "A simple task that should execute even after the previous task failed."
     type: simple
     completion_criteria: |
       This task completed successfully.

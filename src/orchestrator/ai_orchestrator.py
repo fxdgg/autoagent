@@ -199,6 +199,17 @@ class AISchedulerMixin:
         if not ai_orch:
             raise ConfigError("run_ai_scheduled called but ai_orchestrator is not configured")
 
+        # Populate ai_task_ids on the provider for sequential test strategy.
+        # This must happen before the scheduling loop so that TestProvider
+        # knows the task order for auto-generated scheduler decisions.
+        from ai_client.ai_providers import TestProvider
+        if isinstance(self.provider, TestProvider) and self.provider.ai_strategy:
+            self.provider.ai_task_ids = [str(t['id']) for t in self.todos]
+            logger.info(
+                f"Set TestProvider.ai_task_ids = {self.provider.ai_task_ids} "
+                f"(ai_strategy={self.provider.ai_strategy})"
+            )
+
         config = load_orchestrator_config()
         scheduler_history_limit = config.get('scheduler_history_limit', 10)
         scheduler_decision_max_retries = config.get('scheduler_decision_max_retries', 3)

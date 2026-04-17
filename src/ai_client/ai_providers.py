@@ -409,11 +409,22 @@ class TestProvider(AIProvider):
         executable: str = None,
         model: str = None,
         extra_args: str = None,
+        ai_strategy: str = None,
     ):
         super().__init__(executable=executable, model=model, extra_args=extra_args)
         self.test_rules_file = test_rules_file
         self._rules = []
         self._rule_index = 0
+        # AI scheduling strategy for test mode.
+        # When set to "sequential", the provider auto-generates scheduler
+        # decisions (execute tasks in order, then stop) so that the same
+        # test_rules file can be reused for AI-mode tests.
+        self.ai_strategy = ai_strategy
+        # Populated by the orchestrator after loading todos.yaml:
+        # list of top-level task ID strings in order, e.g. ["1", "2", "3"]
+        self.ai_task_ids: list[str] = []
+        # Internal counter: which task in ai_task_ids to schedule next
+        self._ai_sched_index = 0
         if test_rules_file:
             self._load_rules(test_rules_file)
 
@@ -492,6 +503,31 @@ class TestProvider(AIProvider):
         )
         return response
 
+    def get_scheduler_decision(self) -> str | None:
+        """Auto-generate a scheduler decision for sequential AI strategy.
+
+        When ``ai_strategy == "sequential"``, this method returns the next
+        sequential scheduling decision JSON string.  It walks through
+        ``ai_task_ids`` in order, returning an ``execute`` action for each,
+        then a ``stop`` action when all tasks have been scheduled.
+
+        Returns:
+            JSON string for the scheduler decision, or None if
+            ``ai_strategy`` is not set.
+        """
+        if self.ai_strategy != 'sequential' or not self.ai_task_ids:
+            return None
+
+        if self._ai_sched_index >= len(self.ai_task_ids):
+            logger.info("TestProvider: sequential scheduler → stop")
+            return '{"action": "stop", "reasoning": "All tasks executed sequentially"}'
+
+        task_id = self.ai_task_ids[self._ai_sched_index]
+        self._ai_sched_index += 1
+        logger.info(f"TestProvider: sequential scheduler → execute task {task_id}")
+        return ('{"action": "execute", "task_id": ' + task_id +
+                ', "reasoning": "Sequential execution order"}')
+
     def peek_remaining(self) -> int:
         """Return the number of remaining unused rules."""
         return max(0, len(self._rules) - self._rule_index)
@@ -536,6 +572,7 @@ def get_provider(
     extra_args: str = None,
     test_rules_file: str = None,
     include_directories: List[str] = None,
+    ai_strategy: str = None,
 ) -> AIProvider:
     """
     Create an AI provider by name.
@@ -547,6 +584,7 @@ def get_provider(
         extra_args: Additional CLI arguments
         test_rules_file: Path to test rules file (only for "test" provider)
         include_directories: List of additional directories for Gemini sandbox
+        ai_strategy: AI scheduling strategy for test mode ("sequential" or None)
 
     Returns:
         AIProvider: Configured provider instance
@@ -574,6 +612,7 @@ def get_provider(
             executable=executable,
             model=model,
             extra_args=extra_args,
+            ai_strategy=ai_strategy,
         )
 
     if resolved == "gemini":

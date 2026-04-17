@@ -13,9 +13,23 @@
 #   - Subtask 1.4 (simple) is re-executed on retries as normal
 # =============================================================================
 
+description: |
+  Test project for once-type subtask behavior in nested tasks.
+
+ai_orchestrator:
+  strategy: |
+    Execute tasks sequentially.
+  max_rounds: 5
+  stop_condition: |
+    All tasks completed.
+  last_result:
+    1:
+      type: response
+
 tasks:
   - id: 1
     name: "Test once-type subtask behavior"
+    description: "Test that once-type subtasks are not re-executed on retries."
     type: nested
     max_attempts: 100
     completion_criteria: |
