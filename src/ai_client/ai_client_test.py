@@ -9,6 +9,7 @@ from typing import Union, Optional
 from ai_client.ai_providers import AIProvider, TestProvider
 from ai_client.ai_client_common import AICallError
 from util.truncation_limits import limits
+from util.default_value import DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +44,15 @@ class AIClientTest:
         self,
         provider: AIProvider,
         workspace: str = ".",
-        timeout: int = 3600,
-        bash_timeout: int = 300,
+        timeout: int = None,
+        bash_timeout: int = None,
         context_id: str = None,
     ):
+        if timeout is None:
+            timeout = DEFAULTS['session_timeout']
+        if bash_timeout is None:
+            bash_timeout = DEFAULTS['bash_timeout']
+
         from ai_client.ai_providers import TestProvider
 
         if not isinstance(provider, TestProvider):
@@ -211,7 +217,7 @@ class AIClientTest:
         # We read the script to extract the embedded exec_path and log_dir.
         exec_path = None
         log_dir = None
-        fast_fail_timeout = 10  # default; may be overridden from script content
+        fast_fail_timeout = DEFAULTS['fast_fail_timeout']  # default; may be overridden from script content
 
         script_match = re.search(
             r'["\'](.+?/scripts/autoagent-exec\.(?:bat|sh))["\']',
@@ -235,7 +241,7 @@ class AIClientTest:
                     r"--fast-fail-timeout\s+(\d+)",
                     script_content,
                 )
-                fast_fail_timeout = int(fft_match.group(1)) if fft_match else 10
+                fast_fail_timeout = int(fft_match.group(1)) if fft_match else DEFAULTS['fast_fail_timeout']
             except OSError as e:
                 logger.warning(
                     f"[{self.context_id}] Failed to read autoagent-exec script "

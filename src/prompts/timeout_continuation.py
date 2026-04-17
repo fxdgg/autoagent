@@ -27,8 +27,7 @@ BASH_TIMEOUT_CONTINUATION_PROMPT = (
 # but the session is likely still alive.  The AI may have already
 # completed its work — we just need it to continue/confirm.
 STREAM_TIMEOUT_CONTINUATION_PROMPT = (
-    "Your previous response was interrupted due to a "
-    "network/stream timeout.\n"
+    "Your previous response was interrupted due to a network/stream timeout.\n"
     "Please continue working on the task from where you left off.\n"
     "When you are done, end your response with EXACTLY one of:\n"
     "  ✅ completed\n"

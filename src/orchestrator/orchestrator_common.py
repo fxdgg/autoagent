@@ -16,6 +16,7 @@ import yaml
 from ai_client import AIClient, AIClientSDK, AIClientTest, AICallError
 from ai_client.ai_providers import AIProvider, TestProvider
 from task_executor.task_executor_common import ConfigError, ExecutionError
+from util.default_value import DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ def create_ai_client(
     bash_timeout: int,
     context_id: str,
     use_cli: bool = False,
-    backoff_max_wait: int = 300,
+    backoff_max_wait: int = None,
     session_dir: str = None,
 ):
     """Create an AI client instance for the given context.
@@ -80,6 +81,9 @@ def create_ai_client(
     Returns:
         An AIClient, AIClientSDK, or AIClientTest instance.
     """
+    if backoff_max_wait is None:
+        backoff_max_wait = DEFAULTS['backoff_max_wait']
+
     if isinstance(provider, TestProvider):
         client = AIClientTest(
             provider=provider,

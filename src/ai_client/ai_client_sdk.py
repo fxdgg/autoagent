@@ -15,6 +15,7 @@ from ai_client.ai_client_common import (
     StreamTimeoutError,
 )
 from util.truncation_limits import limits
+from util.default_value import DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +38,8 @@ class AIClientSDK:
         self,
         provider: AIProvider,
         workspace: str = ".",
-        timeout: int = 3600,
-        bash_timeout: int = 300,
+        timeout: int = None,
+        bash_timeout: int = None,
         context_id: str = None,
     ):
         """
@@ -53,6 +54,11 @@ class AIClientSDK:
                 is killed.
             context_id: Context identifier for logging/tracking
         """
+        if timeout is None:
+            timeout = DEFAULTS['session_timeout']
+        if bash_timeout is None:
+            bash_timeout = DEFAULTS['bash_timeout']
+
         self.provider = provider
 
         self.workspace = workspace
@@ -65,8 +71,8 @@ class AIClientSDK:
         self._on_session_id_changed = None
         # Exponential backoff state
         self._consecutive_failures = 0
-        self._backoff_base = 5  # seconds
-        self._backoff_max = 300  # default max wait, overridden by config
+        self._backoff_base = DEFAULTS['backoff_base']  # seconds
+        self._backoff_max = DEFAULTS['backoff_max_wait']  # default max wait, overridden by config
 
     @property
     def session_id(self) -> str:

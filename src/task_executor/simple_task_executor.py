@@ -29,6 +29,7 @@ from prompts.timeout_continuation import (
     INTERRUPT_CONTINUATION_PROMPT,
 )
 from util.truncation_limits import limits
+from util.default_value import DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +42,9 @@ class SimpleTaskExecutor:
     until the criteria are met or max attempts are reached.
     """
 
-    def __init__(self, session_dir: str = None, default_max_attempts: int = 5):
+    def __init__(self, session_dir: str = None, default_max_attempts: int = None):
         self.session_dir = session_dir
-        self.default_max_attempts = default_max_attempts
+        self.default_max_attempts = default_max_attempts if default_max_attempts is not None else DEFAULTS['default_max_attempts']
         self.last_response_text = ""
 
     def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, project_description: str = "", **kwargs) -> bool:

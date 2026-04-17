@@ -26,6 +26,7 @@ from prompts.timeout_continuation import (
     INTERRUPT_CONTINUATION_PROMPT,
 )
 from util.truncation_limits import limits
+from util.default_value import DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +36,12 @@ class SubtaskExecutor:
     Dispatches subtask execution based on type (simple or long_running).
     """
 
-    def __init__(self, session_dir: str = None, model_roles: dict = None, default_max_attempts: int = 5):
+    def __init__(self, session_dir: str = None, model_roles: dict = None, default_max_attempts: int = None):
         # Lazy import to break circular dependency:
         # subtask_executor <-> simple_task_executor
         from task_executor.simple_task_executor import SimpleTaskExecutor
+        if default_max_attempts is None:
+            default_max_attempts = DEFAULTS['default_max_attempts']
         self.simple_executor = SimpleTaskExecutor(session_dir=session_dir, default_max_attempts=default_max_attempts)
         # Back-reference so SimpleTaskExecutor can delegate long-running
         # handling (poll + callback) when AI uses autoagent-exec in a simple task
@@ -690,8 +693,8 @@ class SubtaskExecutor:
 
     def _poll_signal_file(
         self, subtask_id: str, signal_file: str,
-        check_interval: int = 15, max_wait: int = 24 * 3600,
-        max_initial_wait: int = 20,
+        check_interval: int = None, max_wait: int = None,
+        max_initial_wait: int = None,
     ) -> str:
         """
         Poll the signal file until the long-running task completes.
@@ -706,15 +709,22 @@ class SubtaskExecutor:
                 fast-failed and exited without writing one), return "error"
                 after this timeout. Should be set to ~2x fast_fail_timeout
                 to give autoagent-exec enough time to write the signal file.
-                Default 20s (suitable for the default fast_fail_timeout=10s).
+                Default 20s (suitable for the default fast_fail_timeout=30s).
         
         Returns:
             str: "finished", "error", or "timeout"
         """
+        if check_interval is None:
+            check_interval = DEFAULTS['signal_check_interval']
+        if max_wait is None:
+            max_wait = DEFAULTS['signal_max_wait']
+        if max_initial_wait is None:
+            max_initial_wait = DEFAULTS['signal_max_initial_wait']
+
         elapsed = 0
         pid = None  # Will be read from signal file
         consecutive_errors = 0
-        max_consecutive_errors = 10  # After 10 consecutive read failures, escalate
+        max_consecutive_errors = DEFAULTS['max_signal_retry']  # After 10 consecutive read failures, escalate
         signal_file_seen = False  # Track if we've ever seen the signal file
         # Use a shorter interval during the initial wait phase so we don't
         # overshoot max_initial_wait when check_interval > max_initial_wait.

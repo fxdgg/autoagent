@@ -11,6 +11,7 @@ import logging
 import yaml
 
 from util.truncation_limits import limits
+from util.default_value import DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ def load_system_prompt_prefix() -> str:
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f) or {}
-        _system_prompt_prefix_cache = config.get("system_prompt_prefix", "") or ""
+        _system_prompt_prefix_cache = config.get("system_prompt_prefix", DEFAULTS["system_prompt_prefix"]) or ""
     except OSError as e:
         logger.warning(f"Failed to load config.yaml for system_prompt_prefix: {e}")
         _system_prompt_prefix_cache = ""

@@ -1,6 +1,8 @@
 import os
 import yaml
 
+from util.default_value import DEFAULTS
+
 
 class AICallError(Exception):
     """AI call error (auth failure, response parse failure, etc.)"""
@@ -47,11 +49,11 @@ def _load_default_model():
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
-            return config.get("default_model", "deepseek-v3.2")
+            return config.get("default_model", DEFAULTS["default_model"])
         except Exception:
             pass
-    return "deepseek-v3.2"
+    return DEFAULTS["default_model"]
 
 
-# Default model loaded from config.yaml, fallback to deepseek-v3.2
+# Default model loaded from config.yaml
 DEFAULT_MODEL = _load_default_model()

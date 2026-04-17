@@ -20,10 +20,9 @@ from typing import Optional, List
 import yaml
 
 from ai_client.ai_client_common import DEFAULT_MODEL
+from util.default_value import DEFAULTS
 
 logger = logging.getLogger(__name__)
-
-
 
 class AIProvider:
     """
@@ -176,7 +175,7 @@ class ClaudeCodeProvider(AIProvider):
 
     name = "claude"
     default_executable = "claude"
-    default_model = "claude-sonnet-4-6"
+    default_model = DEFAULTS['default_model_provider']['claude']
     supports_system_prompt = True
 
     def build_command(self, session_id: str = None, system_prompt: str = None) -> str:
@@ -224,7 +223,7 @@ class GeminiCLIProvider(AIProvider):
 
     name = "gemini"
     default_executable = "gemini"
-    default_model = "gemini-3-flash"
+    default_model = DEFAULTS['default_model_provider']['gemini']
 
     def __init__(
         self,
@@ -345,7 +344,7 @@ class CodexProvider(AIProvider):
 
     name = "codex"
     default_executable = "codex"
-    default_model = "gpt-5.4-mini"
+    default_model = DEFAULTS['default_model_provider']['codex']
     supports_system_prompt = False
 
     def build_command(self, session_id: str = None, system_prompt: str = None) -> str:

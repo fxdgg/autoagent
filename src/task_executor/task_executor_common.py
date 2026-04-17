@@ -20,6 +20,7 @@ import yaml
 from ai_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
 from state_manager import StateManager
 from util.truncation_limits import limits
+from util.default_value import DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ def _load_fast_fail_timeout() -> int:
     """Load fast_fail_timeout from config.yaml (cached after first call).
 
     Returns:
-        The configured fast-fail timeout in seconds (default 10).
+        The configured fast-fail timeout in seconds.
     """
     global _fast_fail_timeout_cache
     if _fast_fail_timeout_cache is not None:
@@ -45,12 +46,12 @@ def _load_fast_fail_timeout() -> int:
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
-            value = config.get("fast_fail_timeout", 10)
+            value = config.get("fast_fail_timeout", DEFAULTS["fast_fail_timeout"])
             _fast_fail_timeout_cache = int(value)
             return _fast_fail_timeout_cache
         except Exception:
             pass
-    _fast_fail_timeout_cache = 10
+    _fast_fail_timeout_cache = DEFAULTS["fast_fail_timeout"]
     return _fast_fail_timeout_cache
 
 
@@ -71,11 +72,11 @@ def _load_show_console() -> bool:
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
-            _show_console_cache = bool(config.get("autoagent_exec_show_console", False))
+            _show_console_cache = bool(config.get("autoagent_exec_show_console", DEFAULTS["autoagent_exec_show_console"]))
             return _show_console_cache
         except Exception:
             pass
-    _show_console_cache = False
+    _show_console_cache = DEFAULTS["autoagent_exec_show_console"]
     return _show_console_cache
 
 
@@ -195,7 +196,7 @@ def _build_failed_subtask_history(
 def _write_autoagent_exec_script(
     session_dir: str,
     task_id: str,
-    fast_fail_timeout: int = 10,
+    fast_fail_timeout: int = 30,
     show_console: bool = False,
 ) -> str:
     """Write (or overwrite) the ``autoagent-exec`` convenience script.
@@ -215,7 +216,7 @@ def _write_autoagent_exec_script(
         session_dir: Absolute path to the log session directory.
         task_id: Current task / subtask ID (e.g. ``"1"`` or ``"2.1"``).
         fast_fail_timeout: Seconds to wait before treating the command as
-            long-running (default 10, from config.yaml ``fast_fail_timeout``).
+        long-running (default 30, from config.yaml ``fast_fail_timeout``).
         show_console: If True, pass ``--show-console`` to autoagent_exec.py
             so the subprocess gets a visible console window on Windows.
             (from config.yaml ``autoagent_exec_show_console``).

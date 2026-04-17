@@ -23,6 +23,7 @@ from ai_client.ai_providers import (
     PROVIDER_ALIASES,
 )
 from task_executor import ConfigError
+from util.default_value import generate_default_config, DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -248,10 +249,10 @@ def main():
 
     # Load config.yaml defaults
     config = _load_config()
-    default_session_timeout = config.get('session_timeout', 3600)
-    default_bash_timeout = config.get('bash_timeout', 300)
-    default_idle_interval = config.get('idle_interval', 30)
-    default_max_attempts = config.get('default_max_attempts', 5)
+    default_session_timeout = config.get('session_timeout', DEFAULTS['session_timeout'])
+    default_bash_timeout = config.get('bash_timeout', DEFAULTS['bash_timeout'])
+    default_idle_interval = config.get('idle_interval', DEFAULTS['idle_interval'])
+    default_max_attempts = config.get('default_max_attempts', DEFAULTS['default_max_attempts'])
 
     parser = argparse.ArgumentParser(
         description="AI-driven task execution system (supports CodeBuddy, Claude Code, Gemini CLI)",
@@ -274,63 +275,15 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
   python orchestrator.py --list-providers                # List available AI providers
         """,
     )
+
+    # ------------------------------------------------
+    # General
+    # ------------------------------------------------
     
     parser.add_argument(
         '--config', '-c',
         default='todos.yaml',
         help='Path to task configuration file (default: todos.yaml)',
-    )
-    parser.add_argument(
-        '--task', '-t',
-        type=str,
-        default=None,
-        help='Execute only the specified task ID (not available in AI orchestrator mode)',
-    )
-    parser.add_argument(
-        '--provider', '-P',
-        default='codebuddy',
-        help='AI provider to use: codebuddy (default), claude, gemini, opencode, test. '
-             'Use --list-providers to see all available options.',
-    )
-    parser.add_argument(
-        '--executable',
-        default=None,
-        help='Override the default executable path for the AI provider',
-    )
-    parser.add_argument(
-        '--extra-args',
-        default=None,
-        help='Additional CLI arguments to pass to the AI tool',
-    )
-    parser.add_argument(
-        '--list-providers',
-        action='store_true',
-        help='List available AI providers and exit',
-    )
-    parser.add_argument(
-        '--continue', dest='continue_session',
-        action='store_true',
-        help='Continue from the current session (reads .autoagent_log)',
-    )
-    parser.add_argument(
-        '--resume', dest='resume_session',
-        default=None,
-        help='Resume a specific session by ID (e.g. 4jvowsl3 or full name)',
-    )
-    parser.add_argument(
-        '--list-sessions',
-        action='store_true',
-        help='List all sessions and exit',
-    )
-    parser.add_argument(
-        '--model', '-m',
-        default=None,
-        help='AI model to use. Supports single model (e.g. "glm-5") or '
-             'multi-role format: "plan:model1;default:model2;lite:model3;evaluation:model4;scheduler:model5". '
-             'Roles: plan (idea decomposition), default (task execution), '
-             'lite (lightweight tasks), evaluation (failure analysis & main task evaluation), '
-             'scheduler (AI orchestrator scheduling decisions). '
-             'Missing roles inherit from default.',
     )
     parser.add_argument(
         '--workspace', '-w',
@@ -346,26 +299,16 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
              'otherwise linear). If todos.yaml has no ai_orchestrator field, only "linear" is allowed.',
     )
     parser.add_argument(
-        '--reset',
-        action='store_true',
-        help='Reset all task states and exit',
-    )
-    parser.add_argument(
-        '--validate',
-        action='store_true',
-        help='Validate configuration and exit',
-    )
-    parser.add_argument(
-        '--verbose', '-v',
-        action='store_true',
-        help='Enable verbose/debug logging',
-    )
-    parser.add_argument(
-        '--log-dir',
+        '--task', '-t',
+        type=str,
         default=None,
-        help='Root directory for all output files: conversation logs, state files, '
-             'and orchestrator.log. Relative to CWD. (default: .autoagent)',
+        help='Execute only the specified task ID (not available in AI orchestrator mode)',
     )
+
+    # ------------------------------------------------
+    # Idea
+    # ------------------------------------------------
+
     parser.add_argument(
         '--ideas',
         default=None,
@@ -391,6 +334,62 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
              'enters idle mode after completing tasks (waiting for new ideas). '
              'Use --no-idle to run once and exit.',
     )
+
+    # ------------------------------------------------
+    # Session Management
+    # ------------------------------------------------
+
+    parser.add_argument(
+        '--continue', dest='continue_session',
+        action='store_true',
+        help='Continue from the current session (reads .autoagent_log)',
+    )
+    parser.add_argument(
+        '--resume', dest='resume_session',
+        default=None,
+        help='Resume a specific session by ID (e.g. 4jvowsl3 or full name)',
+    )
+    parser.add_argument(
+        '--list-sessions',
+        action='store_true',
+        help='List all sessions and exit',
+    )
+
+    # ------------------------------------------------
+    # Provider & Model
+    # ------------------------------------------------
+    
+    parser.add_argument(
+        '--provider', '-P',
+        default='codebuddy',
+        help='AI provider to use: codebuddy (default), claude, gemini, opencode, test. '
+             'Use --list-providers to see all available options.',
+    )
+    parser.add_argument(
+        '--list-providers',
+        action='store_true',
+        help='List available AI providers and exit',
+    )
+    parser.add_argument(
+        '--model', '-m',
+        default=None,
+        help='AI model to use. Supports single model (e.g. "glm-5") or '
+             'multi-role format: "plan:model1;default:model2;lite:model3;evaluation:model4;scheduler:model5". '
+             'Roles: plan (idea decomposition), default (task execution), '
+             'lite (lightweight tasks), evaluation (failure analysis & main task evaluation), '
+             'scheduler (AI orchestrator scheduling decisions). '
+             'Missing roles inherit from default.',
+    )
+    parser.add_argument(
+        '--executable',
+        default=None,
+        help='Override the default executable path for the AI provider',
+    )
+    parser.add_argument(
+        '--extra-args',
+        default=None,
+        help='Additional CLI arguments to pass to the AI tool',
+    )
     parser.add_argument(
         '--use-cli',
         action='store_true',
@@ -404,6 +403,54 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
              'to access outside the workspace (Gemini only). '
              'Example: --include-directories /path/to/dir1,/path/to/dir2',
     )
+
+    # ------------------------------------------------
+    # Preset & Config
+    # ------------------------------------------------
+
+    parser.add_argument(
+        '--preset',
+        default='default',
+        help='Preset configuration name from config.yaml (default: default). '
+             'Preset values can be overridden by command-line arguments.',
+    )
+    parser.add_argument(
+        '--generate-default-config',
+        action='store_true',
+        help='Overwrite config.yaml with the built-in defaults and exit. '
+             'The file is written to the same directory as orchestrator.py.',
+    )
+    
+    # ------------------------------------------------
+    # Utility
+    # ------------------------------------------------
+
+    parser.add_argument(
+        '--validate',
+        action='store_true',
+        help='Validate configuration and exit',
+    )
+    parser.add_argument(
+        '--reset',
+        action='store_true',
+        help='Reset all task states and exit',
+    )
+    parser.add_argument(
+        '--log-dir',
+        default=None,
+        help='Root directory for all output files: conversation logs, state files, '
+             'and orchestrator.log. Relative to CWD. (default: .autoagent)',
+    )
+    parser.add_argument(
+        '--verbose', '-v',
+        action='store_true',
+        help='Enable verbose/debug logging',
+    )
+
+    # ------------------------------------------------
+    # Testing
+    # ------------------------------------------------
+    
     parser.add_argument(
         '--test-schema',
         default=None,
@@ -418,15 +465,18 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         help='Test case ID (1-based index) to run from --test-schema. '
              'Automatically resolves test_rules and ai_strategy from the schema.',
     )
-    parser.add_argument(
-        '--preset',
-        default='default',
-        help='Preset configuration name from config.yaml (default: default). '
-             'Preset values can be overridden by command-line arguments.',
-    )
     
     args = parser.parse_args()
-    
+
+    # ── Handle --generate-default-config early (no other setup needed) ──
+    if args.generate_default_config:
+        config_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "config.yaml"
+        )
+        written = generate_default_config(config_path)
+        print(f"✅ Default config.yaml written to: {written}")
+        return
+
     # Resolve workspace early for preset loading
     _workspace_abs = os.path.abspath(args.workspace)
     
@@ -612,7 +662,7 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         effective_session_timeout = default_session_timeout
         effective_bash_timeout = default_bash_timeout
         effective_idle_interval = default_idle_interval
-        backoff_max = config.get('backoff_max_wait', 300)
+        backoff_max = config.get('backoff_max_wait', DEFAULTS['backoff_max_wait'])
 
         orchestrator = TodoOrchestrator(
             todos_file=args.config,

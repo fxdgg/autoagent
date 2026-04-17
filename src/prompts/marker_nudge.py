@@ -12,17 +12,15 @@ import logging
 
 import yaml
 
-logger = logging.getLogger(__name__)
+from util.default_value import DEFAULTS
 
-# Default number of lightweight nudge attempts before falling back to
-# the normal retry loop (which resets the session).
-_DEFAULT_MAX_MARKER_NUDGES = 2
+logger = logging.getLogger(__name__)
 
 
 def _load_max_marker_nudges() -> int:
     """Load ``max_marker_nudges`` from config.yaml.
 
-    Falls back to ``_DEFAULT_MAX_MARKER_NUDGES`` if the key is missing
+    Falls back to ``DEFAULTS["max_marker_nudges"]`` if the key is missing
     or the file cannot be read.
     """
     config_path = os.path.join(
@@ -38,7 +36,7 @@ def _load_max_marker_nudges() -> int:
                 return int(val)
         except Exception as e:
             logger.warning(f"Failed to load max_marker_nudges from config.yaml: {e}")
-    return _DEFAULT_MAX_MARKER_NUDGES
+    return DEFAULTS["max_marker_nudges"]
 
 
 MAX_MARKER_NUDGES = _load_max_marker_nudges()

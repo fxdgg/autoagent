@@ -38,6 +38,7 @@ from logger import ConversationLogger
 from util.truncation_limits import limits
 from ideas.ideas_decomposer import IdeasDecomposerMixin
 from ideas.ideas_reviewer import IdeasReviewerMixin
+from util.default_value import DEFAULTS
 
 
 def _load_ideas_config() -> dict:
@@ -48,9 +49,9 @@ def _load_ideas_config() -> dict:
         and 'max_plan_retries'.
     """
     defaults = {
-        'max_review_rounds': 3,
-        'max_validation_retries': 2,
-        'max_plan_retries': 3,
+        'max_review_rounds': DEFAULTS['max_review_rounds'],
+        'max_validation_retries': DEFAULTS['max_validation_retries'],
+        'max_plan_retries': DEFAULTS['max_plan_retries'],
     }
     config_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml"
@@ -321,10 +322,10 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
         return ideas
 
     # Default maximum number of review rounds before accepting the tasks as-is
-    _DEFAULT_MAX_REVIEW_ROUNDS = 3
+    _DEFAULT_MAX_REVIEW_ROUNDS = DEFAULTS['max_review_rounds']
 
     # Default maximum number of schema-validation retries before accepting as-is
-    _DEFAULT_MAX_VALIDATION_RETRIES = 2
+    _DEFAULT_MAX_VALIDATION_RETRIES = DEFAULTS['max_validation_retries']
 
     def _get_temp_tasks_path(self) -> str:
         """Return the absolute path to the temporary tasks YAML file.

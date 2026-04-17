@@ -41,6 +41,7 @@ from prompts.scheduler import (
     _get_response_result_path,
 )
 from task_executor import SubtaskExecutor
+from util.default_value import DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -209,8 +210,8 @@ class AISchedulerMixin:
             )
 
         config = load_orchestrator_config()
-        scheduler_history_limit = config.get('scheduler_history_limit', 10)
-        scheduler_decision_max_retries = config.get('scheduler_decision_max_retries', 3)
+        scheduler_history_limit = config.get('scheduler_history_limit', DEFAULTS['scheduler_history_limit'])
+        scheduler_decision_max_retries = config.get('scheduler_decision_max_retries', DEFAULTS['scheduler_decision_max_retries'])
 
         strategy = ai_orch['strategy']
         max_rounds = ai_orch['max_rounds']

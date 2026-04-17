@@ -40,6 +40,7 @@ from orchestrator.orchestrator_common import (
 )
 from orchestrator.ai_orchestrator import AISchedulerMixin
 from util.truncation_limits import limits
+from util.default_value import DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -82,16 +83,16 @@ class TodoOrchestrator(AISchedulerMixin):
         todos_file: str = "todos.yaml",
         provider: AIProvider = None,
         workspace: str = ".",
-        timeout: int = 3600,
-        bash_timeout: int = 300,
+        timeout: int = None,
+        bash_timeout: int = None,
         session_dir: str = None,
         log_dir: str = None,
         ideas_file: str = None,
-        idle_interval: int = 30,
+        idle_interval: int = None,
         use_cli: bool = False,
-        backoff_max_wait: int = 300,
+        backoff_max_wait: int = None,
         model_roles: dict = None,
-        default_max_attempts: int = 5,
+        default_max_attempts: int = None,
     ):
         """
         Initialize the TodoOrchestrator.
@@ -124,12 +125,12 @@ class TodoOrchestrator(AISchedulerMixin):
         """
         self.todos_file = todos_file
         self.workspace = os.path.abspath(workspace)
-        self.timeout = timeout
-        self.bash_timeout = bash_timeout
-        self.idle_interval = idle_interval
+        self.timeout = timeout if timeout is not None else DEFAULTS['session_timeout']
+        self.bash_timeout = bash_timeout if bash_timeout is not None else DEFAULTS['bash_timeout']
+        self.idle_interval = idle_interval if idle_interval is not None else DEFAULTS['idle_interval']
         self.use_cli = use_cli
-        self.backoff_max_wait = backoff_max_wait
-        self.default_max_attempts = default_max_attempts
+        self.backoff_max_wait = backoff_max_wait if backoff_max_wait is not None else DEFAULTS['backoff_max_wait']
+        self.default_max_attempts = default_max_attempts if default_max_attempts is not None else DEFAULTS['default_max_attempts']
 
         self.provider = provider
 

@@ -8,10 +8,10 @@ Usage:
 import os
 import yaml
 
+from util.default_value import DEFAULTS as _GLOBAL_DEFAULTS
+
 _DEFAULTS = {
-    'previous_subtask_summary': 4000,
-    'history_summary': 300,
-    'max': 50000,
+    **_GLOBAL_DEFAULTS['truncation_limits'],
     'log_promptlike_preview': 200,
     'log_tool_result': 1000,
     'idea_yaml_preview': 4000,

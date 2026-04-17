@@ -49,7 +49,7 @@ import time
 # Default timeout in seconds for fast-fail detection.
 # Can be overridden via --fast-fail-timeout CLI argument,
 # which is configured in config.yaml as fast_fail_timeout.
-DEFAULT_FAST_FAIL_TIMEOUT = 10
+DEFAULT_FAST_FAIL_TIMEOUT = 30
 
 
 def _ensure_utf8_stdio():
