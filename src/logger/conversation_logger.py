@@ -80,12 +80,20 @@ class ConversationLogger:
         self._nested_subtasks = {}
         # { task_id: task_name }
         self._task_names = {}
+        # { task_id: filename_prefix } — e.g. "schedule_1" for AI mode
+        self._task_prefixes = {}
 
     def get_session_dir(self) -> str:
         """Return the session log directory path."""
         return self.session_dir
 
-    def register_nested_task(self, task_id: str, task_name: str, subtask_ids: list):
+    def register_nested_task(
+        self,
+        task_id: str,
+        task_name: str,
+        subtask_ids: list,
+        filename_prefix: Optional[str] = None,
+    ):
         """
         Register a nested task and its subtask IDs.
         This creates the subtask directory and prepares the index file.
@@ -94,9 +102,13 @@ class ConversationLogger:
             task_id: Main task ID (e.g. "1")
             task_name: Main task name
             subtask_ids: List of subtask IDs (e.g. ["1.1", "1.2", ...])
+            filename_prefix: Optional prefix for index/log filenames
+                (e.g. ``schedule_1`` in AI scheduling mode).
         """
         self._nested_subtasks[task_id] = subtask_ids
         self._task_names[task_id] = task_name
+        if filename_prefix:
+            self._task_prefixes[task_id] = filename_prefix
 
         # Create subtask directory
         subtask_dir = os.path.join(self.session_dir, f"subtask_{task_id}")
@@ -414,7 +426,7 @@ class ConversationLogger:
     # Index file generation
     # ------------------------------------------------------------------
 
-    def build_index_file(self, task_id: str):
+    def build_index_file(self, task_id: str, filename_prefix: Optional[str] = None):
         """
         Build or rebuild the index markdown file for a nested task.
 
@@ -423,13 +435,22 @@ class ConversationLogger:
 
         Args:
             task_id: Main task ID (e.g. "1")
+            filename_prefix: Optional prefix for the index filename
+                (e.g. ``schedule_1`` → ``schedule_1_task_1.md``).
+                If not provided, uses the prefix registered via
+                ``register_nested_task``.
         """
         if task_id not in self._nested_subtasks:
             return
 
+        # Use explicitly provided prefix, or fall back to registered prefix
+        prefix = filename_prefix or self._task_prefixes.get(task_id)
+
         task_name = self._task_names.get(task_id, f"Task {task_id}")
         subtask_ids = self._nested_subtasks[task_id]
-        filepath = os.path.join(self.session_dir, f"task_{task_id}.md")
+        base_name = f"task_{task_id}.md"
+        index_filename = f"{prefix}_{base_name}" if prefix else base_name
+        filepath = os.path.join(self.session_dir, index_filename)
         subtask_dir = os.path.join(self.session_dir, f"subtask_{task_id}")
 
         content_parts = []
@@ -453,7 +474,9 @@ class ConversationLogger:
             content_parts.append(f"\n## AI Decisions\n\n")
             for df in decision_files:
                 rel = f"subtask_{task_id}/{df}"
-                label = df.replace(".md", "").replace("_", " ").title()
+                # Strip schedule_N_ prefix from label (keep it in the link)
+                label_base = re.sub(r'^schedule_\d+_', '', df)
+                label = label_base.replace(".md", "").replace("_", " ").title()
                 content_parts.append(f"- [{label}]({rel})\n")
 
         try:
@@ -776,5 +799,8 @@ class ConversationLogger:
         Should be called at the end of orchestrator execution.
         """
         for task_id in self._nested_subtasks:
-            self.build_index_file(task_id)
+            self.build_index_file(
+                task_id,
+                filename_prefix=self._task_prefixes.get(task_id),
+            )
         logger.info(f"Conversation logs finalized in {self.session_dir}")

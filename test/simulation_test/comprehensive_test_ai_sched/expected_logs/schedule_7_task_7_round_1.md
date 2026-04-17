@@ -48,7 +48,7 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 <context>
     <project_description>
-        Round-scoped description for task 7: validates that the orchestrator selects description@7 over the root-level description.
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
     </project_description>
 </context>
 ```

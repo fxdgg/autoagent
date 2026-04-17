@@ -47,7 +47,7 @@
 # =============================================================================
 
 description: >
-  Comprehensive test project exercising all prompt-building paths
+  Comprehensive test project exercising (before description@7) all prompt-building paths
   for nested and looping task executors.
 
 ai_orchestrator:
@@ -73,8 +73,8 @@ ai_orchestrator:
       type: response
 
 description@7: >
-  Round-scoped description for task 7: validates that the orchestrator
-  selects description@7 over the root-level description.
+  Comprehensive test project exercising all prompt-building paths
+  for nested and looping task executors.
 
 tasks:
   # ==========================================================================
