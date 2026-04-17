@@ -9,7 +9,7 @@ ai_orchestrator:
   strategy: |
     Execute tasks in order.
   max_rounds: 10
-  max_attempts: 3
+  max_attempts: 2
   stop_condition: |
     All tasks completed.
   last_result:

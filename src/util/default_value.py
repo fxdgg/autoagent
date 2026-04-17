@@ -57,6 +57,7 @@ DEFAULTS = {
     # AI scheduler
     "scheduler_history_limit": 10,
     "scheduler_decision_max_retries": 3,
+    "scheduler_max_session_retries": 2,
 
     # debug
     "autoagent_exec_show_console": False,
@@ -174,9 +175,16 @@ max_marker_nudges: {max_marker_nudges}
 # Only relevant when ai_orchestrator mode is enabled in todos.yaml.
 scheduler_history_limit: {scheduler_history_limit}
 
-# Maximum number of decision-parse retries when the AI scheduler returns
-# invalid JSON or references an invalid task_id.
+# Maximum number of in-session retries when the AI scheduler returns
+# invalid JSON, invalid action, or invalid task_id.
+# These retries happen within the same AI session (level-1 retry).
 scheduler_decision_max_retries: {scheduler_decision_max_retries}
+
+# Maximum number of session-reset retries for the AI scheduler.
+# When level-1 retries are exhausted, or a SessionTimeout / fatal AI error
+# occurs, the scheduler creates a fresh AI session and resends the full
+# prompt.  This is the level-2 retry limit.
+scheduler_max_session_retries: {scheduler_max_session_retries}
 
 # ------------------------------------------------------------
 # debug

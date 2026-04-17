@@ -420,6 +420,8 @@
         "test_rules": "test_rules_k6.txt",
         "extra_args": ["--mode", "ai"],
         "expected_exit_code": 0,
-        "expected_tasks": {}
+        "expected_tasks": {
+            "1": {"status": "completed"}
+        }
     }
 ]

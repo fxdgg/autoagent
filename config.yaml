@@ -103,9 +103,16 @@ max_marker_nudges: 2
 # Only relevant when ai_orchestrator mode is enabled in todos.yaml.
 scheduler_history_limit: 10
 
-# Maximum number of decision-parse retries when the AI scheduler returns
-# invalid JSON or references an invalid task_id.
+# Maximum number of in-session retries when the AI scheduler returns
+# invalid JSON, invalid action, or invalid task_id.
+# These retries happen within the same AI session (level-1 retry).
 scheduler_decision_max_retries: 3
+
+# Maximum number of session-reset retries for the AI scheduler.
+# When level-1 retries are exhausted, or a SessionTimeout / fatal AI error
+# occurs, the scheduler creates a fresh AI session and resends the full
+# prompt.  This is the level-2 retry limit.
+scheduler_max_session_retries: 2
 
 # ------------------------------------------------------------
 # debug

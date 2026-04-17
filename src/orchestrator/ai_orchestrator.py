@@ -25,7 +25,7 @@ import re
 import time
 import logging
 
-from ai_client import AICallError
+from ai_client import AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
 from logger import ScheduleAwareConvLogger
 from state_manager import StateManager
 from orchestrator.orchestrator_common import (
@@ -212,6 +212,7 @@ class AISchedulerMixin:
         config = load_orchestrator_config()
         scheduler_history_limit = config.get('scheduler_history_limit', DEFAULTS['scheduler_history_limit'])
         scheduler_decision_max_retries = config.get('scheduler_decision_max_retries', DEFAULTS['scheduler_decision_max_retries'])
+        scheduler_max_session_retries = config.get('scheduler_max_session_retries', DEFAULTS['scheduler_max_session_retries'])
 
         strategy = ai_orch['strategy']
         max_rounds = ai_orch['max_rounds']
@@ -348,6 +349,7 @@ class AISchedulerMixin:
                 schedule_history=schedule_history,
                 scheduler_history_limit=scheduler_history_limit,
                 max_retries=scheduler_decision_max_retries,
+                max_session_retries=scheduler_max_session_retries,
                 orch_state=orch_state,
             )
 
@@ -490,48 +492,32 @@ class AISchedulerMixin:
         schedule_history: list,
         scheduler_history_limit: int,
         max_retries: int,
+        max_session_retries: int,
         orch_state: dict,
     ) -> dict | None:
         """Call the AI scheduler to get the next scheduling decision.
 
-        Creates a fresh AI client for each scheduling round. Retries
-        on invalid JSON or invalid task_id up to *max_retries* times.
+        Uses a two-level retry strategy:
+
+        **Level-1 (in-session):** On invalid JSON, invalid action, invalid
+        task_id, BashTimeoutError, or StreamTimeoutError, retry within the
+        same AI session up to *max_retries* times.
+
+        **Level-2 (session-reset):** When level-1 retries are exhausted, or
+        on SessionTimeoutError / other ``AICallError``, create a fresh AI
+        session and resend the full prompt.  Up to *max_session_retries*
+        session resets are allowed.
 
         Returns:
-            Parsed decision dict, or None if all retries exhausted.
+            Parsed decision dict, or ``None`` if all retries exhausted.
         """
-        # Switch to scheduler model
         scheduler_model = self.model_roles.get('scheduler', self.model_roles['default'])
         original_model = self.provider.model
         self.provider.set_model(scheduler_model)
 
-        # Create a fresh AI client for this scheduling round
-        context_id = f"scheduler_round_{current_round}"
-        client = create_ai_client(
-            provider=self.provider,
-            workspace=self.workspace,
-            timeout=self.timeout,
-            bash_timeout=self.bash_timeout,
-            context_id=context_id,
-            use_cli=self.use_cli,
-            backoff_max_wait=self.backoff_max_wait,
-            session_dir=self.session_dir,
-        )
+        valid_task_ids = {str(t['id']) for t in self.todos}
 
-        # Check if we should resume a previous scheduler session
-        saved_session_id = orch_state.get('session_id', '')
-        if saved_session_id:
-            client.resume_session(saved_session_id)
-            logger.info(f"Resuming scheduler session: {saved_session_id}")
-
-        # Track session_id changes
-        def on_session_id_changed(new_session_id: str):
-            orch_state['session_id'] = new_session_id
-            self.state_manager.save_orchestrator_state(orch_state)
-
-        client._on_session_id_changed = on_session_id_changed
-
-        # Build the scheduler prompt
+        # Build the scheduler prompt (reused across session resets)
         prompt = build_scheduler_prompt(
             current_round=current_round,
             max_rounds=max_rounds,
@@ -546,9 +532,7 @@ class AISchedulerMixin:
             scheduler_history_limit=scheduler_history_limit,
         )
 
-        valid_task_ids = {str(t['id']) for t in self.todos}
-
-        # Log the scheduler prompt
+        # Log the scheduler prompt (once per scheduling round)
         if self.conv_logger:
             self.conv_logger.log_scheduler_prompt(
                 schedule_round=current_round,
@@ -557,58 +541,171 @@ class AISchedulerMixin:
             )
 
         decision = None
-        for retry in range(max_retries + 1):
-            try:
-                if retry == 0:
-                    response = client.ask(
-                        prompt,
-                        system_prompt=SCHEDULER_SYSTEM_PROMPT,
-                    )
-                else:
-                    # Retry with error feedback in the same session
-                    response = client.ask(
-                        f"Your previous response was invalid: {error_msg}\n"
-                        f"Please respond with a valid JSON object.",
-                        system_prompt=SCHEDULER_SYSTEM_PROMPT,
-                    )
 
-                # Log the response
-                if self.conv_logger:
-                    self.conv_logger.log_scheduler_response(
-                        schedule_round=current_round,
-                        response=response,
-                    )
+        # ── Level-2 loop: session-reset retries ───────────────────
+        for session_attempt in range(max_session_retries + 1):
+            if session_attempt > 0:
+                logger.info(
+                    f"Scheduler round {current_round}: session reset "
+                    f"(session attempt {session_attempt + 1}/{max_session_retries + 1})"
+                )
+                print(f"   🔄 Scheduler session reset (attempt {session_attempt + 1}/{max_session_retries + 1})")
 
-                # Parse JSON from response
-                decision = self._parse_scheduler_response(response)
-                if decision is None:
-                    error_msg = "Could not parse a valid JSON decision from your response."
-                    logger.warning(f"Scheduler round {current_round}: invalid JSON (retry {retry})")
-                    continue
+            # Create a fresh AI client for this session attempt
+            context_id = f"scheduler_round_{current_round}"
+            if session_attempt > 0:
+                context_id = f"scheduler_round_{current_round}_s{session_attempt}"
+            client = create_ai_client(
+                provider=self.provider,
+                workspace=self.workspace,
+                timeout=self.timeout,
+                bash_timeout=self.bash_timeout,
+                context_id=context_id,
+                use_cli=self.use_cli,
+                backoff_max_wait=self.backoff_max_wait,
+                session_dir=self.session_dir,
+            )
 
-                action = decision.get('action')
-                if action not in ('execute', 'stop'):
-                    error_msg = f"Invalid action: {action!r}. Must be 'execute' or 'stop'."
-                    decision = None
-                    continue
+            # Resume previous scheduler session only on the first attempt
+            if session_attempt == 0:
+                saved_session_id = orch_state.get('session_id', '')
+                if saved_session_id:
+                    client.resume_session(saved_session_id)
+                    logger.info(f"Resuming scheduler session: {saved_session_id}")
 
-                if action == 'execute':
-                    task_id = str(decision.get('task_id', ''))
-                    if task_id not in valid_task_ids:
-                        error_msg = (
-                            f"Invalid task_id: {task_id!r}. "
-                            f"Valid task IDs: {', '.join(sorted(valid_task_ids))}"
+            # Track session_id changes
+            def on_session_id_changed(new_session_id: str):
+                orch_state['session_id'] = new_session_id
+                self.state_manager.save_orchestrator_state(orch_state)
+
+            client._on_session_id_changed = on_session_id_changed
+
+            # Whether to escalate to level-2 (break inner loop, continue outer)
+            _escalate_to_session_reset = False
+
+            # ── Level-1 loop: in-session retries ──────────────────
+            for retry in range(max_retries + 1):
+                try:
+                    if retry == 0:
+                        response = client.ask(
+                            prompt,
+                            system_prompt=SCHEDULER_SYSTEM_PROMPT,
                         )
+                    else:
+                        # Retry with error feedback in the same session
+                        response = client.ask(
+                            f"Your previous response was invalid: {error_msg}\n"
+                            f"Please respond with a valid JSON object.",
+                            system_prompt=SCHEDULER_SYSTEM_PROMPT,
+                        )
+
+                    # Log the response
+                    if self.conv_logger:
+                        self.conv_logger.log_scheduler_response(
+                            schedule_round=current_round,
+                            response=response,
+                        )
+
+                    # Parse JSON from response
+                    decision = self._parse_scheduler_response(response)
+                    if decision is None:
+                        error_msg = "Could not parse a valid JSON decision from your response."
+                        logger.warning(
+                            f"Scheduler round {current_round}: invalid JSON "
+                            f"(L1 retry {retry}, session attempt {session_attempt})"
+                        )
+                        continue
+
+                    action = decision.get('action')
+                    if action not in ('execute', 'stop'):
+                        error_msg = f"Invalid action: {action!r}. Must be 'execute' or 'stop'."
                         decision = None
                         continue
 
-                # Valid decision
-                break
+                    if action == 'execute':
+                        task_id = str(decision.get('task_id', ''))
+                        if task_id not in valid_task_ids:
+                            error_msg = (
+                                f"Invalid task_id: {task_id!r}. "
+                                f"Valid task IDs: {', '.join(sorted(valid_task_ids))}"
+                            )
+                            decision = None
+                            continue
 
-            except AICallError as e:
-                logger.error(f"Scheduler AI call failed: {e}")
-                decision = None
-                break
+                    # Valid decision — break both loops
+                    break
+
+                except (BashTimeoutError, StreamTimeoutError) as e:
+                    # Session still alive — retry in-session (level-1)
+                    logger.warning(
+                        f"Scheduler round {current_round}: {type(e).__name__} "
+                        f"(L1 retry {retry}, session attempt {session_attempt}): {e}"
+                    )
+                    timeout_type = "Bash" if isinstance(e, BashTimeoutError) else "Stream"
+                    print(f"   ⏰ {timeout_type} timeout — retrying in same session")
+                    error_msg = (
+                        f"Your previous response was interrupted by a {timeout_type.lower()} timeout. "
+                        f"Please respond with a valid JSON scheduling decision."
+                    )
+                    # Log the timeout as a response
+                    if self.conv_logger:
+                        self.conv_logger.log_scheduler_response(
+                            schedule_round=current_round,
+                            response=f"[{timeout_type} Timeout]: {e}",
+                        )
+                    # Continue to next level-1 retry (the error_msg will be
+                    # sent as the prompt on the next iteration, but we need
+                    # to increment retry first — the for-loop handles that).
+                    # However, since we caught the exception, the for-loop
+                    # will naturally advance to the next iteration.
+                    continue
+
+                except SessionTimeoutError as e:
+                    # Session killed — must escalate to level-2 (session reset)
+                    logger.warning(
+                        f"Scheduler round {current_round}: SessionTimeoutError "
+                        f"(session attempt {session_attempt}): {e}"
+                    )
+                    print(f"   ⏰ Session timeout — will reset session")
+                    if self.conv_logger:
+                        self.conv_logger.log_scheduler_response(
+                            schedule_round=current_round,
+                            response=f"[Session Timeout]: {e}",
+                        )
+                    decision = None
+                    _escalate_to_session_reset = True
+                    break  # Break level-1 loop
+
+                except AICallError as e:
+                    # Other AI errors — escalate to level-2 (session reset)
+                    logger.error(
+                        f"Scheduler round {current_round}: AICallError "
+                        f"(session attempt {session_attempt}): {e}"
+                    )
+                    print(f"   ❌ AI call error: {e} — will reset session")
+                    if self.conv_logger:
+                        self.conv_logger.log_scheduler_response(
+                            schedule_round=current_round,
+                            response=f"[AI Call Error]: {e}",
+                        )
+                    decision = None
+                    _escalate_to_session_reset = True
+                    break  # Break level-1 loop
+
+            # Check if we got a valid decision
+            if decision is not None:
+                break  # Break level-2 loop — success
+
+            # If level-1 exhausted without escalation flag, set it
+            if not _escalate_to_session_reset:
+                logger.warning(
+                    f"Scheduler round {current_round}: level-1 retries exhausted "
+                    f"(session attempt {session_attempt}) — escalating to session reset"
+                )
+                print(f"   ⚠️ In-session retries exhausted — will reset session")
+                _escalate_to_session_reset = True
+
+            # Continue to next session attempt (level-2 loop will create fresh client)
 
         # Clear scheduler session_id for next round (each round gets fresh session)
         orch_state['session_id'] = ''
