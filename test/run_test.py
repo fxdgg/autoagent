@@ -244,7 +244,7 @@ def _normalize_log_content(text):
 
 def _normalize_state_data(data):
     """Recursively strip runtime-variable fields from parsed todos_state data."""
-    STRIP_KEYS = {'time', 'last_attempt', 'context_created_at'}
+    STRIP_KEYS = {'time', 'last_attempt', 'context_created_at', 'timestamp'}
     if isinstance(data, dict):
         return {k: _normalize_state_data(v) for k, v in data.items()
                 if k not in STRIP_KEYS}

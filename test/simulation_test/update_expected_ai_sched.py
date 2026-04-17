@@ -36,7 +36,7 @@ def _normalize_log_content(text):
     return text
 
 
-STRIP_KEYS = {'time', 'last_attempt', 'context_created_at'}
+STRIP_KEYS = {'time', 'last_attempt', 'context_created_at', 'timestamp'}
 
 def _normalize_state_data(data):
     """Recursively strip runtime-variable fields from parsed todos_state data."""
