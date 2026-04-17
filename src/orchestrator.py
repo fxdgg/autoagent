@@ -643,17 +643,6 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
                 print("   The AI scheduler decides which tasks to execute.")
                 sys.exit(1)
 
-            # Check for mode conflict with existing state
-            orch_state = orchestrator.state_manager.get_orchestrator_state()
-            if orch_state is None:
-                # Fresh start — check there's no linear-mode state
-                existing_tasks = orchestrator.state_manager.state.get("tasks", {})
-                if existing_tasks:
-                    logger.warning(
-                        "Existing task states found without orchestrator state. "
-                        "If switching from linear mode, consider --reset first."
-                    )
-
             if idle_mode:
                 # AI orchestrator + idle mode: run_with_idle handles both
                 orchestrator.run_with_idle()

@@ -50,6 +50,10 @@ ai_orchestrator:
   # 最大调度轮次（防止无限循环，可选，默认 50）
   max_rounds: 30
 
+  # 覆盖 config.yaml 中的 scheduler_decision_max_retries（可选）
+  # 控制 AI 调度器返回无效 JSON 或无效 task_id 时的最大重试次数
+  max_attempts: 3
+
   # 停止条件的自然语言描述（可选，辅助 AI 判断何时停止）
   stop_condition: |
     当 E2E NRMSE < 0.03 或已完成 30 轮优化时停止。
@@ -114,6 +118,7 @@ tasks:
 |------|------|------|--------|------|
 | `ai_orchestrator.strategy` | string | ✅ | - | 调度策略描述，注入 AI prompt |
 | `ai_orchestrator.max_rounds` | int | ❌ | 50 | 最大调度轮次 |
+| `ai_orchestrator.max_attempts` | int | ❌ | 继承 `config.yaml` 的 `scheduler_decision_max_retries` | AI 调度器返回无效 JSON 或无效 task_id 时的最大重试次数，覆盖 `config.yaml` 中的 `scheduler_decision_max_retries` |
 | `ai_orchestrator.stop_condition` | string | ❌ | `""` | 停止条件描述 |
 | `ai_orchestrator.last_result` | dict | ❌ | `{}` | 每个 task 的最近结果文件配置 |
 | `ai_orchestrator.last_result.<id>.type` | string | ✅ | - | `"none"` / `"response"` / `"file"` |
@@ -791,6 +796,7 @@ ai_orchestrator:
        - 否则继续执行 Task 2
     4. Task 4 完成后，回到 Task 2 继续优化
   max_rounds: 30
+  max_attempts: 3  # 调度决策最多重试 3 次（覆盖 config.yaml 的 scheduler_decision_max_retries）
   stop_condition: |
     当 E2E NRMSE < 0.03 或已完成 30 轮调度时停止。
   last_result:

@@ -111,14 +111,14 @@ def build_scheduler_prompt(
             tdesc = tdesc[:max_desc] + "...(truncated)"
 
         lines = []
-        lines.append(f"        - Task {tid}: {tname}")
-        lines.append(f"            Type: {ttype}")
+        lines.append(
+            f"        - Task {tid}: {tname} | Type: {ttype} | Executed: {exec_count} time(s)"
+        )
         if tdesc:
             lines.append(f"            Description:")
             # Indent description lines
             for dline in tdesc.strip().split('\n'):
                 lines.append(f"                {dline}")
-        lines.append(f"            Executed: {exec_count} time(s)")
 
         # Last Result (only show if task has been executed at least once)
         if exec_count > 0:
@@ -130,7 +130,11 @@ def build_scheduler_prompt(
 
     ctx_inner.append(
         f"    <available_tasks>\n"
-        + "\n".join(task_lines) + "\n"
+        + "\n".join(task_lines) + "\n\n"
+        f"        IMPORTANT: If a result file is marked as NOTFOUND, it is probably\n"
+        f"        due to task failures — the task may have crashed or errored out\n"
+        f"        before it could write its result file. Consider re-running the\n"
+        f"        task or running a diagnostic task to investigate.\n"
         f"    </available_tasks>"
     )
 
@@ -139,7 +143,6 @@ def build_scheduler_prompt(
         recent = schedule_history[-scheduler_history_limit:]
         hist_lines = []
         for entry in recent:
-            rnd = entry.get('round', '?')
             etid = entry.get('task_id', '?')
             ename = entry.get('task_name', '')
             result = entry.get('result', '')
@@ -149,11 +152,12 @@ def build_scheduler_prompt(
                 marker = '✅'
             elif result == 'failed':
                 marker = '❌'
+            elif result == 'stopped':
+                marker = '🛑'
             else:
-                marker = ''
+                marker = '⏳'
 
-            hist_lines.append(f"        - Round {rnd}: {marker}")
-            hist_lines.append(f"            Task {etid} ({ename})")
+            hist_lines.append(f"        {marker} {etid}. ({ename})")
             if reasoning:
                 hist_lines.append(f"            Reasoning: {reasoning}")
 
@@ -175,14 +179,25 @@ def _build_last_result_line(
 ) -> str:
     """Build the 'Last Result' display line for a task.
 
+    Both ``type=response`` and ``type=file`` produce file path(s) only —
+    the scheduler AI never sees file contents directly.  For
+    ``type=response``, the response text is saved to a temporary file
+    (via ``save_response_result``) and the path to that file is shown.
+
+    Each file path is followed by ``(NOTFOUND)`` if the file does not
+    exist at prompt-build time.  A task must have been scheduled at
+    least once for a result path to appear; if the path cannot be
+    determined, ``(NOTFOUND)`` is appended as well.
+
     Args:
         task_id: The task ID string.
         last_result_config: Dict mapping task_id -> {type, path}.
         session_dir: Session directory for resolving response result files.
 
     Returns:
-        A formatted string like "Last Result: ✅ success (See /path/to/file)"
-        or empty string if type is 'none' or not configured.
+        A formatted string like
+        ``Last Result: ✅ success (See /path/to/file)`` or empty string
+        if type is 'none' or not configured.
     """
     config = last_result_config.get(task_id, {})
     lr_type = config.get('type', 'none')
@@ -193,33 +208,28 @@ def _build_last_result_line(
     if lr_type == 'response':
         # Auto-generated response file
         result_path = _get_response_result_path(task_id, session_dir)
-        if result_path and os.path.isfile(result_path):
+        if result_path:
             display_path = result_path.replace("\\", "/")
-            return f"Last Result: See {display_path}"
+            found_tag = "" if os.path.isfile(result_path) else " (NOTFOUND)"
+            return f"Last Result: See {display_path}{found_tag}"
         else:
-            # File doesn't exist yet — shouldn't happen if exec_count > 0
-            # but handle gracefully
-            return "Last Result: (response file not yet generated)"
+            return "Last Result: (NOTFOUND)"
 
     if lr_type == 'file':
         paths = config.get('path', '')
         if isinstance(paths, list):
-            # Multiple files
+            # Multiple files — each gets its own NOTFOUND tag
             result_parts = []
             for p in paths:
                 display_p = str(p).replace("\\", "/")
-                if os.path.isfile(p):
-                    result_parts.append(f"See {display_p}")
-                else:
-                    result_parts.append(f"See {display_p} (Not found, probably due to task failures)")
-            return "Last Result: " + "; ".join(result_parts)
+                found_tag = "" if os.path.isfile(p) else " (NOTFOUND)"
+                result_parts.append(f"{display_p}{found_tag}")
+            return "Last Result: See " + "; ".join(result_parts)
         else:
             # Single file
             display_path = str(paths).replace("\\", "/")
-            if os.path.isfile(paths):
-                return f"Last Result: See {display_path}"
-            else:
-                return f"Last Result: See {display_path} (Not found, probably due to task failures)"
+            found_tag = "" if os.path.isfile(paths) else " (NOTFOUND)"
+            return f"Last Result: See {display_path}{found_tag}"
 
     return ""
 
@@ -245,22 +255,27 @@ def save_response_result(
     task_id: str,
     response_text: str,
     session_dir: str,
-    max_length: int = 4000,
+    max_length: int | None = None,
 ) -> str:
     """Save a task's AI response to the result file for scheduler consumption.
 
-    The response is truncated to *max_length* characters (using the same
-    strategy as ``previous_subtask_summary``).
+    The response is truncated to *max_length* characters.  When
+    *max_length* is ``None`` (the default), the value is read from
+    ``config.yaml`` → ``truncation_limits.previous_subtask_summary``.
 
     Args:
         task_id: Task ID string.
         response_text: The AI response text to save.
         session_dir: Session directory path.
-        max_length: Maximum characters to save (default: 4000).
+        max_length: Maximum characters to save.  Defaults to the
+            ``previous_subtask_summary`` truncation limit from config.
 
     Returns:
         The absolute path to the saved result file.
     """
+    if max_length is None:
+        max_length = limits.get('previous_subtask_summary')
+
     result_dir = os.path.join(session_dir, "task_results")
     os.makedirs(result_dir, exist_ok=True)
 

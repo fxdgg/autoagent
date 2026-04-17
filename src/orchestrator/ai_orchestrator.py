@@ -27,6 +27,7 @@ import logging
 
 from ai_client import AICallError
 from logger import ScheduleAwareConvLogger
+from state_manager import StateManager
 from orchestrator.orchestrator_common import (
     ConfigError,
     ExecutionError,
@@ -160,6 +161,12 @@ class AISchedulerMixin:
 
             normalized_last_result[tid_str] = lr_config
 
+        # max_attempts is optional, overrides config.yaml scheduler_decision_max_retries
+        ai_max_attempts = ai_orch.get('max_attempts')
+        if ai_max_attempts is not None:
+            if not isinstance(ai_max_attempts, int) or ai_max_attempts < 1:
+                raise ConfigError("'ai_orchestrator.max_attempts' must be a positive integer")
+
         # Validate that all tasks have a description in AI scheduling mode
         for task in tasks:
             if not task.get('description'):
@@ -168,12 +175,15 @@ class AISchedulerMixin:
                     f"(required in AI orchestrator mode)"
                 )
 
-        return {
+        result = {
             'strategy': strategy,
             'max_rounds': max_rounds,
             'stop_condition': stop_condition or '',
             'last_result': normalized_last_result,
         }
+        if ai_max_attempts is not None:
+            result['max_attempts'] = ai_max_attempts
+        return result
 
     def run_ai_scheduled(self) -> dict:
         """Run tasks using AI-driven scheduling.
@@ -198,12 +208,30 @@ class AISchedulerMixin:
         stop_condition = ai_orch['stop_condition']
         last_result_config = ai_orch['last_result']
 
+        # Override scheduler_decision_max_retries if ai_orchestrator specifies max_attempts
+        if 'max_attempts' in ai_orch:
+            scheduler_decision_max_retries = ai_orch['max_attempts']
+            logger.info(f"AI orchestrator overriding scheduler_decision_max_retries to {scheduler_decision_max_retries}")
+
         start_time = time.time()
 
         # ── Initialize or restore orchestrator state ──────────────
         orch_state = self.state_manager.get_orchestrator_state()
-        if not orch_state:
-            # Fresh start
+        if orch_state is None:
+            # Fresh start — but check for conflicting linear-mode state
+            existing_tasks = self.state_manager.state.get("tasks", {})
+            # Exclude round-scoped keys (contain "@") — they are subtask bookkeeping
+            top_level_tasks = {
+                k: v for k, v in existing_tasks.items()
+                if StateManager.ROUND_SEP not in k
+            }
+            if top_level_tasks:
+                raise ConfigError(
+                    "Cannot run in AI orchestrator mode: existing linear-mode task "
+                    "state found (tasks with progress but no orchestrator state). "
+                    "Use --reset to clear state before switching modes."
+                )
+
             orch_state = {
                 'mode': 'ai',
                 'current_round': 0,
@@ -404,10 +432,30 @@ class AISchedulerMixin:
         successful = sum(1 for v in results.values() if v)
         failed = sum(1 for v in results.values() if not v)
 
+        # ── Per-task breakdown from schedule_history ──────────────
+        task_stats = {}  # task_id -> {'name': str, 'success': int, 'failed': int}
+        for entry in schedule_history:
+            tid = entry.get('task_id')
+            if tid is None:
+                continue  # skip 'stop' entries
+            result = entry.get('result')
+            if result not in ('success', 'failed'):
+                continue  # skip incomplete entries
+            if tid not in task_stats:
+                task_name = entry.get('task_name', f'Task {tid}')
+                task_stats[tid] = {'name': task_name, 'success': 0, 'failed': 0}
+            if result == 'success':
+                task_stats[tid]['success'] += 1
+            else:
+                task_stats[tid]['failed'] += 1
+
         print(f"\n{'=' * 60}")
         print(f"  AI Orchestrator Summary")
-        print(f"  Rounds: {current_round}/{max_rounds}")
-        print(f"  ✅ Success: {successful} | ❌ Failed: {failed}")
+        print(f"  Rounds: {current_round}/{max_rounds} | ✅ Success: {successful} | ❌ Failed: {failed}")
+        for tid in sorted(task_stats.keys(), key=lambda x: int(x) if x.isdigit() else x):
+            stats = task_stats[tid]
+            total = stats['success'] + stats['failed']
+            print(f"  Task {tid} | Total: {total} | ✅ Success: {stats['success']} | ❌ Failed: {stats['failed']}")
         print(f"  Duration: {duration:.1f}s")
         print(f"{'=' * 60}")
 
@@ -416,6 +464,7 @@ class AISchedulerMixin:
             "successful_tasks": successful,
             "failed_tasks": failed,
             "results": results,
+            "task_stats": task_stats,
             "duration": duration,
         }
 
@@ -491,11 +540,9 @@ class AISchedulerMixin:
 
         # Log the scheduler prompt
         if self.conv_logger:
-            self.conv_logger.log_prompt(
-                task_id="scheduler",
-                task_name="AI Scheduler",
+            self.conv_logger.log_scheduler_prompt(
+                schedule_round=current_round,
                 prompt=prompt,
-                attempt=str(current_round),
                 system_prompt=SCHEDULER_SYSTEM_PROMPT,
             )
 
@@ -517,10 +564,9 @@ class AISchedulerMixin:
 
                 # Log the response
                 if self.conv_logger:
-                    self.conv_logger.log_response(
-                        task_id="scheduler",
+                    self.conv_logger.log_scheduler_response(
+                        schedule_round=current_round,
                         response=response,
-                        attempt=str(current_round),
                     )
 
                 # Parse JSON from response

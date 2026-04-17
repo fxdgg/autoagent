@@ -16,6 +16,7 @@
 | `prompts/long_running_task.py` | 修改 | 同上 |
 | `state_manager.py` | 修改 | 新增 orchestrator 状态读写方法 |
 | `orchestrator.py` | 修改（大量） | 核心调度逻辑 |
+| `logger/conversation_logger.py` | 修改 | 新增 `log_scheduler_prompt()` / `log_scheduler_response()` |
 
 ---
 
@@ -62,29 +63,51 @@ def build_scheduler_prompt(
 2. **`<scheduling_strategy>`** — 用户定义的调度策略文本
 3. **`<stop_condition>`** — 停止条件（可选，为空则不渲染）
 4. **`<scheduling_state>`** — 当前轮次 / 最大轮次
-5. **`<available_tasks>`** — 每个任务一行，格式：
+5. **`<available_tasks>`** — 每个任务一行紧凑头部，格式：
    ```
-   - Task ID: 1 | Name: xxx | Type: simple | Executed: 2 times | Last Result: [见下]
-     Description: xxx
+   - Task {id}: {name} | Type: simple | Executed: 2 time(s)
+       Description:
+           {description}
+       Last Result: See {path}
    ```
-   其中 "Last Result" 由 `_build_last_result_line()` 生成
+   其中 "Last Result" 由 `_build_last_result_line()` 生成，只返回文件路径。
+   文件不存在时路径后附加 `(NOTFOUND)`。
+   `<available_tasks>` 标签末尾包含一段 `IMPORTANT` 说明：
+   > If a result file is marked as NOTFOUND, it is probably due to task
+   > failures — the task may have crashed or errored out before it could
+   > write its result file. Consider re-running the task or running a
+   > diagnostic task to investigate.
 6. **`<schedule_history>`** — 最近 N 轮历史（由 `scheduler_history_limit` 控制），格式：
    ```
-   Round 1: task_id=1 (Baseline) -> success | Reasoning: ...
+   ✅ {task_id}. ({task_name})
+       Reasoning: {reasoning}
+   ❌ {task_id}. ({task_name})
+       Reasoning: {reasoning}
    ```
+   使用 emoji 标记：✅ success、❌ failed、🛑 stopped、⏳ pending/interrupted
 
 #### 2.1.3 `_build_last_result_line()`
 
-根据 `last_result_config` 中该任务的 `type` 字段：
+根据 `last_result_config` 中该任务的 `type` 字段，**只返回文件路径**，不返回文件内容：
 
-- **`type=none`（或未配置）**：返回 `"N/A"`
-- **`type=response`**：读取 `<session_dir>/task_results/result_<task_id>.txt`，如果文件存在则返回其内容（截断到合理长度），否则返回 `"(no result yet)"`
-- **`type=file`**：读取指定路径的文件内容。支持单个路径（字符串）或多个路径（列表）。每个文件内容截断到 2000 字符，格式为 `"[path]: content..."`
+- **`type=none`（或未配置）**：返回空字符串（不显示 Last Result 行）
+- **`type=response`**：返回 `<session_dir>/task_results/result_<task_id>.txt` 的路径。如果文件不存在，路径后附加 `(NOTFOUND)`
+- **`type=file`**：返回指定路径。支持单个路径（字符串）或多个路径（列表）。每个路径后面都会检查文件是否存在，不存在则附加 `(NOTFOUND)`
+
+**核心设计**：无论 `type=response` 还是 `type=file`，调度 AI 都只看到文件路径，不看到文件内容。`type=response` 会将 response 存入临时文件，然后和 `type=file` 一样只展示路径。
+
+**`(NOTFOUND)` 标记规则**：
+- 文件路径需要一个 task 被调度至少一次后才会出现（`exec_count > 0` 时才显示 Last Result 行）
+- 如果此时找不到文件路径（文件不存在），则在路径后面输出 `(NOTFOUND)`
+- 每个文件后面都要有一个 `(NOTFOUND)` 或无标记（文件存在时）
+- 关于 "probably due to task failures" 的说明放在 `<available_tasks>` 标签内的 `IMPORTANT` 段落中，而非每个路径后面
 
 #### 2.1.4 `save_response_result()` 和 `_get_response_result_path()`
 
 - `_get_response_result_path(task_id, session_dir)` → `<session_dir>/task_results/result_<task_id>.txt`
-- `save_response_result(task_id, response_text, session_dir, max_length)` → 创建目录并写入截断后的响应文本
+- `save_response_result(task_id, response_text, session_dir, max_length=None)` → 创建目录并写入截断后的响应文本
+  - `max_length` 默认为 `None`，此时从 `config.yaml` → `truncation_limits.previous_subtask_summary` 读取（默认 4000）
+  - 调用方也可以显式传入 `max_length` 覆盖默认值
 
 ---
 
@@ -230,6 +253,7 @@ else:
 |------|----------|
 | `strategy` | 必填，字符串 |
 | `max_rounds` | 可选，正整数，默认 50 |
+| `max_attempts` | 可选，正整数；覆盖 `config.yaml` 的 `scheduler_decision_max_retries` |
 | `stop_condition` | 可选，字符串 |
 | `last_result` | 可选，字典 |
 | `last_result.<tid>.type` | 必须是 `none`/`response`/`file` |
@@ -243,8 +267,12 @@ else:
 
 **主调度循环**，流程如下：
 
+**`max_attempts` 覆盖**：如果 `ai_orchestrator` 中配置了 `max_attempts`，在调度循环开始前会覆盖 `scheduler_decision_max_retries` 变量。这控制的是 AI 调度器返回无效 JSON 或无效 task_id 时的最大重试次数，与 task 的执行重试次数无关。
+
 ```
 初始化/恢复 orchestrator 状态
+    ↓
+覆盖 scheduler_decision_max_retries（如果 ai_orchestrator.max_attempts 存在）
     ↓
 检测中断恢复（上一轮未完成的任务）
     ↓
@@ -266,6 +294,18 @@ else:
 │       ↓
 └───────┘
 ```
+
+**执行摘要**：循环结束后，除了按 round 统计 success/failed，还会从 `schedule_history` 中按 task 维度汇总每个 task 的执行次数和成功/失败次数，输出格式如下：
+
+```
+AI Orchestrator Summary
+Rounds: 5/30 | ✅ Success: 3 | ❌ Failed: 2
+Task 1 | Total: 2 | ✅ Success: 1 | ❌ Failed: 1
+Task 2 | Total: 3 | ✅ Success: 2 | ❌ Failed: 1
+Duration: 300.1s
+```
+
+返回值中新增 `task_stats` 字段，结构为 `{task_id: {'name': str, 'success': int, 'failed': int}}`。
 
 **断点续传**：如果 `schedule_history` 最后一条记录的 `result` 为 `None`，说明上一轮任务被中断。检查该任务的 state key 是否为 `in_progress`，如果是则先恢复执行。
 
@@ -354,6 +394,45 @@ if orch_state:
 2. 检测模式切换冲突（有线性模式状态但切换到 AI 模式，给出 warning）
 3. 路由到 `run_ai_scheduled()` 并处理结果
 4. `--model` 帮助文本新增 `scheduler` 角色说明
+
+---
+
+### 2.7 `logger/conversation_logger.py`（AI Scheduler Logging）
+
+**变更**：新增两个方法，用于将 AI 调度器的完整 prompt 和 response 记录到独立的 markdown 文件中。
+
+**目录结构**：
+```
+<session_dir>/
+└── conversations/
+    ├── ai_scheduler/
+    │   ├── schedule_1.md
+    │   ├── schedule_2.md
+    │   └── ...
+    ├── task_1_round_1.md
+    └── ...
+```
+
+#### 2.7.1 `log_scheduler_prompt(schedule_round, prompt, system_prompt)`
+
+- 在 `conversations/ai_scheduler/` 目录下创建 `schedule_{N}.md` 文件
+- 写入标题 `# AI Scheduler — Round {N}`
+- 如果有 system_prompt，写入 `## System Prompt` 段（代码块格式）
+- 写入 `## Prompt` 段（代码块格式）
+- 使用 `'w'` 模式写入（每轮一个新文件）
+
+#### 2.7.2 `log_scheduler_response(schedule_round, response)`
+
+- 追加到同一个 `schedule_{N}.md` 文件
+- 写入 `## Response` 段（原文格式，非代码块）
+- 使用 `'a'` 模式追加
+
+**调用方**：`ai_orchestrator.py` 中的 `_get_scheduler_decision()` 方法，在发送 prompt 前调用 `log_scheduler_prompt()`，收到 response 后调用 `log_scheduler_response()`。
+
+**与任务日志的区别**：
+- 任务日志使用 `ScheduleAwareConvLogger` 写入 `conversations/` 根目录（带 `schedule_N_` 前缀）
+- 调度器日志使用 `ConversationLogger.log_scheduler_prompt/response` 写入 `conversations/ai_scheduler/` 子目录
+- 两者互不干扰
 
 ---
 

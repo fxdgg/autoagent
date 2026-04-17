@@ -483,6 +483,75 @@ class ConversationLogger:
         return files
 
     # ------------------------------------------------------------------
+    # AI Scheduler logging
+    # ------------------------------------------------------------------
+
+    def log_scheduler_prompt(
+        self,
+        schedule_round: int,
+        prompt: str,
+        system_prompt: str = "",
+    ):
+        """Write the prompt section for an AI scheduler decision.
+
+        Each scheduling round is written to its own file under
+        ``conversations/ai_scheduler/schedule_<N>.md``.
+
+        Args:
+            schedule_round: 1-based scheduling round number.
+            prompt: The prompt sent to the scheduler AI.
+            system_prompt: The system prompt sent alongside the user prompt.
+        """
+        sched_dir = os.path.join(self.session_dir, "ai_scheduler")
+        os.makedirs(sched_dir, exist_ok=True)
+        filepath = os.path.join(sched_dir, f"schedule_{schedule_round}.md")
+
+        content_parts = []
+        content_parts.append(f"# AI Scheduler — Round {schedule_round}\n\n")
+
+        if system_prompt:
+            content_parts.append(f"## System Prompt\n\n")
+            content_parts.append(f"```\n{system_prompt}\n```\n\n")
+
+        content_parts.append(f"## Prompt\n\n")
+        content_parts.append(f"```\n{prompt}\n```\n\n")
+
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write("".join(content_parts))
+            logger.debug(f"Logged scheduler prompt to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to write scheduler prompt log to {filepath}: {e}")
+
+    def log_scheduler_response(
+        self,
+        schedule_round: int,
+        response: str,
+    ):
+        """Append the response section for an AI scheduler decision.
+
+        Must be called after ``log_scheduler_prompt`` for the same round.
+
+        Args:
+            schedule_round: 1-based scheduling round number (must match
+                the value passed to ``log_scheduler_prompt``).
+            response: The scheduler AI response.
+        """
+        sched_dir = os.path.join(self.session_dir, "ai_scheduler")
+        filepath = os.path.join(sched_dir, f"schedule_{schedule_round}.md")
+
+        content_parts = []
+        content_parts.append(f"## Response\n\n")
+        content_parts.append(f"{response}\n\n")
+
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write("".join(content_parts))
+            logger.debug(f"Logged scheduler response to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to write scheduler response log to {filepath}: {e}")
+
+    # ------------------------------------------------------------------
     # Ideas processing logging (unchanged — single file)
     # ------------------------------------------------------------------
 
