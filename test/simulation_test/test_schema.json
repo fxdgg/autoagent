@@ -423,5 +423,24 @@
         "expected_tasks": {
             "1": {"status": "completed"}
         }
+    },
+    {
+        "name": "[AI-K7] Comprehensive AI scheduler (log-level verification)",
+        "project_root": "ai_sched_comprehensive",
+        "test_rules": "test_rules_k7.txt",
+        "extra_args": ["--mode", "ai"],
+        "expected_exit_code": 1,
+        "expected_tasks": {
+            "1": {"status": "completed"},
+            "2": {"status": "failed"},
+            "3": {"status": "completed"},
+            "4": {"status": "completed"},
+            "4.1": {"status": "completed"},
+            "4.2": {"status": "completed"},
+            "5": {"status": "completed"}
+        },
+        "compare_logs": true,
+        "compare_logs_scope": "ai_scheduler",
+        "compare_state": true
     }
 ]

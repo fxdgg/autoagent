@@ -1,0 +1,109 @@
+# =============================================================================
+# AI Scheduler Comprehensive Test Project
+# =============================================================================
+# Exercises ALL scheduler prompt-building paths and state management:
+#
+#   1. Basic scheduling decision (available_tasks, strategy, stop_condition)
+#   2. schedule_history accumulation across rounds
+#   3. last_result type=response (tasks 1, 2, 3, 5)
+#   4. last_result type=none (task 4 — no last_result config)
+#   5. Task failure + continued scheduling (task 2 fails)
+#   6. Repeated task execution (task 1 executed in round 1 and round 5)
+#   7. Nested task in AI scheduling mode (task 4)
+#   8. NOTFOUND marker for unexecuted tasks
+#   9. Normal stop (scheduler decides to stop, not max_rounds exhaustion)
+#  10. description@N in AI mode (task 5 uses description@5)
+#  11. orchestrator state completeness (current_round, status,
+#      schedule_history, task_execution_counts)
+#
+# Expected scheduling sequence (from test_rules_k7.txt):
+#   Round 1: execute task 1 → ✅ success
+#   Round 2: execute task 2 → ❌ failed
+#   Round 3: execute task 3 → ✅ success
+#   Round 4: execute task 4 (nested) → ✅ success (4.1 ✅, 4.2 ✅, eval ✅)
+#   Round 5: execute task 1 (repeat) → ✅ success
+#   Round 6: execute task 5 → ✅ success
+#   Round 7: stop
+# =============================================================================
+
+description: >
+  AI Scheduler comprehensive test project exercising all scheduler
+  prompt-building paths and state management.
+
+ai_orchestrator:
+  strategy: |
+    Analyze task dependencies and results to determine optimal execution order.
+    Prioritize setup tasks first, then processing, then validation.
+  max_rounds: 10
+  stop_condition: |
+    All critical tasks (1, 3, 4, 5) have been executed successfully.
+  last_result:
+    1:
+      type: response
+    2:
+      type: response
+    3:
+      type: response
+    # Task 4: no last_result config (type=none by default)
+    5:
+      type: response
+
+description@5: >
+  Round-scoped description for task 5: validates that the AI scheduler
+  correctly selects description@5 over the root-level description.
+
+tasks:
+  - id: 1
+    name: "Initialize environment"
+    description: "Set up the project environment and install all dependencies."
+    type: simple
+    max_attempts: 1
+    completion_criteria: |
+      Environment initialized and all dependencies installed.
+
+  - id: 2
+    name: "Run baseline benchmark"
+    description: "Execute the baseline performance benchmark."
+    type: simple
+    max_attempts: 1
+    completion_criteria: |
+      Baseline benchmark completed and results recorded.
+
+  - id: 3
+    name: "Optimize core algorithm"
+    description: "Apply optimization to the core algorithm based on benchmark results."
+    type: simple
+    max_attempts: 1
+    completion_criteria: |
+      Core algorithm optimized with measurable improvement.
+
+  - id: 4
+    name: "Integration validation"
+    description: "Run integration tests to validate the optimized algorithm."
+    type: nested
+    max_attempts: 2
+    completion_criteria: |
+      All integration tests pass with the optimized algorithm.
+    subtasks:
+      - id: 4.1
+        name: "Run unit tests"
+        type: simple
+        completion_criteria: |
+          All unit tests pass.
+        initial_hint: |
+          Execute the unit test suite.
+      - id: 4.2
+        name: "Run integration tests"
+        type: simple
+        completion_criteria: |
+          Integration tests pass.
+        initial_hint: |
+          Execute the integration test suite.
+
+  - id: 5
+    name: "Generate final report"
+    description: "Generate the final optimization report with all results."
+    type: simple
+    max_attempts: 1
+    completion_criteria: |
+      Final report generated and saved.

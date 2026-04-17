@@ -306,11 +306,16 @@ def compare_state_file(session_dir, project_root):
     return errors
 
 
-def compare_conversation_logs(session_dir, project_root):
+def compare_conversation_logs(session_dir, project_root, scope=None):
     """Compare actual conversation logs against expected reference logs.
 
     The expected logs live in <project_root>/expected_logs/ and are
     pre-normalized (session-specific paths replaced with placeholders).
+
+    Args:
+        scope: If set, only compare files within this subdirectory
+               (e.g., "ai_scheduler"). Also limits unexpected-file checks
+               to this subdirectory.
 
     Returns a list of error strings (empty if all match).
     """
@@ -372,18 +377,25 @@ def compare_conversation_logs(session_dir, project_root):
                     errors.append(f"  actual:   <EOF>")
 
     # Also check for unexpected extra files in actual that aren't in expected
-    for dirpath, _dirnames, filenames in os.walk(actual_conv_dir):
-        for fname in sorted(filenames):
-            if not fname.endswith(".md"):
-                continue
-            actual_path = os.path.join(dirpath, fname)
-            rel_path = os.path.relpath(actual_path, actual_conv_dir)
-            expected_path = os.path.join(expected_dir, rel_path)
-            if not os.path.isfile(expected_path):
-                # Skip index files (task_N.md) — these are auto-generated summaries
-                if re.match(r"task_\d+\.md$", fname):
+    # When scope is set, only check within the scoped subdirectory
+    if scope:
+        check_dir = os.path.join(actual_conv_dir, scope)
+    else:
+        check_dir = actual_conv_dir
+
+    if os.path.isdir(check_dir):
+        for dirpath, _dirnames, filenames in os.walk(check_dir):
+            for fname in sorted(filenames):
+                if not fname.endswith(".md"):
                     continue
-                errors.append(f"Log compare: unexpected file {rel_path}")
+                actual_path = os.path.join(dirpath, fname)
+                rel_path = os.path.relpath(actual_path, actual_conv_dir)
+                expected_path = os.path.join(expected_dir, rel_path)
+                if not os.path.isfile(expected_path):
+                    # Skip index files (task_N.md) — these are auto-generated summaries
+                    if re.match(r"task_\d+\.md$", fname):
+                        continue
+                    errors.append(f"Log compare: unexpected file {rel_path}")
 
     return errors
 
@@ -545,7 +557,8 @@ def verify_test(test_case, session_dir, actual_exit_code):
     # 4. Compare conversation logs (only for tests with compare_logs=true)
     if test_case.get("compare_logs") and session_dir:
         project_root = test_case.get("_project_root", "")
-        log_errors = compare_conversation_logs(session_dir, project_root)
+        scope = test_case.get("compare_logs_scope")
+        log_errors = compare_conversation_logs(session_dir, project_root, scope=scope)
         errors.extend(log_errors)
 
     # 5. Compare state file (only for tests with compare_state=true)
