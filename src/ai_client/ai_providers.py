@@ -605,7 +605,7 @@ def get_provider(
     if resolved == "test":
         if not test_rules_file:
             raise ValueError(
-                "TestProvider requires --test-rules <file> to specify the rules file."
+                "TestProvider requires --test-schema and --use-test to specify the test case."
             )
         return TestProvider(
             test_rules_file=test_rules_file,

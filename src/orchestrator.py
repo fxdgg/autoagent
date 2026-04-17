@@ -9,6 +9,7 @@ AI-driven task execution system that supports multiple AI providers
 
 import os
 import sys
+import json
 import logging
 import argparse
 
@@ -149,7 +150,8 @@ def _merge_preset_with_args(args, preset):
         'workspace': 'workspace',
         'log_dir': 'log_dir',
         'include_directories': 'include_directories',
-        'test_rules': 'test_rules',
+        'test_schema': 'test_schema',
+        'use_test': 'use_test',
         'verbose': 'verbose',
         'no_idle': 'no_idle',
         'use_cli': 'use_cli',
@@ -403,19 +405,18 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
              'Example: --include-directories /path/to/dir1,/path/to/dir2',
     )
     parser.add_argument(
-        '--test-rules',
+        '--test-schema',
         default=None,
-        help='Path to test rules file for --provider test. '
-             'Each rule is separated by "---RULE---" delimiter. '
-             'Rules are consumed in order, one per ask() call.',
+        help='Path to test schema JSON file (internal testing only). '
+             'Used together with --use-test to select a test case. '
+             'The schema defines test_rules, ai_strategy, and other test parameters.',
     )
     parser.add_argument(
-        '--ai-strategy',
+        '--use-test',
+        type=int,
         default=None,
-        help='AI scheduling strategy for test mode. When set to "sequential", '
-             'the TestProvider auto-generates scheduler decisions (execute tasks '
-             'in order, then stop) so the same test_rules file can be reused '
-             'for AI-mode tests. Only used with --provider test.',
+        help='Test case ID (1-based index) to run from --test-schema. '
+             'Automatically resolves test_rules and ai_strategy from the schema.',
     )
     parser.add_argument(
         '--preset',
@@ -527,9 +528,40 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
                 # Non-codebuddy providers don't support SDK, force CLI mode
                 args.use_cli = True
         
-        # Validate test provider requires --test-rules
-        if args.provider.lower() == 'test' and not args.test_rules:
-            print("❌ --provider test requires --test-rules <file> to be set.")
+        # ── Resolve --test-schema + --use-test into test_rules / ai_strategy ──
+        test_rules_file = None
+        ai_strategy = None
+
+        if getattr(args, 'test_schema', None) and getattr(args, 'use_test', None) is not None:
+            schema_path = os.path.abspath(args.test_schema)
+            if not os.path.isfile(schema_path):
+                print(f"❌ --test-schema file not found: {schema_path}")
+                sys.exit(1)
+            with open(schema_path, 'r', encoding='utf-8') as f:
+                schema = json.load(f)
+            test_idx = args.use_test - 1  # 1-based → 0-based
+            if test_idx < 0 or test_idx >= len(schema):
+                print(f"❌ --use-test {args.use_test} out of range (1-{len(schema)}).")
+                sys.exit(1)
+            tc = schema[test_idx]
+            # Resolve test_rules path relative to the schema file's directory
+            schema_dir = os.path.dirname(schema_path)
+            test_rules_file = os.path.join(schema_dir, tc['test_rules'])
+            if not os.path.isfile(test_rules_file):
+                print(f"❌ test_rules file not found: {test_rules_file}")
+                sys.exit(1)
+            ai_strategy = tc.get('ai_strategy', None)
+            logger.info(
+                f"Resolved test case #{args.use_test}: "
+                f"rules={tc['test_rules']}, ai_strategy={ai_strategy}"
+            )
+        elif getattr(args, 'test_schema', None) or getattr(args, 'use_test', None) is not None:
+            print("❌ --test-schema and --use-test must be used together.")
+            sys.exit(1)
+
+        # Validate test provider requires --test-schema + --use-test
+        if args.provider.lower() == 'test' and not test_rules_file:
+            print("❌ --provider test requires --test-schema and --use-test to be set.")
             sys.exit(1)
         
         # Create AI provider
@@ -568,9 +600,9 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
             executable=executable,
             model=provider_model,
             extra_args=args.extra_args,
-            test_rules_file=getattr(args, 'test_rules', None),
+            test_rules_file=test_rules_file,
             include_directories=include_dirs,
-            ai_strategy=getattr(args, 'ai_strategy', None),
+            ai_strategy=ai_strategy,
         )
         
         logger.info(f"Using AI provider: {provider}")

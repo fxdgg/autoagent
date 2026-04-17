@@ -159,11 +159,13 @@ def find_session_dir(project_root, log_dir):
     return None
 
 
-def run_orchestrator(project_root, autoagent_dir, test_rules, log_dir,
+def run_orchestrator(project_root, autoagent_dir, test_schema, test_num, log_dir,
                      extra_args=None, verbose=False, timeout=30):
     """Run the orchestrator with TestProvider and return the exit code.
 
     Args:
+        test_schema: Absolute path to the test_schema.json file.
+        test_num: 1-based test case index within the schema.
         timeout: Maximum seconds to wait before killing the process.
                  Default 30s.  Set via "timeout" in test_schema.json.
     """
@@ -175,7 +177,8 @@ def run_orchestrator(project_root, autoagent_dir, test_rules, log_dir,
         orchestrator_py,
         "--config", todos_yaml,
         "--provider", "test",
-        "--test-rules", os.path.abspath(test_rules),
+        "--test-schema", os.path.abspath(test_schema),
+        "--use-test", str(test_num),
         "--workspace", project_root,
         "--preset", "none",
         "--log-dir", log_dir,
@@ -670,6 +673,9 @@ Examples:
     print(f"  Running {total} test(s)")
     print(f"{'=' * 60}")
 
+    # Resolve test_schema.json path once (used by all tests)
+    test_schema_path = os.path.join(test_root, "test_schema.json")
+
     results = []  # list of (test_num, name, passed, errors, elapsed)
 
     for idx, (test_num, tc) in enumerate(selected, 1):
@@ -715,17 +721,17 @@ Examples:
                 extra_args.append(arg)
 
         # AI strategy: when test_schema specifies ai_strategy, add
-        # --mode ai and --ai-strategy to the orchestrator args
+        # --mode ai (ai_strategy is now resolved by orchestrator from the schema)
         ai_strategy = tc.get("ai_strategy")
         if ai_strategy:
-            extra_args.extend(["--mode", "ai", "--ai-strategy", ai_strategy])
+            extra_args.extend(["--mode", "ai"])
 
         # Run
         test_timeout = tc.get("timeout", 30)
         print(f"  Running (timeout={test_timeout}s)...", end=" ", flush=True)
         t0 = time.time()
         exit_code, proc_result = run_orchestrator(
-            project_root, autoagent_dir, test_rules, log_dir,
+            project_root, autoagent_dir, test_schema_path, test_num, log_dir,
             extra_args=extra_args, verbose=args.verbose,
             timeout=test_timeout,
         )
