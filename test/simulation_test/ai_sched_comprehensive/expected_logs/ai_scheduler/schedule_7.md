@@ -39,18 +39,18 @@ You must choose exactly ONE task per round.
         - Task 2: Run baseline benchmark | Type: simple | Executed: 1 time(s)
             Description:
                 Execute the baseline performance benchmark.
-            Last Result: See logs/<SESSION>/task_results/result_2.txt
+            Last Result: See <PROJECT_ROOT>/result_files/result_2.txt (NOTFOUND)
         - Task 3: Optimize core algorithm | Type: simple | Executed: 1 time(s)
             Description:
                 Apply optimization to the core algorithm based on benchmark results.
-            Last Result: See logs/<SESSION>/task_results/result_3.txt
+            Last Result: See <PROJECT_ROOT>/result_files/result_3.txt
         - Task 4: Integration validation | Type: nested | Executed: 1 time(s)
             Description:
                 Run integration tests to validate the optimized algorithm.
         - Task 5: Generate final report | Type: simple | Executed: 1 time(s)
             Description:
                 Generate the final optimization report with all results.
-            Last Result: See logs/<SESSION>/task_results/result_5.txt
+            Last Result: See <PROJECT_ROOT>/result_files/report_final.txt; <PROJECT_ROOT>/result_files/report_missing.txt (NOTFOUND)
 
         IMPORTANT: If a result file is marked as NOTFOUND, it is probably
         due to task failures — the task may have crashed or errored out

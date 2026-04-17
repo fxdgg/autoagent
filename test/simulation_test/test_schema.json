@@ -314,7 +314,7 @@
     },
     {
         "name": "[AI] Comprehensive path coverage",
-        "project_root": "comprehensive_test",
+        "project_root": "comprehensive_test_ai_sched",
         "test_rules": "test_rules_10.txt",
         "ai_strategy": "sequential",
         "expected_exit_code": 1,

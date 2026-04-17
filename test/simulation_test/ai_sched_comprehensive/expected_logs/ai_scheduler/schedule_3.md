@@ -39,7 +39,7 @@ You must choose exactly ONE task per round.
         - Task 2: Run baseline benchmark | Type: simple | Executed: 1 time(s)
             Description:
                 Execute the baseline performance benchmark.
-            Last Result: See logs/<SESSION>/task_results/result_2.txt
+            Last Result: See <PROJECT_ROOT>/result_files/result_2.txt (NOTFOUND)
         - Task 3: Optimize core algorithm | Type: simple | Executed: 0 time(s)
             Description:
                 Apply optimization to the core algorithm based on benchmark results.
