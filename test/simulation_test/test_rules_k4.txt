@@ -1,0 +1,33 @@
+# =============================================================================
+# Test Rules K4 - max_rounds exhaustion
+# =============================================================================
+# max_rounds=2 in todos.yaml, scheduler executes 2 tasks then auto-stops.
+# Tests: max_rounds limit enforcement.
+#
+# Note: This test uses ai_sched_test_k4/ project with max_rounds=2.
+#
+# Expected call sequence:
+#   Rule 1: Scheduler decision → execute task 1
+#   Rule 2: Task 1 execution → ✅ completed
+#   Rule 3: Scheduler decision → execute task 2
+#   Rule 4: Task 2 execution → ✅ completed
+#   (max_rounds=2 reached, orchestrator stops automatically)
+# =============================================================================
+
+# --- Rule 1: Scheduler → execute task 1 ---
+{"action": "execute", "task_id": 1, "reasoning": "Start with environment setup"}
+---RULE---
+# --- Rule 2: Task 1 execution ---
+Environment set up successfully.
+All dependencies installed.
+
+✅ completed
+---RULE---
+# --- Rule 3: Scheduler → execute task 2 ---
+{"action": "execute", "task_id": 2, "reasoning": "Run the analysis"}
+---RULE---
+# --- Rule 4: Task 2 execution ---
+Analysis pipeline completed.
+Results written to analysis_output.txt.
+
+✅ completed

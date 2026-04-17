@@ -1,0 +1,43 @@
+# =============================================================================
+# AI Scheduler Test - Invalid format (max_attempts=3)
+# =============================================================================
+
+description: |
+  AI scheduler test project for testing invalid scheduler response handling.
+
+ai_orchestrator:
+  strategy: |
+    Execute tasks in order.
+  max_rounds: 10
+  max_attempts: 3
+  stop_condition: |
+    All tasks completed.
+  last_result:
+    1:
+      type: response
+    2:
+      type: response
+    3:
+      type: response
+
+tasks:
+  - id: 1
+    name: "Setup environment"
+    description: "Initialize the project environment."
+    type: simple
+    completion_criteria: |
+      Environment is set up.
+
+  - id: 2
+    name: "Run analysis"
+    description: "Run the data analysis pipeline."
+    type: simple
+    completion_criteria: |
+      Analysis completes.
+
+  - id: 3
+    name: "Generate report"
+    description: "Generate a summary report."
+    type: simple
+    completion_criteria: |
+      Report generated.

@@ -1,0 +1,47 @@
+# =============================================================================
+# AI Scheduler Test Project
+# =============================================================================
+# A simple project with 3 independent simple tasks, used for testing
+# AI-driven scheduling logic (non-sequential execution, retries, etc.)
+# =============================================================================
+
+description: |
+  AI scheduler test project with 3 independent tasks.
+
+ai_orchestrator:
+  strategy: |
+    Execute tasks in the order that makes most sense based on their descriptions
+    and previous results. Stop when all tasks are completed or no further
+    progress can be made.
+  max_rounds: 10
+  stop_condition: |
+    All tasks have been executed successfully at least once.
+  last_result:
+    1:
+      type: response
+    2:
+      type: response
+    3:
+      type: response
+
+tasks:
+  - id: 1
+    name: "Setup environment"
+    description: "Initialize the project environment and install dependencies."
+    type: simple
+    completion_criteria: |
+      Environment is set up and all dependencies are installed.
+
+  - id: 2
+    name: "Run analysis"
+    description: "Run the data analysis pipeline on the input dataset."
+    type: simple
+    completion_criteria: |
+      Analysis pipeline completes and results are written to analysis_output.txt.
+
+  - id: 3
+    name: "Generate report"
+    description: "Generate a summary report from the analysis results."
+    type: simple
+    completion_criteria: |
+      Summary report is generated and saved to report.txt.

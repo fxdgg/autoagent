@@ -1,0 +1,12 @@
+# =============================================================================
+# Test Rules K3 - Immediate stop
+# =============================================================================
+# AI scheduler decides to stop on the very first round.
+# Tests: immediate stop behavior.
+#
+# Expected call sequence:
+#   Rule 1: Scheduler decision → stop
+# =============================================================================
+
+# --- Rule 1: Scheduler → stop immediately ---
+{"action": "stop", "reasoning": "After reviewing the project state, all objectives have already been met. No tasks need to be executed."}

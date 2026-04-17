@@ -1,0 +1,78 @@
+# =============================================================================
+# Test Rules K5 - Ideas mode with AI scheduling
+# =============================================================================
+# max_rounds=4, tests ideas insertion between scheduling rounds.
+#
+# Flow:
+#   - Ideas are processed before scheduling starts (2 ideas → tasks 3, 4)
+#   - Round 1: Scheduler → execute task 1 → success
+#   - Round 2: Scheduler → execute task 3 (from idea 1) → success
+#   - Round 3: Scheduler → stop
+#   - Round 4: (should not happen - max_rounds=4 but scheduler stopped at round 3)
+#
+# Note: The ideas are processed BEFORE the scheduling loop starts
+# (via check_and_process_ideas), so tasks 3 and 4 are already available
+# when scheduling begins. This simplifies the test compared to idle-mode
+# ideas insertion.
+#
+# Expected call sequence:
+#   Rule 1:  Idea 1 decomposition → YAML for task 3
+#   Rule 2:  Idea 1 review → ✅ approved
+#   Rule 3:  Idea 2 decomposition → YAML for task 4
+#   Rule 4:  Idea 2 review → ✅ approved
+#   Rule 5:  Scheduler decision → execute task 1
+#   Rule 6:  Task 1 execution → ✅ completed
+#   Rule 7:  Scheduler decision → execute task 3 (from idea)
+#   Rule 8:  Task 3 execution → ✅ completed
+#   Rule 9:  Scheduler decision → stop
+# =============================================================================
+
+# --- Rule 1: Idea 1 decomposition ---
+description@3: "Optimization pass for memory access patterns"
+tasks:
+  - id: 3
+    name: "Optimize memory access"
+    description: "Optimize memory access patterns for better performance."
+    type: simple
+    completion_criteria: |
+      Memory access patterns optimized.
+---RULE---
+# --- Rule 2: Idea 1 review - APPROVED ---
+The task decomposition is correct and well-structured.
+
+✅ completed
+---RULE---
+# --- Rule 3: Idea 2 decomposition ---
+description@4: "Validation step for optimization results"
+tasks:
+  - id: 4
+    name: "Validate optimization"
+    description: "Validate that optimization results are correct."
+    type: simple
+    completion_criteria: |
+      Optimization results validated.
+---RULE---
+# --- Rule 4: Idea 2 review - APPROVED ---
+The validation task is appropriate and well-defined.
+
+✅ completed
+---RULE---
+# --- Rule 5: Scheduler → execute task 1 ---
+{"action": "execute", "task_id": 1, "reasoning": "Start with initial setup"}
+---RULE---
+# --- Rule 6: Task 1 execution ---
+Initial project environment set up successfully.
+
+✅ completed
+---RULE---
+# --- Rule 7: Scheduler → execute task 3 (from idea) ---
+{"action": "execute", "task_id": 3, "reasoning": "Execute the new optimization task from ideas"}
+---RULE---
+# --- Rule 8: Task 3 execution ---
+Memory access patterns optimized successfully.
+Performance improved by 15%.
+
+✅ completed
+---RULE---
+# --- Rule 9: Scheduler → stop ---
+{"action": "stop", "reasoning": "Key tasks completed. Remaining tasks can be done later."}

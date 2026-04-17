@@ -1,0 +1,51 @@
+# =============================================================================
+# Test Rules K2 - Task failure + continued scheduling
+# =============================================================================
+# AI scheduler: 1→1→2→stop
+# Task 1 fails both times, then scheduler moves to task 2 which succeeds.
+# Tests: task failure handling + scheduling same task after failure +
+#        scheduling a different task after failure.
+#
+# Expected call sequence:
+#   Rule 1:  Scheduler decision → execute task 1
+#   Rule 2:  Task 1 execution → ❌ failed
+#   Rule 3:  Scheduler decision → execute task 1 (retry)
+#   Rule 4:  Task 1 execution → ❌ failed again
+#   Rule 5:  Scheduler decision → execute task 2
+#   Rule 6:  Task 2 execution → ✅ completed
+#   Rule 7:  Scheduler decision → stop
+# =============================================================================
+
+# --- Rule 1: Scheduler → execute task 1 ---
+{"action": "execute", "task_id": 1, "reasoning": "Start with environment setup"}
+---RULE---
+# --- Rule 2: Task 1 execution - FAILS ---
+I attempted to set up the environment but encountered errors.
+
+Error: Package manager is unavailable. Cannot install dependencies.
+Tried alternative sources but all failed.
+
+❌ not completed: Package manager unavailable
+---RULE---
+# --- Rule 3: Scheduler → execute task 1 again (retry after failure) ---
+{"action": "execute", "task_id": 1, "reasoning": "Retry environment setup - the package manager issue might be transient"}
+---RULE---
+# --- Rule 4: Task 1 execution - FAILS again ---
+Retried environment setup but the package manager is still unavailable.
+
+Error: Connection to package registry timed out after 60s.
+All mirror servers are also unreachable.
+
+❌ not completed: Package registry unreachable
+---RULE---
+# --- Rule 5: Scheduler → execute task 2 (move on despite task 1 failures) ---
+{"action": "execute", "task_id": 2, "reasoning": "Task 1 has failed twice, moving to task 2 which may not depend on task 1"}
+---RULE---
+# --- Rule 6: Task 2 execution - SUCCEEDS ---
+I have run the data analysis pipeline successfully.
+Results written to analysis_output.txt.
+
+✅ completed
+---RULE---
+# --- Rule 7: Scheduler → stop ---
+{"action": "stop", "reasoning": "Task 1 cannot be completed due to infrastructure issues. Task 2 is done. Stopping."}

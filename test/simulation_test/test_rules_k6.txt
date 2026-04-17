@@ -1,0 +1,38 @@
+# =============================================================================
+# Test Rules K6 - Scheduler returns incorrect format
+# =============================================================================
+# Tests the scheduler's retry logic when receiving invalid responses.
+# max_attempts=3 (from todos.yaml ai_orchestrator.max_attempts)
+#
+# Round 1: Returns completely unparseable text
+#   → retry 1: still unparseable → retry 2: still unparseable → retry 3: still unparseable
+#   → max_attempts exhausted for this round, scheduler fails → orchestrator stops
+#
+# Note: max_attempts=3 means initial attempt + 3 retries = 4 total attempts.
+# But looking at the code: for retry in range(max_retries + 1), so
+# max_retries=3 means 4 attempts total (0, 1, 2, 3).
+#
+# Round 1 attempts:
+#   Rule 1: Initial attempt → unparseable text
+#   Rule 2: Retry 1 → invalid action
+#   Rule 3: Retry 2 → invalid task_id
+#   Rule 4: Retry 3 → still unparseable
+#   → All 4 attempts failed, decision=None, orchestrator stops
+#
+# Expected: exit code 0 (scheduler stopped gracefully), no tasks executed
+# =============================================================================
+
+# --- Rule 1: Round 1, attempt 0 - completely unparseable ---
+I think we should start by running task 1 to set up the environment.
+Let me analyze the available tasks and decide the best course of action.
+Based on my analysis, task 1 seems like the right choice.
+---RULE---
+# --- Rule 2: Round 1, attempt 1 (retry) - valid JSON but invalid action ---
+{"action": "run", "task_id": 1, "reasoning": "Setup the environment first"}
+---RULE---
+# --- Rule 3: Round 1, attempt 2 (retry) - valid JSON, valid action, invalid task_id ---
+{"action": "execute", "task_id": 99, "reasoning": "Execute the non-existent task"}
+---RULE---
+# --- Rule 4: Round 1, attempt 3 (retry) - still unparseable ---
+Sorry, I'm having trouble formatting my response. Let me try again...
+I want to execute task 1 but I can't seem to format the JSON correctly.

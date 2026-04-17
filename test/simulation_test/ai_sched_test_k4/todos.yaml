@@ -1,0 +1,42 @@
+# =============================================================================
+# AI Scheduler Test - max_rounds=2
+# =============================================================================
+
+description: |
+  AI scheduler test project with max_rounds=2 for testing round limit.
+
+ai_orchestrator:
+  strategy: |
+    Execute tasks in order. Stop when done.
+  max_rounds: 2
+  stop_condition: |
+    All tasks completed.
+  last_result:
+    1:
+      type: response
+    2:
+      type: response
+    3:
+      type: response
+
+tasks:
+  - id: 1
+    name: "Setup environment"
+    description: "Initialize the project environment and install dependencies."
+    type: simple
+    completion_criteria: |
+      Environment is set up.
+
+  - id: 2
+    name: "Run analysis"
+    description: "Run the data analysis pipeline."
+    type: simple
+    completion_criteria: |
+      Analysis completes.
+
+  - id: 3
+    name: "Generate report"
+    description: "Generate a summary report."
+    type: simple
+    completion_criteria: |
+      Report generated.

@@ -1,0 +1,78 @@
+# =============================================================================
+# Test Rules K1 - Non-sequential scheduling + repeated execution
+# =============================================================================
+# AI scheduler selects tasks in order: 2→2→1→1→3→3→stop
+# All tasks succeed. Tests non-sequential scheduling and repeated execution.
+#
+# Expected call sequence:
+#   Rule 1:  Scheduler decision → execute task 2
+#   Rule 2:  Task 2 execution → ✅ completed
+#   Rule 3:  Scheduler decision → execute task 2 (again)
+#   Rule 4:  Task 2 execution → ✅ completed
+#   Rule 5:  Scheduler decision → execute task 1
+#   Rule 6:  Task 1 execution → ✅ completed
+#   Rule 7:  Scheduler decision → execute task 1 (again)
+#   Rule 8:  Task 1 execution → ✅ completed
+#   Rule 9:  Scheduler decision → execute task 3
+#   Rule 10: Task 3 execution → ✅ completed
+#   Rule 11: Scheduler decision → execute task 3 (again)
+#   Rule 12: Task 3 execution → ✅ completed
+#   Rule 13: Scheduler decision → stop
+# =============================================================================
+
+# --- Rule 1: Scheduler → execute task 2 ---
+{"action": "execute", "task_id": 2, "reasoning": "Start with analysis task"}
+---RULE---
+# --- Rule 2: Task 2 execution ---
+I have run the data analysis pipeline.
+Results written to analysis_output.txt.
+
+✅ completed
+---RULE---
+# --- Rule 3: Scheduler → execute task 2 again ---
+{"action": "execute", "task_id": 2, "reasoning": "Re-run analysis with updated parameters"}
+---RULE---
+# --- Rule 4: Task 2 execution (second time) ---
+Re-ran the analysis pipeline with updated parameters.
+Updated results written to analysis_output.txt.
+
+✅ completed
+---RULE---
+# --- Rule 5: Scheduler → execute task 1 ---
+{"action": "execute", "task_id": 1, "reasoning": "Now set up the environment"}
+---RULE---
+# --- Rule 6: Task 1 execution ---
+Environment set up successfully.
+All dependencies installed.
+
+✅ completed
+---RULE---
+# --- Rule 7: Scheduler → execute task 1 again ---
+{"action": "execute", "task_id": 1, "reasoning": "Re-setup environment with new config"}
+---RULE---
+# --- Rule 8: Task 1 execution (second time) ---
+Re-initialized environment with updated configuration.
+All dependencies verified.
+
+✅ completed
+---RULE---
+# --- Rule 9: Scheduler → execute task 3 ---
+{"action": "execute", "task_id": 3, "reasoning": "Generate the report"}
+---RULE---
+# --- Rule 10: Task 3 execution ---
+Generated summary report from analysis results.
+Report saved to report.txt.
+
+✅ completed
+---RULE---
+# --- Rule 11: Scheduler → execute task 3 again ---
+{"action": "execute", "task_id": 3, "reasoning": "Regenerate report with final data"}
+---RULE---
+# --- Rule 12: Task 3 execution (second time) ---
+Regenerated summary report with final data.
+Updated report saved to report.txt.
+
+✅ completed
+---RULE---
+# --- Rule 13: Scheduler → stop ---
+{"action": "stop", "reasoning": "All tasks have been executed twice, work is complete"}
