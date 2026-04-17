@@ -234,8 +234,17 @@ def _normalize_log_content(text):
     text = re.sub(r'PID \d+', 'PID <PID>', text)
     # Normalize log file paths that contain session IDs:
     #   .../logs/<session_id>/... → .../logs/<SESSION>/...
+    # Step 1: Replace session IDs in log paths:
+    #   logs/comprehensive_test_ph0rk2pf/ → logs/<SESSION>/
     text = re.sub(
-        r'(?:(?:[A-Za-z]:)?[^"\n]*?/)?logs/(?:<SESSION>|[A-Za-z0-9_.-]+_[a-z0-9]+)/',
+        r'logs/(?:<SESSION>|[A-Za-z0-9_.-]+_[a-z0-9]+)/',
+        'logs/<SESSION>/',
+        text,
+    )
+    # Step 2: Strip absolute path prefixes before logs/<SESSION>/:
+    #   D:/silasshen/.../logs/<SESSION>/ → logs/<SESSION>/
+    text = re.sub(
+        r'(?:[A-Za-z]:)?[^"\n]*/logs/<SESSION>/',
         'logs/<SESSION>/',
         text,
     )

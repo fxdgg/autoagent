@@ -107,12 +107,19 @@ class ConversationLogger:
         task_id: str,
         parent_task_id: Optional[str] = None,
         attempt: Optional[Union[int, str]] = None,
+        filename_prefix: Optional[str] = None,
     ) -> str:
         """Resolve the markdown log file path for a given task.
 
         Each attempt gets its own file with a ``_round_N`` suffix.
+
+        Args:
+            filename_prefix: Optional prefix prepended to the filename
+                (e.g. ``schedule_1`` → ``schedule_1_task_1.1_round_1.md``).
+                The subdirectory name (``subtask_X/``) is **not** affected.
         """
-        filename = f"task_{task_id}_round_{attempt}.md"
+        base = f"task_{task_id}_round_{attempt}.md"
+        filename = f"{filename_prefix}_{base}" if filename_prefix else base
 
         if parent_task_id and parent_task_id in self._nested_subtasks:
             subtask_dir = os.path.join(self.session_dir, f"subtask_{parent_task_id}")
@@ -130,6 +137,7 @@ class ConversationLogger:
         parent_task_id: Optional[str] = None,
         metadata: Optional[dict] = None,
         system_prompt: Optional[str] = None,
+        filename_prefix: Optional[str] = None,
     ):
         """
         Write the prompt section to a per-round log file immediately
@@ -147,7 +155,8 @@ class ConversationLogger:
             metadata: Optional dict with extra info
             system_prompt: Optional system prompt sent alongside the user prompt
         """
-        filepath = self._resolve_filepath(task_id, parent_task_id, attempt=attempt)
+        filepath = self._resolve_filepath(task_id, parent_task_id, attempt=attempt,
+                                              filename_prefix=filename_prefix)
 
         content_parts = []
 
@@ -179,6 +188,7 @@ class ConversationLogger:
         response: str,
         parent_task_id: Optional[str] = None,
         attempt: Optional[Union[int, str]] = None,
+        filename_prefix: Optional[str] = None,
     ):
         """
         Append the response section to the per-round log file after AI
@@ -193,7 +203,8 @@ class ConversationLogger:
             attempt: Attempt number (must match the value passed to
                 ``log_prompt``).
         """
-        filepath = self._resolve_filepath(task_id, parent_task_id, attempt=attempt)
+        filepath = self._resolve_filepath(task_id, parent_task_id, attempt=attempt,
+                                              filename_prefix=filename_prefix)
 
         content_parts = []
         content_parts.append(f"## Response\n\n")
@@ -236,6 +247,7 @@ class ConversationLogger:
         call_type: str,
         round_num: Union[int, str],
         failed_subtask_id: Optional[str] = None,
+        filename_prefix: Optional[str] = None,
     ) -> str:
         """Resolve the decisions markdown log file path.
 
@@ -244,14 +256,20 @@ class ConversationLogger:
         - ``failure_analysis_{subtask_id}_round_{N}.md``
         - ``looping_failure_analysis_{subtask_id}_round_{N}.md``
         - ``main_task_evaluation_round_{N}.md``
+
+        Args:
+            filename_prefix: Optional prefix prepended to the filename
+                (e.g. ``schedule_1`` → ``schedule_1_failure_analysis_1.1_round_1.md``).
+                The subdirectory name (``subtask_X/``) is **not** affected.
         """
         subtask_dir = os.path.join(self.session_dir, f"subtask_{task_id}")
         os.makedirs(subtask_dir, exist_ok=True)
 
         if "failure_analysis" in call_type and failed_subtask_id:
-            filename = f"{call_type}_{failed_subtask_id}_round_{round_num}.md"
+            base = f"{call_type}_{failed_subtask_id}_round_{round_num}.md"
         else:
-            filename = f"{call_type}_round_{round_num}.md"
+            base = f"{call_type}_round_{round_num}.md"
+        filename = f"{filename_prefix}_{base}" if filename_prefix else base
         return os.path.join(subtask_dir, filename)
 
     def log_nested_prompt(
@@ -262,6 +280,7 @@ class ConversationLogger:
         prompt: str,
         round_num: Union[int, str],
         failed_subtask_id: Optional[str] = None,
+        filename_prefix: Optional[str] = None,
     ):
         """
         Write the prompt section of a nested task AI decision call
@@ -285,6 +304,7 @@ class ConversationLogger:
             call_type=call_type,
             round_num=round_num,
             failed_subtask_id=failed_subtask_id,
+            filename_prefix=filename_prefix,
         )
 
         content_parts = []
@@ -322,6 +342,7 @@ class ConversationLogger:
         call_type: Optional[str] = None,
         round_num: Optional[Union[int, str]] = None,
         failed_subtask_id: Optional[str] = None,
+        filename_prefix: Optional[str] = None,
     ):
         """
         Append the response section of a nested task AI decision call.
@@ -342,6 +363,7 @@ class ConversationLogger:
             call_type=call_type,
             round_num=round_num,
             failed_subtask_id=failed_subtask_id,
+            filename_prefix=filename_prefix,
         )
 
         content_parts = []
@@ -443,42 +465,60 @@ class ConversationLogger:
 
     @staticmethod
     def _collect_round_files(directory: str, prefix: str) -> list:
-        """Collect and sort ``<prefix>N.md`` files in *directory*."""
+        """Collect and sort ``<prefix>N.md`` files in *directory*.
+
+        Also matches schedule-prefixed variants
+        (e.g. ``schedule_1_task_1.1_round_1.md``).
+        """
         if not os.path.isdir(directory):
             return []
         files = [
             f for f in os.listdir(directory)
-            if f.startswith(prefix) and f.endswith(".md")
+            if prefix in f and f.endswith(".md")
         ]
-        # Sort by round number extracted from filename
+        # Sort by schedule round (if present) then by round number
         def _sort_key(fname):
-            m = re.search(r'_round_(\d+)', fname)
-            return int(m.group(1)) if m else 0
+            # Extract schedule round: schedule_N_...
+            sm = re.search(r'schedule_(\d+)_', fname)
+            sched = int(sm.group(1)) if sm else 0
+            m = re.search(r'_round_([\d.]+)', fname)
+            round_str = m.group(1) if m else '0'
+            # Parse dotted round like 1.2 into tuple (1, 2)
+            parts = tuple(int(x) for x in round_str.split('.'))
+            return (sched,) + parts
         files.sort(key=_sort_key)
         return files
 
     @staticmethod
     def _collect_decision_files(directory: str) -> list:
-        """Collect decision files (failure_analysis_*, main_task_evaluation_*, etc.)."""
+        """Collect decision files (failure_analysis_*, main_task_evaluation_*, etc.).
+
+        Also matches schedule-prefixed variants
+        (e.g. ``schedule_1_failure_analysis_1.1_round_1.md``).
+        """
         if not os.path.isdir(directory):
             return []
-        prefixes = ("failure_analysis_", "looping_failure_analysis_", "main_task_evaluation_")
+        # Match both plain and schedule-prefixed decision files
+        _DECISION_KEYWORDS = ("failure_analysis_", "looping_failure_analysis_", "main_task_evaluation_")
         files = [
             f for f in os.listdir(directory)
-            if any(f.startswith(p) for p in prefixes) and f.endswith(".md")
+            if any(kw in f for kw in _DECISION_KEYWORDS) and f.endswith(".md")
         ]
-        # Sort: failure_analysis first, then looping, then main_task_evaluation, by round
+        # Sort: failure_analysis first, then looping, then main_task_evaluation, by schedule round then round
         def _sort_key(fname):
             order = 0
-            if fname.startswith("failure_analysis_"):
-                order = 1
-            elif fname.startswith("looping_failure_analysis_"):
+            if "looping_failure_analysis_" in fname:
                 order = 2
-            elif fname.startswith("main_task_evaluation_"):
+            elif "failure_analysis_" in fname:
+                order = 1
+            elif "main_task_evaluation_" in fname:
                 order = 3
-            m = re.search(r'_round_(\d+)', fname)
-            round_num = int(m.group(1)) if m else 0
-            return (order, round_num)
+            sm = re.search(r'schedule_(\d+)_', fname)
+            sched = int(sm.group(1)) if sm else 0
+            m = re.search(r'_round_([\d.]+)', fname)
+            round_str = m.group(1) if m else '0'
+            parts = tuple(int(x) for x in round_str.split('.'))
+            return (order, sched) + parts
         files.sort(key=_sort_key)
         return files
 
