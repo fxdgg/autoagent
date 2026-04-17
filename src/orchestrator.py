@@ -259,38 +259,35 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python orchestrator.py                                # Run all tasks (CodeBuddy default)
-  python orchestrator.py --provider claude               # Use Claude Code
+  python orchestrator.py                                  # Run all tasks (CodeBuddy default)
+  python orchestrator.py --provider claude                 # Use Claude Code
   python orchestrator.py --provider gemini --model gemini-3-flash  # Use Gemini CLI
-  python orchestrator.py --config my_tasks.yaml          # Use custom config
-  python orchestrator.py --task 2                        # Run only task 2
-  python orchestrator.py --reset                         # Reset all state
-  python orchestrator.py --verbose                       # Enable debug logging
-  python orchestrator.py --ideas ideas.md                # Watch ideas.md for new ideas
-python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no task execution)
-    python orchestrator.py --ideas ideas.md --human-review  # Process ideas with human review
-  python orchestrator.py --ideas ideas.md                 # Run tasks then idle for ideas (idle is default)
-  python orchestrator.py --mode ai                        # Force AI orchestrator mode
-  python orchestrator.py --mode linear                    # Force linear mode (default)
-  python orchestrator.py --list-providers                # List available AI providers
+  python orchestrator.py --config my_tasks.yaml            # Use custom config
+  python orchestrator.py --task 2                          # Run only task 2
+  python orchestrator.py --reset                           # Reset all state
+  python orchestrator.py --verbose                         # Enable debug logging
+  python orchestrator.py --ideas ideas.md                  # Watch ideas.md for new ideas
+  python orchestrator.py --ideas ideas.md --ideas-only     # Process ideas only (no task execution)
+  python orchestrator.py --ideas ideas.md --human-review   # Process ideas with human review
+  python orchestrator.py --mode ai                         # Force AI orchestrator mode
+  python orchestrator.py --mode linear                     # Force linear mode (default)
+  python orchestrator.py --list-providers                  # List available AI providers
         """,
     )
 
-    # ------------------------------------------------
-    # General
-    # ------------------------------------------------
-    
-    parser.add_argument(
+    # ── General ───────────────────────────────────────
+    general = parser.add_argument_group('General')
+    general.add_argument(
         '--config', '-c',
         default='todos.yaml',
         help='Path to task configuration file (default: todos.yaml)',
     )
-    parser.add_argument(
+    general.add_argument(
         '--workspace', '-w',
         default='.',
         help='Working directory (default: current directory)',
     )
-    parser.add_argument(
+    general.add_argument(
         '--mode',
         choices=['linear', 'ai'],
         default=None,
@@ -298,36 +295,34 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
              'Default: auto-detect from todos.yaml (ai if ai_orchestrator field is present, '
              'otherwise linear). If todos.yaml has no ai_orchestrator field, only "linear" is allowed.',
     )
-    parser.add_argument(
+    general.add_argument(
         '--task', '-t',
         type=str,
         default=None,
         help='Execute only the specified task ID (not available in AI orchestrator mode)',
     )
 
-    # ------------------------------------------------
-    # Idea
-    # ------------------------------------------------
-
-    parser.add_argument(
+    # ── Idea ──────────────────────────────────────────
+    idea = parser.add_argument_group('Idea')
+    idea.add_argument(
         '--ideas',
         default=None,
         help='Path to ideas.md file. When set, new ideas will be processed into TODO tasks.',
     )
-    parser.add_argument(
+    idea.add_argument(
         '--ideas-only',
         action='store_true',
         help='Only process ideas.md, do not run the TODO task list. '
              'Requires --ideas to be set.',
     )
-    parser.add_argument(
+    idea.add_argument(
         '--human-review',
         action='store_true',
         help='Enable human review for ideas processing. After AI review passes, '
              'pauses for human approval. Enter y to accept and exit, or n to provide '
              'feedback for revision. (default: disabled)',
     )
-    parser.add_argument(
+    idea.add_argument(
         '--no-idle',
         action='store_true',
         help='Disable idle mode. By default, when --ideas is set, the orchestrator '
@@ -335,42 +330,38 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
              'Use --no-idle to run once and exit.',
     )
 
-    # ------------------------------------------------
-    # Session Management
-    # ------------------------------------------------
-
-    parser.add_argument(
+    # ── Session Management ────────────────────────────
+    session = parser.add_argument_group('Session Management')
+    session.add_argument(
         '--continue', dest='continue_session',
         action='store_true',
         help='Continue from the current session (reads .autoagent_log)',
     )
-    parser.add_argument(
+    session.add_argument(
         '--resume', dest='resume_session',
         default=None,
         help='Resume a specific session by ID (e.g. 4jvowsl3 or full name)',
     )
-    parser.add_argument(
+    session.add_argument(
         '--list-sessions',
         action='store_true',
         help='List all sessions and exit',
     )
 
-    # ------------------------------------------------
-    # Provider & Model
-    # ------------------------------------------------
-    
-    parser.add_argument(
+    # ── Provider & Model ──────────────────────────────
+    provider_group = parser.add_argument_group('Provider & Model')
+    provider_group.add_argument(
         '--provider', '-P',
         default='codebuddy',
         help='AI provider to use: codebuddy (default), claude, gemini, opencode, test. '
              'Use --list-providers to see all available options.',
     )
-    parser.add_argument(
+    provider_group.add_argument(
         '--list-providers',
         action='store_true',
         help='List available AI providers and exit',
     )
-    parser.add_argument(
+    provider_group.add_argument(
         '--model', '-m',
         default=None,
         help='AI model to use. Supports single model (e.g. "glm-5") or '
@@ -380,23 +371,23 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
              'scheduler (AI orchestrator scheduling decisions). '
              'Missing roles inherit from default.',
     )
-    parser.add_argument(
+    provider_group.add_argument(
         '--executable',
         default=None,
         help='Override the default executable path for the AI provider',
     )
-    parser.add_argument(
+    provider_group.add_argument(
         '--extra-args',
         default=None,
         help='Additional CLI arguments to pass to the AI tool',
     )
-    parser.add_argument(
+    provider_group.add_argument(
         '--use-cli',
         action='store_true',
         help='Use CLI subprocess instead of CodeBuddy Agent SDK (default is SDK). '
              'Only works with --provider codebuddy.',
     )
-    parser.add_argument(
+    provider_group.add_argument(
         '--include-directories',
         default=None,
         help='Comma-separated list of additional directories the AI tool is allowed '
@@ -404,61 +395,55 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
              'Example: --include-directories /path/to/dir1,/path/to/dir2',
     )
 
-    # ------------------------------------------------
-    # Preset & Config
-    # ------------------------------------------------
-
-    parser.add_argument(
+    # ── Preset & Config ───────────────────────────────
+    preset_group = parser.add_argument_group('Preset & Config')
+    preset_group.add_argument(
         '--preset',
         default='default',
         help='Preset configuration name from config.yaml (default: default). '
              'Preset values can be overridden by command-line arguments.',
     )
-    parser.add_argument(
+    preset_group.add_argument(
         '--generate-default-config',
         action='store_true',
         help='Overwrite config.yaml with the built-in defaults and exit. '
              'The file is written to the same directory as orchestrator.py.',
     )
-    
-    # ------------------------------------------------
-    # Utility
-    # ------------------------------------------------
 
-    parser.add_argument(
+    # ── Utility ───────────────────────────────────────
+    utility = parser.add_argument_group('Utility')
+    utility.add_argument(
         '--validate',
         action='store_true',
         help='Validate configuration and exit',
     )
-    parser.add_argument(
+    utility.add_argument(
         '--reset',
         action='store_true',
         help='Reset all task states and exit',
     )
-    parser.add_argument(
+    utility.add_argument(
         '--log-dir',
         default=None,
         help='Root directory for all output files: conversation logs, state files, '
              'and orchestrator.log. Relative to CWD. (default: .autoagent)',
     )
-    parser.add_argument(
+    utility.add_argument(
         '--verbose', '-v',
         action='store_true',
         help='Enable verbose/debug logging',
     )
 
-    # ------------------------------------------------
-    # Testing
-    # ------------------------------------------------
-    
-    parser.add_argument(
+    # ── Testing ───────────────────────────────────────
+    testing = parser.add_argument_group('Testing')
+    testing.add_argument(
         '--test-schema',
         default=None,
         help='Path to test schema JSON file (internal testing only). '
              'Used together with --use-test to select a test case. '
              'The schema defines test_rules, ai_strategy, and other test parameters.',
     )
-    parser.add_argument(
+    testing.add_argument(
         '--use-test',
         type=int,
         default=None,
