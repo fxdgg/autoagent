@@ -278,6 +278,12 @@ def _normalize_log_content(text, project_root=None):
     if project_root:
         pr = project_root.replace("\\", "/")
         text = text.replace(pr, "<PROJECT_ROOT>")
+    # Step 4: Strip (NOTFOUND) tags from result file references
+    #   These appear when result files don't exist in the test environment.
+    text = re.sub(r' \(NOTFOUND\)', '', text)
+    # Step 5: Normalize leading whitespace before session-relative paths
+    #   Prompt indentation may vary; strip leading spaces before logs/<SESSION>/
+    text = re.sub(r'^[ \t]+(logs/<SESSION>/)', r'\1', text, flags=re.MULTILINE)
     return text
 
 

@@ -231,16 +231,22 @@ class NestedTaskExecutor:
                     self._carry_forward_completed(retry_from, subtasks, state_manager, old_rl, new_rl)
 
                     # Record AI decision
-                    state_manager.add_ai_decision(task_id, {
+                    decision_record = {
                         "attempt": attempts,
                         "_main_round": _main_round,
                         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "failed_at": subtask_id,
                         "retry_from": retry_from,
-                        "_display_failed_at": _display_id(subtask),
-                        "_display_retry_from": _find_display_id(retry_from, subtasks),
                         "suggested_fix": ai_decision.get('suggested_fix', ''),
-                    })
+                    }
+                    # In AI scheduling mode, store display IDs for human-readable output
+                    disp_failed = _display_id(subtask)
+                    disp_retry = _find_display_id(retry_from, subtasks)
+                    if disp_failed != subtask_id:
+                        decision_record["_display_failed_at"] = disp_failed
+                    if disp_retry != retry_from:
+                        decision_record["_display_retry_from"] = disp_retry
+                    state_manager.add_ai_decision(task_id, decision_record)
 
                     break  # Break subtask loop, start new round
                 else:
