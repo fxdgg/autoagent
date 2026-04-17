@@ -290,6 +290,48 @@ class SubtaskResult:
         self.response_text = response_text
 
 
+def _resolve_retry_from(retry_from: str, subtasks: list) -> str:
+    """Resolve a retry_from ID to an actual subtask ID.
+
+    In AI scheduling mode, subtask IDs are prefixed with
+    ``{schedule_round}.{task_id}.`` (e.g. ``1.2.2`` becomes ``1.1.2.2``).
+    The AI's failure analysis may return the *original* (un-prefixed)
+    subtask ID.  This helper tries an exact match first, then falls
+    back to suffix matching so that ``retry_from="1.2.2"`` correctly
+    resolves to subtask ``1.1.2.2``.
+    """
+    retry_from = str(retry_from)
+    subtask_ids = [str(st['id']) for st in subtasks]
+
+    # Exact match
+    if retry_from in subtask_ids:
+        return retry_from
+
+    # Suffix match: find a subtask whose ID ends with ".{retry_from}"
+    suffix = "." + retry_from
+    candidates = [sid for sid in subtask_ids if sid.endswith(suffix)]
+    if len(candidates) == 1:
+        logger.info(
+            f"Resolved retry_from '{retry_from}' → '{candidates[0]}' "
+            f"(suffix match)"
+        )
+        return candidates[0]
+    if len(candidates) > 1:
+        # Multiple matches — pick the first (should be rare)
+        logger.warning(
+            f"Multiple suffix matches for retry_from '{retry_from}': "
+            f"{candidates}; using first match '{candidates[0]}'"
+        )
+        return candidates[0]
+
+    # No match — return as-is (will be handled gracefully downstream)
+    logger.warning(
+        f"retry_from '{retry_from}' does not match any subtask ID "
+        f"in {subtask_ids}"
+    )
+    return retry_from
+
+
 
 
 

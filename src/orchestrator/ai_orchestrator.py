@@ -167,13 +167,11 @@ class AISchedulerMixin:
             if not isinstance(ai_max_attempts, int) or ai_max_attempts < 1:
                 raise ConfigError("'ai_orchestrator.max_attempts' must be a positive integer")
 
-        # Validate that all tasks have a description in AI scheduling mode
+        # Ensure all tasks have a description for AI scheduling prompts.
+        # If missing, fall back to the task name.
         for task in tasks:
             if not task.get('description'):
-                raise ConfigError(
-                    f"Task {task['id']} is missing required 'description' field "
-                    f"(required in AI orchestrator mode)"
-                )
+                task['description'] = task.get('name', f"Task {task.get('id', '?')}")
 
         result = {
             'strategy': strategy,

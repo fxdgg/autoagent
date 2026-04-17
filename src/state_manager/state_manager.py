@@ -98,8 +98,17 @@ class StateManager:
                     f.flush()
                     os.fsync(f.fileno())
                 # Atomic replace — on Windows os.replace is atomic
-                # for same-volume files.
-                os.replace(temp_file, self.state_file)
+                # for same-volume files.  Retry a few times on
+                # PermissionError (antivirus / indexer file locks).
+                for _attempt in range(5):
+                    try:
+                        os.replace(temp_file, self.state_file)
+                        break
+                    except PermissionError:
+                        if _attempt < 4:
+                            time.sleep(0.05 * (2 ** _attempt))
+                        else:
+                            raise
                 logger.debug(f"State saved to {self.state_file}")
             except Exception as e:
                 logger.error(f"Failed to save state: {e}")

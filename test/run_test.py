@@ -425,6 +425,10 @@ def verify_test(test_case, session_dir, actual_exit_code):
 
     tasks = state["tasks"]
 
+    is_ai_mode = bool(test_case.get("ai_strategy") or
+                      (test_case.get("extra_args") and "--mode" in test_case.get("extra_args", []) and
+                       "ai" in test_case.get("extra_args", [])))
+
     def _find_task_state(task_key):
         """Find a task's state, checking plain key first, then round-prefixed keys.
 
@@ -434,6 +438,31 @@ def verify_test(test_case, session_dir, actual_exit_code):
         When multiple round-prefixed keys exist for the same task,
         the latest (highest round) is returned.
         """
+        # In AI mode, try AI-mode round-prefixed matching FIRST to avoid
+        # ambiguity (e.g. state key "1.1" = round 1 task 1, but test
+        # expects "1.1" = task 1 subtask 1).
+        if is_ai_mode:
+            ai_candidates = []
+            suffix = "." + task_key
+            for k in tasks:
+                base = k.split("@")[0]
+                if base.endswith(suffix):
+                    round_part = base[: -len(suffix)]
+                    if round_part.isdigit():
+                        ai_candidates.append((int(round_part), k))
+            if ai_candidates:
+                ai_candidates.sort(key=lambda x: x[0])
+                return tasks[ai_candidates[-1][1]]
+            # Also check @-suffixed keys in AI mode
+            for k in tasks:
+                base = k.split("@")[0]
+                if base.endswith(suffix):
+                    round_part = base[: -len(suffix)]
+                    if round_part.isdigit():
+                        ai_candidates.append((int(round_part), k))
+            return None
+
+        # Linear mode: exact match first
         if task_key in tasks:
             return tasks[task_key]
         # Search for round-scoped keys (e.g., "1.1@2.1")
@@ -444,20 +473,19 @@ def verify_test(test_case, session_dir, actual_exit_code):
         )
         if round_keys:
             return tasks[round_keys[-1]]
-        # Search for AI-mode round-prefixed keys.
-        # For task_key "1", look for keys like "N.1" where N is a round number.
-        # For task_key "1.2", look for keys like "N.1.2".
-        # We match keys ending with ".{task_key}" where the prefix is a round number.
+        # Fallback: try AI-mode matching for linear mode too
+        # (shouldn't normally be needed, but handles edge cases)
         ai_candidates = []
+        suffix = "." + task_key
         for k in tasks:
-            # Check if k ends with ".{task_key}" and the prefix is a digit
-            suffix = "." + task_key
-            if k.endswith(suffix):
-                round_part = k[: -len(suffix)]
+            base = k.split("@")[0]
+            if base.endswith(suffix):
+                round_part = base[: -len(suffix)]
                 if round_part.isdigit():
                     ai_candidates.append((int(round_part), k))
+            elif base == task_key:
+                ai_candidates.append((0, k))
         if ai_candidates:
-            # Return the state from the latest round
             ai_candidates.sort(key=lambda x: x[0])
             return tasks[ai_candidates[-1][1]]
         return None
@@ -496,10 +524,11 @@ def verify_test(test_case, session_dir, actual_exit_code):
             for k, v in tasks.items():
                 if k.startswith(prefix):
                     all_history.extend(v.get("history", []))
-            # Check AI-mode round-prefixed keys (N.task_id)
+            # Check AI-mode round-prefixed keys (N.task_id or N.task_id@parent)
             suffix = "." + str(task_id)
             for k, v in tasks.items():
-                if k.endswith(suffix) and k[:-len(suffix)].isdigit():
+                base = k.split("@")[0]
+                if base.endswith(suffix) and base[:-len(suffix)].isdigit():
                     all_history.extend(v.get("history", []))
             has_nc = any(
                 h.get("result") == "not_completed" for h in all_history

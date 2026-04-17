@@ -29,6 +29,7 @@ tasks:
     name: "Setup environment"
     description: "Initialize the project environment and install dependencies."
     type: simple
+    max_attempts: 1
     completion_criteria: |
       Environment is set up and all dependencies are installed.
 
@@ -36,6 +37,7 @@ tasks:
     name: "Run analysis"
     description: "Run the data analysis pipeline on the input dataset."
     type: simple
+    max_attempts: 1
     completion_criteria: |
       Analysis pipeline completes and results are written to analysis_output.txt.
 
@@ -43,5 +45,6 @@ tasks:
     name: "Generate report"
     description: "Generate a summary report from the analysis results."
     type: simple
+    max_attempts: 1
     completion_criteria: |
       Summary report is generated and saved to report.txt.

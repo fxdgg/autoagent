@@ -12,6 +12,7 @@ from task_executor.task_executor_common import (
     _build_failed_subtask_history,
     _save_previous_subtask_summary,
     _load_previous_subtask_summary,
+    _resolve_retry_from,
 )
 from task_executor.subtask_executor import SubtaskExecutor
 from prompts.failure_analysis import build_failure_analysis_prompt
@@ -217,7 +218,9 @@ class NestedTaskExecutor:
                     )
 
                     # Reset subtasks based on AI decision
-                    retry_from = ai_decision.get('retry_from', subtask_id)
+                    retry_from = _resolve_retry_from(
+                        ai_decision.get('retry_from', subtask_id), subtasks
+                    )
 
                     # Carry forward completed subtasks before retry_from
                     old_rl = f"{_main_round}.{_failure_sub_round}"
@@ -277,7 +280,9 @@ class NestedTaskExecutor:
                 print(f"      Next strategy: {ai_evaluation.get('next_strategy', 'N/A')}")
 
                 # Record evaluation (before incrementing _main_round)
-                retry_from = ai_evaluation.get('retry_from', str(subtasks[0]['id']))
+                retry_from = _resolve_retry_from(
+                    ai_evaluation.get('retry_from', str(subtasks[0]['id'])), subtasks
+                )
                 state_manager.add_main_task_evaluation(task_id, {
                     "round": _main_round,
                     "time": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -564,7 +569,7 @@ class NestedTaskExecutor:
         ``*_once`` subtasks are skipped (they use plain keys shared
         across rounds).
         """
-        retry_from = str(retry_from)
+        retry_from = _resolve_retry_from(str(retry_from), subtasks)
         for subtask in subtasks:
             st_id = str(subtask['id'])
             if st_id == retry_from:

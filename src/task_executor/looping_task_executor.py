@@ -13,6 +13,7 @@ from task_executor.task_executor_common import (
     _build_failed_subtask_history,
     _save_previous_subtask_summary,
     _load_previous_subtask_summary,
+    _resolve_retry_from,
 )
 from task_executor.subtask_executor import SubtaskExecutor
 from prompts.failure_analysis import build_failure_analysis_prompt
@@ -250,7 +251,9 @@ class LoopingTaskExecutor:
                         previous_subtask_id=previous_subtask_id,
                     )
 
-                    retry_from = ai_decision.get('retry_from', subtask_id)
+                    retry_from = _resolve_retry_from(
+                        ai_decision.get('retry_from', subtask_id), subtasks
+                    )
 
                     # Carry forward completed subtasks before retry_from
                     old_rl = f"{loop_idx}.{_failure_sub_round}"
@@ -421,7 +424,7 @@ class LoopingTaskExecutor:
         ``*_once`` subtasks are skipped (they use plain keys shared
         across rounds).
         """
-        retry_from = str(retry_from)
+        retry_from = _resolve_retry_from(str(retry_from), subtasks)
         for subtask in subtasks:
             st_id = str(subtask['id'])
             if st_id == retry_from:
