@@ -310,9 +310,9 @@ def build_workflow_section(task: dict, parent_context: dict) -> str:
         return ""
 
     lines = []
-    current_id = str(task['id'])
+    current_id = str(task.get('_display_id', task['id']))
     for st in parent_context['subtasks']:
-        st_id = str(st['id'])
+        st_id = str(st.get('_display_id', st['id']))
         marker = "→" if st_id == current_id else " "
         lines.append(f"{marker} {st_id}. {st['name']}")
     lines.append("")

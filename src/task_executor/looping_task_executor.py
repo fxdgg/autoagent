@@ -10,6 +10,8 @@ from logger import ConversationLogger
 from task_executor.task_executor_common import (
     ConfigError,
     _state_key,
+    _display_id,
+    _find_display_id,
     _build_failed_subtask_history,
     _save_previous_subtask_summary,
     _load_previous_subtask_summary,
@@ -211,7 +213,7 @@ class LoopingTaskExecutor:
                 # Skip already completed subtasks (in this round)
                 if subtask_state.get('status') == 'completed':
                     print(f"\n   📌 Subtask {subtask_id}: {subtask['name']} (already completed, skipping)")
-                    previous_subtask_id = subtask_id
+                    previous_subtask_id = _display_id(subtask)
                     # If this skipped subtask holds suggested_fix, carry forward
                     if parent_context.get('suggested_fix'):
                         parent_context['_fix_carried'] = True
@@ -267,6 +269,8 @@ class LoopingTaskExecutor:
                         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "failed_at": subtask_id,
                         "retry_from": retry_from,
+                        "_display_failed_at": _display_id(subtask),
+                        "_display_retry_from": _find_display_id(retry_from, subtasks),
                         "suggested_fix": ai_decision.get('suggested_fix', ''),
                     })
 
@@ -274,7 +278,7 @@ class LoopingTaskExecutor:
                 else:
                     # Capture response for next subtask's context
                     previous_subtask_summary = result.response_text or result.output
-                    previous_subtask_id = subtask_id
+                    previous_subtask_id = _display_id(subtask)
                     # Persist to disk so it survives interruptions
                     _save_previous_subtask_summary(self.session_dir, previous_subtask_summary)
 
@@ -310,6 +314,7 @@ class LoopingTaskExecutor:
                     st_state = plain_state
             task_history.append({
                 "subtask_id": st_id,
+                "display_subtask_id": str(st.get('_display_id', st['id'])),
                 "name": st['name'],
                 "type": st['type'],
                 "completion_criteria": st.get('completion_criteria', ''),
@@ -330,8 +335,8 @@ class LoopingTaskExecutor:
             decision_lines = []
             for d in recent_decisions:
                 decision_lines.append(
-                    f"  - Loop {d.get('loop', '?')}: failed at {d.get('failed_at', '?')}, "
-                    f"retried from {d.get('retry_from', '?')}\n"
+                    f"  - Loop {d.get('loop', '?')}: failed at {d.get('_display_failed_at', d.get('failed_at', '?'))}, "
+                    f"retried from {d.get('_display_retry_from', d.get('retry_from', '?'))}\n"
                     f"    Fix attempted: {d.get('suggested_fix', 'N/A')[:limits.get('max')]}"
                 )
             prev_decisions_text = "\n".join(decision_lines)

@@ -900,9 +900,15 @@ class AISchedulerMixin:
         For simple tasks, the ID becomes ``{schedule_round}.{task_id}``.
         For nested/looping tasks, subtask IDs become
         ``{schedule_round}.{task_id}.{subtask_id_suffix}``.
+
+        Each modified dict also receives a ``_display_id`` field that
+        preserves the **original** (pre-prefix) ID.  Prompt builders
+        should use ``_display_id`` so the AI never sees the internal
+        three-level state key.
         """
         scheduled = copy.deepcopy(task)
         original_id = str(task['id'])
+        scheduled['_display_id'] = original_id
         scheduled['id'] = f"{schedule_round}.{original_id}"
 
         # Prefix subtask IDs for nested/looping tasks
@@ -910,6 +916,7 @@ class AISchedulerMixin:
             subtasks = scheduled.get('subtasks', [])
             for st in subtasks:
                 original_st_id = str(st['id'])
+                st['_display_id'] = original_st_id
                 # Original subtask ID is like "1.1", "1.2" etc.
                 # Extract the suffix after the first dot
                 parts = original_st_id.split('.', 1)
@@ -931,6 +938,7 @@ class AISchedulerMixin:
         subtasks = task.get('subtasks', [])
         for st in subtasks:
             original_st_id = str(st['id'])
+            st['_display_id'] = original_st_id
             # Keep the relative structure but add schedule_round prefix
             parts = original_st_id.split('.', 1)
             if len(parts) == 2:

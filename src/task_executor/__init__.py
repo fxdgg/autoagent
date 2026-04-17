@@ -5,6 +5,8 @@ from task_executor.task_executor_common import (
     ExecutionError,
     SubtaskResult,
     _state_key,
+    _display_id,
+    _find_display_id,
     _build_failed_subtask_history,
     _save_previous_subtask_summary,
     _load_previous_subtask_summary,

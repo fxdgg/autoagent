@@ -161,6 +161,29 @@ def _state_key(subtask: dict, round_label: str | None) -> str:
     return StateManager.round_key(st_id, round_label)
 
 
+def _display_id(task_or_subtask: dict) -> str:
+    """Return the human-readable ID for a task or subtask.
+
+    In AI scheduling mode, ``_build_scheduled_task`` stores the original
+    (pre-prefix) ID in ``_display_id``.  This helper returns that value
+    when present, falling back to the plain ``id`` field.
+    """
+    return str(task_or_subtask.get('_display_id', task_or_subtask['id']))
+
+
+def _find_display_id(internal_id: str, subtasks: list) -> str:
+    """Look up the display ID for an internal (possibly 3-level) subtask ID.
+
+    Searches *subtasks* for a dict whose ``id`` matches *internal_id*
+    and returns its ``_display_id``.  Falls back to *internal_id* itself
+    when no match is found (e.g. in Linear mode where IDs are unchanged).
+    """
+    for st in subtasks:
+        if str(st['id']) == str(internal_id):
+            return str(st.get('_display_id', st['id']))
+    return str(internal_id)
+
+
 def _build_failed_subtask_history(
     failed_id: str, state_manager, round_label: str | None,
 ) -> str:

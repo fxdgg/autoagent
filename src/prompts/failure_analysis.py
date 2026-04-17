@@ -35,7 +35,7 @@ def _build_workflow_with_status(
     """
     lines = []
     for st in subtasks_with_status:
-        st_id = str(st['subtask_id'])
+        st_id = str(st.get('display_subtask_id', st['subtask_id']))
         name = st['name']
         status = st.get('status', 'pending')
 
@@ -89,8 +89,8 @@ def build_failure_analysis_prompt(
             a ``<workflow>`` section is built from this list.  When
             ``None``, the workflow section is omitted.
     """
-    failed_id = str(failed_subtask['id'])
-    available_ids = [str(s['id']) for s in all_subtasks]
+    failed_id = str(failed_subtask.get('_display_id', failed_subtask['id']))
+    available_ids = [str(s.get('_display_id', s['id'])) for s in all_subtasks]
     I4 = 4
     I8 = 8
 

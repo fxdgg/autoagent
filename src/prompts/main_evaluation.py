@@ -29,7 +29,7 @@ def _build_workflow_with_results(subtasks_with_status: list) -> str:
     """
     lines = []
     for st in subtasks_with_status:
-        st_id = str(st['subtask_id'])
+        st_id = str(st.get('display_subtask_id', st['subtask_id']))
         name = st['name']
         status = st.get('status', 'unknown')
 
@@ -64,7 +64,7 @@ def build_main_evaluation_prompt(
             status, completion_criteria, ai_reasoning.  When provided,
             a ``<workflow>`` section is built.
     """
-    available_ids = [str(s['id']) for s in subtasks]
+    available_ids = [str(s.get('_display_id', s['id'])) for s in subtasks]
     I4 = 4
     I8 = 8
 
