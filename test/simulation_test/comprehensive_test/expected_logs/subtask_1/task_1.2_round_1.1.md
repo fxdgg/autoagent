@@ -99,7 +99,7 @@ autoagent-exec --cmd "python -c /"import time; time.sleep(1)/"" --task-id 1.2
 You previously launched this task using autoagent-exec:
     Command: python -c "import time; time.sleep(1)"
 The task has now finished. Output has been saved to:
-logs/<SESSION>/lr_tasks/lr_1.2_output.log
+    logs/<SESSION>/lr_tasks/lr_1.2_output.log
 ```
 
 ## Response

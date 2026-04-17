@@ -88,7 +88,7 @@ Report generation submitted.
 You previously launched this task using autoagent-exec:
     Command: python -c "import time; time.sleep(1)"
 The task has now finished. Output has been saved to:
-logs/<SESSION>/lr_tasks/lr_4.1_output.log
+    logs/<SESSION>/lr_tasks/lr_4.1_output.log
 ```
 
 ## Response

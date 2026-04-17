@@ -963,9 +963,9 @@ class AISchedulerMixin:
             # For nested/looping, get the last subtask's response
             # from the nested executor's subtask executor
             nested_exec = self.nested_executor if task_type == 'nested' else self.looping_executor
-            subtask_exec = getattr(nested_exec, '_subtask_executor', None)
+            subtask_exec = getattr(nested_exec, 'subtask_executor', None)
             if subtask_exec:
-                simple_exec = getattr(subtask_exec, '_simple_executor', None)
+                simple_exec = getattr(subtask_exec, 'simple_executor', None)
                 if simple_exec:
                     response_text = getattr(simple_exec, 'last_response_text', '')
 

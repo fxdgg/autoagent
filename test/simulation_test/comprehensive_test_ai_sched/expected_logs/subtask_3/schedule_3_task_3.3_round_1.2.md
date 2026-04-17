@@ -101,7 +101,7 @@ Deployment submitted.
 You previously launched this task using autoagent-exec:
     Command: python -c "import time; time.sleep(1)"
 The task has now finished. Output has been saved to:
-logs/<SESSION>/lr_tasks/lr_3.3_output.log
+    logs/<SESSION>/lr_tasks/lr_3.3_output.log
 ```
 
 ## Response
@@ -225,7 +225,7 @@ Redeployment submitted with DB_POOL_SIZE=50.
 You previously launched this task using autoagent-exec:
     Command: python -c "import time; time.sleep(1)"
 The task has now finished. Output has been saved to:
-logs/<SESSION>/lr_tasks/lr_3.3_output.log
+    logs/<SESSION>/lr_tasks/lr_3.3_output.log
 ```
 
 ## Response
