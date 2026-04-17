@@ -91,6 +91,7 @@ class TodoOrchestrator(AISchedulerMixin):
         use_cli: bool = False,
         backoff_max_wait: int = 300,
         model_roles: dict = None,
+        default_max_attempts: int = 5,
     ):
         """
         Initialize the TodoOrchestrator.
@@ -118,6 +119,8 @@ class TodoOrchestrator(AISchedulerMixin):
                      when AI CLI calls fail repeatedly (default: 300)
             model_roles: Model role dict ({"plan": ..., "default": ..., "lite": ...}),
                      parsed by parse_model_spec(). None uses provider's default model.
+            default_max_attempts: Global default for task/subtask max retry attempts.
+                     Individual tasks can override via their own max_attempts field.
         """
         self.todos_file = todos_file
         self.workspace = os.path.abspath(workspace)
@@ -126,6 +129,7 @@ class TodoOrchestrator(AISchedulerMixin):
         self.idle_interval = idle_interval
         self.use_cli = use_cli
         self.backoff_max_wait = backoff_max_wait
+        self.default_max_attempts = default_max_attempts
 
         self.provider = provider
 
@@ -161,9 +165,9 @@ class TodoOrchestrator(AISchedulerMixin):
 
         self.state_manager = StateManager(resolved_state_file)
         self.conv_logger = ConversationLogger(self.session_dir)
-        self.simple_executor = SimpleTaskExecutor(session_dir=self.session_dir)
-        self.nested_executor = NestedTaskExecutor(session_dir=self.session_dir, model_roles=self.model_roles)
-        self.looping_executor = LoopingTaskExecutor(session_dir=self.session_dir, model_roles=self.model_roles)
+        self.simple_executor = SimpleTaskExecutor(session_dir=self.session_dir, default_max_attempts=self.default_max_attempts)
+        self.nested_executor = NestedTaskExecutor(session_dir=self.session_dir, model_roles=self.model_roles, default_max_attempts=self.default_max_attempts)
+        self.looping_executor = LoopingTaskExecutor(session_dir=self.session_dir, model_roles=self.model_roles, default_max_attempts=self.default_max_attempts)
         
         # Ideas watcher (optional)
         if ideas_file:
@@ -591,6 +595,7 @@ class TodoOrchestrator(AISchedulerMixin):
                 lr_executor = SubtaskExecutor(
                     session_dir=self.session_dir,
                     model_roles=self.model_roles,
+                    default_max_attempts=self.default_max_attempts,
                 )
                 result = lr_executor._execute_long_running_subtask(
                     task, client, self.state_manager,

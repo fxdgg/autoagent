@@ -695,6 +695,7 @@ class AISchedulerMixin:
                 lr_executor = SubtaskExecutor(
                     session_dir=self.session_dir,
                     model_roles=self.model_roles,
+                    default_max_attempts=self.default_max_attempts,
                 )
                 result = lr_executor._execute_long_running_subtask(
                     scheduled_task, client, self.state_manager,

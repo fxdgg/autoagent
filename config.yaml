@@ -1,6 +1,10 @@
 # AutoAgent Configuration
 # This file provides default settings for the orchestrator.
-# Command-line arguments (e.g. --timeout) will override these values.
+# Command-line argument will override these values.
+
+# ------------------------------------------------------------
+# general
+# ------------------------------------------------------------
 
 # System prompt prefix
 # This text is appended to the system prompt (after the "# Task Description"
@@ -16,6 +20,20 @@ system_prompt_prefix: "You are an AI coding agent. You can read/write files, run
 # This is used when no model is specified via CLI --model or preset
 # Supported models depend on the provider (e.g., codebuddy supports deepseek-v3.2, claude-*)
 default_model: glm-5.0-ioa
+
+# Truncation limits for auto-built prompts (in characters).
+# Only 3 keys are used:
+#   previous_subtask_summary: for subtask summaries, error text, log files
+#   history_summary: for history attempt summaries, ai_reasoning
+#   max: defensive upper bound for fields that should not normally be truncated
+truncation_limits:
+  previous_subtask_summary: 4000
+  history_summary: 300
+  max: 50000
+
+# ------------------------------------------------------------
+# timeout & wait
+# ------------------------------------------------------------
 
 # Session timeout (in seconds).
 # If the total elapsed time of an AI session exceeds this limit, the
@@ -39,16 +57,24 @@ bash_timeout: 300
 # the background. Default: 10
 fast_fail_timeout: 60
 
-# Show console window for autoagent-exec subprocess (Windows only).
-# When true, the subprocess launched by autoagent-exec gets its own
-# visible console window (via DETACHED_PROCESS flag). Useful for
-# debugging long-running commands. Has no effect on Linux/macOS.
-# Default: false
-autoagent_exec_show_console: false
-
 # Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
 # Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
 backoff_max_wait: 300
+
+# Idle interval (in seconds).
+# When idle mode is active (--ideas is set and --no-idle is not), the
+# orchestrator polls for new ideas at this interval.
+idle_interval: 30
+
+# ------------------------------------------------------------
+# max rounds & retries
+# ------------------------------------------------------------
+
+# Maximum number of plan (decomposition) retries for a single idea.
+# If the plan phase fails (AI call error, YAML parse failure, empty result,
+# etc.), a fresh AI session is started and the plan is retried.
+# After this many failures the idea is skipped for this run.
+max_plan_retries: 3
 
 # Maximum number of AI review rounds when processing ideas into TODO tasks.
 # Each round sends the generated tasks to a fresh reviewer AI for quality check.
@@ -60,11 +86,21 @@ max_review_rounds: 5
 # reviewer AI for correction. Tasks are accepted as-is after this many retries.
 max_validation_retries: 2
 
-# Maximum number of plan (decomposition) retries for a single idea.
-# If the plan phase fails (AI call error, YAML parse failure, empty result,
-# etc.), a fresh AI session is started and the plan is retried.
-# After this many failures the idea is skipped for this run.
-max_plan_retries: 3
+# Default max_attempts for task/subtask execution.
+# This is the global fallback when a task does not specify its own
+# max_attempts field.  Individual tasks can override this value.
+default_max_attempts: 5
+
+# Maximum number of lightweight "nudge" follow-ups when the AI forgets to
+# emit a completion status marker (✅/❌/⏳).  Instead of resetting the
+# session and replaying the entire task, a short prompt is sent in the same
+# session asking the AI to self-evaluate.  After this many nudges without a
+# marker, the system falls back to the normal retry loop.
+max_marker_nudges: 2
+
+# ------------------------------------------------------------
+# AI scheduler
+# ------------------------------------------------------------
 
 # Maximum number of recent schedule_history entries included in scheduler prompt.
 # Only relevant when ai_orchestrator mode is enabled in todos.yaml.
@@ -74,22 +110,20 @@ scheduler_history_limit: 10
 # invalid JSON or references an invalid task_id.
 scheduler_decision_max_retries: 3
 
-# Maximum number of lightweight "nudge" follow-ups when the AI forgets to
-# emit a completion status marker (✅/❌/⏳).  Instead of resetting the
-# session and replaying the entire task, a short prompt is sent in the same
-# session asking the AI to self-evaluate.  After this many nudges without a
-# marker, the system falls back to the normal retry loop.
-max_marker_nudges: 2
+# ------------------------------------------------------------
+# debug
+# ------------------------------------------------------------
 
-# Truncation limits for auto-built prompts (in characters).
-# Only 3 keys are used:
-#   previous_subtask_summary: for subtask summaries, error text, log files
-#   history_summary: for history attempt summaries, ai_reasoning
-#   max: defensive upper bound for fields that should not normally be truncated
-truncation_limits:
-  previous_subtask_summary: 4000
-  history_summary: 300
-  max: 50000
+# Show console window for autoagent-exec subprocess (Windows only).
+# When true, the subprocess launched by autoagent-exec gets its own
+# visible console window (via DETACHED_PROCESS flag). Useful for
+# debugging long-running commands. Has no effect on Linux/macOS.
+# Default: false
+autoagent_exec_show_console: false
+
+# ------------------------------------------------------------
+# preset
+# ------------------------------------------------------------
 
 # Preset configurations
 # Each preset can define default values for command-line arguments.
@@ -97,6 +131,8 @@ truncation_limits:
 # Command-line arguments will override preset values.
 preset:
   - name: default
+
+  - name: general
     ideas: ${workspace}/ideas.md
     config: ${workspace}/todos.yaml
     provider: codebuddy
@@ -123,5 +159,3 @@ preset:
       scheduler: glm-5.0-ioa
     human_review: true  # When processing ideas, force human review After AI review
     verbose: true
-
-  - name: nothing

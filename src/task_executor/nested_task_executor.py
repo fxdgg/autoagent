@@ -30,10 +30,11 @@ class NestedTaskExecutor:
     2. When all subtasks complete: AI evaluates if main task is done
     """
 
-    def __init__(self, session_dir: str = None, model_roles: dict = None):
-        self.subtask_executor = SubtaskExecutor(session_dir=session_dir, model_roles=model_roles)
+    def __init__(self, session_dir: str = None, model_roles: dict = None, default_max_attempts: int = 5):
+        self.subtask_executor = SubtaskExecutor(session_dir=session_dir, model_roles=model_roles, default_max_attempts=default_max_attempts)
         self.session_dir = session_dir
         self.model_roles = model_roles or {}
+        self.default_max_attempts = default_max_attempts
 
     def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None, project_description: str = "", **kwargs) -> bool:
         """
@@ -50,7 +51,7 @@ class NestedTaskExecutor:
             bool: True if main task completed
         """
         task_id = str(task['id'])
-        max_attempts = task.get('max_attempts', 5)
+        max_attempts = task.get('max_attempts', self.default_max_attempts)
         subtasks = task.get('subtasks', [])
         
         if not subtasks:

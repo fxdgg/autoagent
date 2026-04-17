@@ -41,8 +41,9 @@ class SimpleTaskExecutor:
     until the criteria are met or max attempts are reached.
     """
 
-    def __init__(self, session_dir: str = None):
+    def __init__(self, session_dir: str = None, default_max_attempts: int = 5):
         self.session_dir = session_dir
+        self.default_max_attempts = default_max_attempts
         self.last_response_text = ""
 
     def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, project_description: str = "", **kwargs) -> bool:
@@ -62,7 +63,7 @@ class SimpleTaskExecutor:
             bool: True if task completed successfully
         """
         task_id = str(task['id'])
-        max_attempts = task.get('max_attempts', 5)
+        max_attempts = task.get('max_attempts', self.default_max_attempts)
 
         # Compute round-scoped state key: when called as a subtask
         # (parent_context present), use @round_label suffix; when called

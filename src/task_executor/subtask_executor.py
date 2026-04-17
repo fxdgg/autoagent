@@ -35,16 +35,17 @@ class SubtaskExecutor:
     Dispatches subtask execution based on type (simple or long_running).
     """
 
-    def __init__(self, session_dir: str = None, model_roles: dict = None):
+    def __init__(self, session_dir: str = None, model_roles: dict = None, default_max_attempts: int = 5):
         # Lazy import to break circular dependency:
         # subtask_executor <-> simple_task_executor
         from task_executor.simple_task_executor import SimpleTaskExecutor
-        self.simple_executor = SimpleTaskExecutor(session_dir=session_dir)
+        self.simple_executor = SimpleTaskExecutor(session_dir=session_dir, default_max_attempts=default_max_attempts)
         # Back-reference so SimpleTaskExecutor can delegate long-running
         # handling (poll + callback) when AI uses autoagent-exec in a simple task
         self.simple_executor._subtask_executor = self
         self.session_dir = session_dir
         self.model_roles = model_roles or {}
+        self.default_max_attempts = default_max_attempts
 
     def execute(self, subtask: dict, client: AIClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None) -> SubtaskResult:
         """
@@ -211,7 +212,7 @@ class SubtaskExecutor:
         subtask_id = str(subtask['id'])
         round_label = (parent_context or {}).get('round_label')
         sk = _state_key(subtask, round_label) if round_label else subtask_id
-        max_attempts = subtask.get('max_attempts', 5)
+        max_attempts = subtask.get('max_attempts', self.default_max_attempts)
 
         # Use the session_dir passed from orchestrator
         if not self.session_dir:

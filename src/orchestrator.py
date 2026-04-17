@@ -147,9 +147,7 @@ def _merge_preset_with_args(args, preset):
         'model': 'model',
         'executable': 'executable',
         'workspace': 'workspace',
-        'timeout': 'timeout',
         'log_dir': 'log_dir',
-        'idle_interval': 'idle_interval',
         'include_directories': 'include_directories',
         'test_rules': 'test_rules',
         'verbose': 'verbose',
@@ -157,6 +155,7 @@ def _merge_preset_with_args(args, preset):
         'use_cli': 'use_cli',
         'ideas_only': 'ideas_only',
         'human_review': 'human_review',
+        'mode': 'mode',
     }
     
     # Default values that indicate "not set by user"
@@ -166,7 +165,6 @@ def _merge_preset_with_args(args, preset):
         'config': 'todos.yaml',
         'provider': 'codebuddy',
         'workspace': '.',
-        'idle_interval': 30,
         'verbose': False,
         'no_idle': False,
         'use_cli': False,
@@ -250,6 +248,8 @@ def main():
     config = _load_config()
     default_session_timeout = config.get('session_timeout', 3600)
     default_bash_timeout = config.get('bash_timeout', 300)
+    default_idle_interval = config.get('idle_interval', 30)
+    default_max_attempts = config.get('default_max_attempts', 5)
 
     parser = argparse.ArgumentParser(
         description="AI-driven task execution system (supports CodeBuddy, Claude Code, Gemini CLI)",
@@ -267,6 +267,8 @@ Examples:
 python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no task execution)
     python orchestrator.py --ideas ideas.md --human-review  # Process ideas with human review
   python orchestrator.py --ideas ideas.md                 # Run tasks then idle for ideas (idle is default)
+  python orchestrator.py --mode ai                        # Force AI orchestrator mode
+  python orchestrator.py --mode linear                    # Force linear mode (default)
   python orchestrator.py --list-providers                # List available AI providers
         """,
     )
@@ -280,7 +282,7 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         '--task', '-t',
         type=str,
         default=None,
-        help='Execute only the specified task ID',
+        help='Execute only the specified task ID (not available in AI orchestrator mode)',
     )
     parser.add_argument(
         '--provider', '-P',
@@ -334,10 +336,12 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         help='Working directory (default: current directory)',
     )
     parser.add_argument(
-        '--timeout',
-        type=int,
+        '--mode',
+        choices=['linear', 'ai'],
         default=None,
-        help=f'Session timeout for AI calls in seconds (default: {default_session_timeout}, from config.yaml session_timeout)',
+        help='Execution mode: "linear" (sequential) or "ai" (AI-driven scheduling). '
+             'Default: auto-detect from todos.yaml (ai if ai_orchestrator field is present, '
+             'otherwise linear). If todos.yaml has no ai_orchestrator field, only "linear" is allowed.',
     )
     parser.add_argument(
         '--reset',
@@ -384,12 +388,6 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         help='Disable idle mode. By default, when --ideas is set, the orchestrator '
              'enters idle mode after completing tasks (waiting for new ideas). '
              'Use --no-idle to run once and exit.',
-    )
-    parser.add_argument(
-        '--idle-interval',
-        type=int,
-        default=30,
-        help='Seconds between idle checks for new ideas (default: 30)',
     )
     parser.add_argument(
         '--use-cli',
@@ -569,9 +567,10 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         logger.info(f"Using AI provider: {provider}")
         
         # Create orchestrator
-        # Resolve timeout: CLI arg > config.yaml > fallback
-        effective_session_timeout = args.timeout if args.timeout is not None else default_session_timeout
+        # Timeout and idle_interval are now solely from config.yaml
+        effective_session_timeout = default_session_timeout
         effective_bash_timeout = default_bash_timeout
+        effective_idle_interval = default_idle_interval
         backoff_max = config.get('backoff_max_wait', 300)
 
         orchestrator = TodoOrchestrator(
@@ -582,10 +581,11 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
             bash_timeout=effective_bash_timeout,
             session_dir=_session_dir,
             ideas_file=args.ideas,
-            idle_interval=args.idle_interval,
+            idle_interval=effective_idle_interval,
             use_cli=args.use_cli,
             backoff_max_wait=backoff_max,
             model_roles=model_roles,
+            default_max_attempts=default_max_attempts,
         )
         
         # Handle special commands
@@ -615,8 +615,28 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
             print(f"\n✅ Ideas processing complete.")
             return
 
-        # ── AI Orchestrator mode check ────────────────────────────
-        if orchestrator.ai_orchestrator:
+        # ── Determine execution mode ─────────────────────────────
+        has_ai_orchestrator = orchestrator.ai_orchestrator is not None
+        requested_mode = args.mode  # None, 'linear', or 'ai'
+
+        if requested_mode == 'ai' and not has_ai_orchestrator:
+            print("❌ --mode ai requires 'ai_orchestrator' field in todos.yaml.")
+            print("   Add an ai_orchestrator section to your config or use --mode linear.")
+            sys.exit(1)
+
+        # Resolve effective mode: explicit > auto-detect
+        if requested_mode is not None:
+            effective_mode = requested_mode
+        else:
+            effective_mode = 'ai' if has_ai_orchestrator else 'linear'
+
+        # When --mode linear is forced on a config that has ai_orchestrator,
+        # clear it so all downstream code (run_with_idle, etc.) treats this
+        # as a pure linear run.
+        if effective_mode == 'linear' and has_ai_orchestrator:
+            orchestrator.ai_orchestrator = None
+
+        if effective_mode == 'ai':
             # --task is not supported in AI orchestrator mode
             if args.task:
                 print("❌ --task is not supported in AI orchestrator mode.")
@@ -629,25 +649,27 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
                 # Fresh start — check there's no linear-mode state
                 existing_tasks = orchestrator.state_manager.state.get("tasks", {})
                 if existing_tasks:
-                    # There are task states but no orchestrator state — could be
-                    # leftover from linear mode. Warn but allow (the user may
-                    # have just added ai_orchestrator to an existing config).
                     logger.warning(
                         "Existing task states found without orchestrator state. "
                         "If switching from linear mode, consider --reset first."
                     )
 
-            results = orchestrator.run_ai_scheduled()
+            if idle_mode:
+                # AI orchestrator + idle mode: run_with_idle handles both
+                orchestrator.run_with_idle()
+            else:
+                results = orchestrator.run_ai_scheduled()
 
-            # Finalize conversation logs
-            if orchestrator.conv_logger:
-                orchestrator.conv_logger.finalize()
-                print(f"📝 Conversation logs saved to: {orchestrator.session_dir}")
+                # Finalize conversation logs
+                if orchestrator.conv_logger:
+                    orchestrator.conv_logger.finalize()
+                    print(f"📝 Conversation logs saved to: {orchestrator.session_dir}")
 
-            if results['failed_tasks'] > 0:
-                sys.exit(1)
+                if results['failed_tasks'] > 0:
+                    sys.exit(1)
             return
 
+        # effective_mode == 'linear'
         if idle_mode:
             # Idle mode: run tasks then wait for new ideas
             orchestrator.run_with_idle(

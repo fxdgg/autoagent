@@ -36,10 +36,11 @@ class LoopingTaskExecutor:
     ``max_attempts_per_loop``.
     """
 
-    def __init__(self, session_dir: str = None, model_roles: dict = None):
-        self.subtask_executor = SubtaskExecutor(session_dir=session_dir, model_roles=model_roles)
+    def __init__(self, session_dir: str = None, model_roles: dict = None, default_max_attempts: int = 5):
+        self.subtask_executor = SubtaskExecutor(session_dir=session_dir, model_roles=model_roles, default_max_attempts=default_max_attempts)
         self.session_dir = session_dir
         self.model_roles = model_roles or {}
+        self.default_max_attempts = default_max_attempts
 
     def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None, project_description: str = "", **kwargs) -> bool:
         """
@@ -57,7 +58,7 @@ class LoopingTaskExecutor:
         """
         task_id = str(task['id'])
         repeat_count = task.get('repeat_count', 1)
-        max_attempts_per_loop = task.get('max_attempts_per_loop', 5)
+        max_attempts_per_loop = task.get('max_attempts_per_loop', self.default_max_attempts)
         subtasks = task.get('subtasks', [])
 
         if not subtasks:
