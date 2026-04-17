@@ -35,22 +35,22 @@ You must choose exactly ONE task per round.
         - Task 1: Initialize environment | Type: simple | Executed: 2 time(s)
             Description:
                 Set up the project environment and install all dependencies.
-logs/<SESSION>/task_results/result_1.txt
+            Last Result: See logs/<SESSION>/task_results/result_1.txt
         - Task 2: Run baseline benchmark | Type: simple | Executed: 1 time(s)
             Description:
                 Execute the baseline performance benchmark.
-logs/<SESSION>/task_results/result_2.txt
+            Last Result: See logs/<SESSION>/task_results/result_2.txt
         - Task 3: Optimize core algorithm | Type: simple | Executed: 1 time(s)
             Description:
                 Apply optimization to the core algorithm based on benchmark results.
-logs/<SESSION>/task_results/result_3.txt
+            Last Result: See logs/<SESSION>/task_results/result_3.txt
         - Task 4: Integration validation | Type: nested | Executed: 1 time(s)
             Description:
                 Run integration tests to validate the optimized algorithm.
         - Task 5: Generate final report | Type: simple | Executed: 1 time(s)
             Description:
                 Generate the final optimization report with all results.
-logs/<SESSION>/task_results/result_5.txt
+            Last Result: See logs/<SESSION>/task_results/result_5.txt
 
         IMPORTANT: If a result file is marked as NOTFOUND, it is probably
         due to task failures — the task may have crashed or errored out

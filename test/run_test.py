@@ -244,7 +244,7 @@ def _normalize_log_content(text):
     # Step 2: Strip absolute path prefixes before logs/<SESSION>/:
     #   D:/silasshen/.../logs/<SESSION>/ → logs/<SESSION>/
     text = re.sub(
-        r'(?:[A-Za-z]:)?[^"\n]*/logs/<SESSION>/',
+        r'[A-Za-z]:[^"\s]*/logs/<SESSION>/',
         'logs/<SESSION>/',
         text,
     )

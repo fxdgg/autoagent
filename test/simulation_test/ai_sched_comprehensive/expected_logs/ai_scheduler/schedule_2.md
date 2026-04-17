@@ -35,7 +35,7 @@ You must choose exactly ONE task per round.
         - Task 1: Initialize environment | Type: simple | Executed: 1 time(s)
             Description:
                 Set up the project environment and install all dependencies.
-logs/<SESSION>/task_results/result_1.txt
+            Last Result: See logs/<SESSION>/task_results/result_1.txt
         - Task 2: Run baseline benchmark | Type: simple | Executed: 0 time(s)
             Description:
                 Execute the baseline performance benchmark.
