@@ -1,0 +1,375 @@
+# =============================================================================
+# Test 10: Comprehensive path coverage
+# =============================================================================
+# This configuration is designed to exercise EVERY prompt-building path and
+# recently-fixed feature in both NestedTaskExecutor and LoopingTaskExecutor,
+# ensuring parity between the two executors.
+#
+# ---- Task 1: nested ----
+# Tests: previous_subtask_id headers, _fix_carried through multiple _once
+#        skips, failure_analysis with IDs, failed_subtask_history,
+#        double failure_analysis (Previous Failure Analyses section),
+#        main_task_evaluation round numbering, suggested_fix from eval,
+#        LR-in-simple-task with parent_context, marker nudge after LR callback.
+#
+#   1.1  simple_once      — succeeds, skipped on retry
+#   1.2  long_running_once— succeeds (LR submit + callback), skipped on retry
+#   1.3  simple           — fails (triggers failure_analysis #1, retry_from=1.1)
+#                           → _fix_carried must traverse 1.1 AND 1.2 to reach 1.3
+#   1.4  simple           — fails twice (triggers failure_analysis #2 and #3)
+#                           → #3 has "Previous Failure Analyses" showing #2
+#                           → then succeeds via LR-in-simple + nudge
+#   1.5  simple           — succeeds
+#   Main eval #1          — not completed, retry_from=1.3
+#   1.3'-1.5'             — all succeed
+#   Main eval #2          — completed (Previous Evaluations: "Round 1")
+#
+# ---- Task 2: looping (repeat_count=2) ----
+# Tests: same features in looping executor, loop_info in failure_analysis,
+#        _fix_carried in looping, double failure_analysis in looping,
+#        previous_subtask_id across loops, no fix leak between loops.
+#
+#   Loop 1:
+#     2.1  simple_once    — succeeds, skipped on retry
+#     2.2  simple         — fails twice (FA #1 retry_from=2.1 → _fix_carried,
+#                           FA #2 retry_from=2.2 → Previous Failure Analyses)
+#     2.2'' simple        — succeeds
+#     2.3  simple         — succeeds
+#   Loop 2:
+#     2.1  skipped (once)
+#     2.2  simple         — succeeds (no stale fix leak from loop 1)
+#     2.3  simple         — succeeds
+#
+# ---- Task 7: simple ----
+# Tests: round-scoped description (description@7).
+#        The executor should inject description@7 instead of the root-level
+#        description into <project_description>.
+# =============================================================================
+
+description: >
+  Comprehensive test project exercising all prompt-building paths
+  for nested and looping task executors.
+
+ai_orchestrator:
+  strategy: |
+    Execute tasks sequentially.
+  max_rounds: 10
+  stop_condition: |
+    All tasks completed.
+  last_result:
+    1:
+      type: response
+    2:
+      type: response
+    3:
+      type: response
+    4:
+      type: response
+    5:
+      type: response
+    6:
+      type: response
+    7:
+      type: response
+
+description@7: >
+  Round-scoped description for task 7: validates that the orchestrator
+  selects description@7 over the root-level description.
+
+tasks:
+  # ==========================================================================
+  # Task 1: Nested — full path coverage
+  # ==========================================================================
+  - id: 1
+    name: "Nested comprehensive coverage"
+    description: "Comprehensive nested task testing all prompt-building paths."
+    type: nested
+    max_attempts: 100
+    completion_criteria: |
+      All subtasks completed with optimized performance.
+      Processing pipeline produces correct output.
+
+    subtasks:
+      - id: 1.1
+        name: "One-time environment setup"
+        type: simple_once
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Environment configured and dependencies installed.
+        initial_hint: |
+          Install dependencies and set up the build environment.
+
+      - id: 1.2
+        name: "One-time data preparation"
+        type: long_running_once
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Data pipeline executed, output files generated.
+        initial_hint: |
+          Run the data preparation pipeline using autoagent-exec.
+
+      - id: 1.3
+        name: "Core processing"
+        type: simple
+        max_attempts: 1
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Processing completed with correct output.
+        initial_hint: |
+          Run the core processing pipeline.
+
+      - id: 1.4
+        name: "Benchmark and validate"
+        type: simple
+        max_attempts: 1
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Benchmark results recorded and correctness validated.
+        initial_hint: |
+          Run benchmarks and validation checks.
+
+      - id: 1.5
+        name: "Commit results"
+        type: simple
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Results committed to git.
+        initial_hint: |
+          Git add and commit the results.
+
+  # ==========================================================================
+  # Task 2: Looping — full path coverage for looping executor
+  # ==========================================================================
+  - id: 2
+    name: "Looping comprehensive coverage"
+    description: "Comprehensive looping task testing all prompt-building paths."
+    type: looping
+    repeat_count: 2
+    max_attempts_per_loop: 3
+    completion_criteria: |
+      Both iterations completed successfully with correct output.
+
+    subtasks:
+      - id: 2.1
+        name: "Iteration setup"
+        type: simple_once
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Setup completed for this iteration.
+        initial_hint: |
+          Initialize the iteration environment.
+
+      - id: 2.2
+        name: "Process data"
+        type: simple
+        max_attempts: 1
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Data processed correctly.
+        initial_hint: |
+          Run the data processing step.
+
+      - id: 2.3
+        name: "Verify output"
+        type: simple
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Output verified and saved.
+        initial_hint: |
+          Run verification on the output.
+
+  # ==========================================================================
+  # Task 3: Nested — Edge case coverage (long_running non-once, FA no prev)
+  # ==========================================================================
+  - id: 3
+    name: "Nested edge case coverage"
+    description: "Nested task testing edge cases with long_running subtasks."
+    type: nested
+    max_attempts: 100
+    completion_criteria: |
+      All subtasks completed with validated results.
+
+    subtasks:
+      - id: 3.1
+        name: "Build artifacts"
+        type: long_running
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Build artifacts generated successfully.
+        initial_hint: |
+          Run the build pipeline using autoagent-exec.
+
+      - id: 3.2
+        name: "Run integration tests"
+        type: simple
+        max_attempts: 1
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Integration tests passed.
+        initial_hint: |
+          Execute the integration test suite.
+
+      - id: 3.3
+        name: "Deploy staging"
+        type: long_running
+        max_attempts: 2
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Staging deployment verified and healthy.
+        initial_hint: |
+          Deploy to staging environment using autoagent-exec.
+
+      - id: 3.4
+        name: "Smoke test staging"
+        type: simple
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Smoke tests passed on staging.
+        initial_hint: |
+          Run smoke tests against the staging deployment.
+
+  # ==========================================================================
+  # Task 4: Looping — max_attempts exhaustion with long_running subtask
+  # ==========================================================================
+  - id: 4
+    name: "Looping max attempts exhaustion"
+    description: "Looping task testing max_attempts exhaustion with long_running subtask."
+    type: looping
+    repeat_count: 2
+    max_attempts_per_loop: 2
+    completion_criteria: |
+      Both iterations completed with passing validation.
+
+    subtasks:
+      - id: 4.1
+        name: "Generate report"
+        type: long_running
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Report generated with correct data.
+        initial_hint: |
+          Run the report generation pipeline using autoagent-exec.
+
+      - id: 4.2
+        name: "Validate report"
+        type: simple
+        max_attempts: 1
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Report validation passed.
+        initial_hint: |
+          Validate the generated report.
+
+  # ==========================================================================
+  # Task 5: Nested - invalid JSON fallback coverage
+  # ==========================================================================
+  - id: 5
+    name: "Nested invalid JSON fallback coverage"
+    description: "Nested task testing invalid JSON fallback handling."
+    type: nested
+    max_attempts: 3
+    completion_criteria: |
+      All subtasks completed and fallback handling validated.
+
+    subtasks:
+      - id: 5.1
+        name: "Prepare fallback scenario"
+        type: simple
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Fallback test inputs prepared.
+        initial_hint: |
+          Prepare the fallback validation scenario.
+
+      - id: 5.2
+        name: "Run fragile transformation"
+        type: simple
+        max_attempts: 1
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Transformation completed with validated output.
+        initial_hint: |
+          Run the transformation step that may require fallback handling.
+
+      - id: 5.3
+        name: "Verify fallback output"
+        type: simple
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Verification completed successfully.
+        initial_hint: |
+          Verify the transformed output.
+
+  # ==========================================================================
+  # Task 6: Nested - prompt truncation coverage
+  # ==========================================================================
+  - id: 6
+    name: "Prompt truncation coverage"
+    description: "Nested task testing prompt truncation with oversized context."
+    type: nested
+    max_attempts: 100
+    completion_criteria: |
+      Oversized context handled safely and final output validated.
+
+    subtasks:
+      - id: 6.1
+        name: "Generate oversized prior context"
+        type: simple
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Oversized diagnostic context generated.
+        initial_hint: |
+          Generate a deliberately oversized diagnostic note for downstream truncation tests.
+
+      - id: 6.2
+        name: "Retry with truncated context"
+        type: simple
+        max_attempts: 2
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Retry succeeds after analyzing truncated context.
+        initial_hint: |
+          Use the oversized context to debug and complete the task.
+
+      - id: 6.3
+        name: "Finalize truncation validation"
+        type: simple
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Final validation recorded.
+        initial_hint: |
+          Summarize the truncation validation results.
+
+  # ==========================================================================
+  # Task 7: Simple — round-scoped description coverage
+  # ==========================================================================
+  # Tests: description@7 is used in <project_description> instead of root
+  #        description. Verifies _get_description_for_task() selects correctly.
+  - id: 7
+    name: "Round-scoped description validation"
+    description: "Simple task testing round-scoped description selection."
+    type: simple
+    completion_criteria: |
+      Round-scoped description verified in prompt context.
+    initial_hint: |
+      Verify that description@7 appears in the project context.

@@ -19,7 +19,7 @@ import shutil
 import yaml
 
 
-def _normalize_log_content(text):
+def _normalize_log_content(text, project_root=None):
     """Normalize session-specific paths in conversation log content."""
     text = text.replace("\\", "/")
     text = re.sub(
@@ -42,6 +42,11 @@ def _normalize_log_content(text):
         'logs/<SESSION>/',
         text,
     )
+    # Step 3: Replace project_root absolute path with <PROJECT_ROOT>
+    #   (for type=file last_result paths)
+    if project_root:
+        pr = project_root.replace("\\", "/")
+        text = text.replace(pr, "<PROJECT_ROOT>")
     return text
 
 
@@ -100,7 +105,7 @@ def main():
         with open(src_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        norm_content = _normalize_log_content(content)
+        norm_content = _normalize_log_content(content, project_root=dst_base)
 
         with open(dst_path, "w", encoding="utf-8") as f:
             f.write(norm_content)

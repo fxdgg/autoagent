@@ -5,16 +5,22 @@
 #
 #   1. Basic scheduling decision (available_tasks, strategy, stop_condition)
 #   2. schedule_history accumulation across rounds
-#   3. last_result type=response (tasks 1, 2, 3, 5)
-#   4. last_result type=none (task 4 — no last_result config)
-#   5. Task failure + continued scheduling (task 2 fails)
-#   6. Repeated task execution (task 1 executed in round 1 and round 5)
-#   7. Nested task in AI scheduling mode (task 4)
-#   8. NOTFOUND marker for unexecuted tasks
-#   9. Normal stop (scheduler decides to stop, not max_rounds exhaustion)
-#  10. description@N in AI mode (task 5 uses description@5)
-#  11. orchestrator state completeness (current_round, status,
+#   3. last_result type=response (task 1)
+#   4. last_result type=file, single file, found (task 3)
+#   5. last_result type=file, single file, NOT found (task 2)
+#   6. last_result type=file, multiple files, mixed found/not-found (task 5)
+#   7. last_result type=none (task 4 — no last_result config)
+#   8. Task failure + continued scheduling (task 2 fails)
+#   9. Repeated task execution (task 1 executed in round 1 and round 5)
+#  10. Nested task in AI scheduling mode (task 4)
+#  11. NOTFOUND marker for unexecuted tasks
+#  12. Normal stop (scheduler decides to stop, not max_rounds exhaustion)
+#  13. description@N in AI mode (task 5 uses description@5)
+#  14. orchestrator state completeness (current_round, status,
 #      schedule_history, task_execution_counts)
+#
+# NOTE: {{PROJECT_ROOT}} is replaced with the actual absolute path at
+#       test time by run_test.py's _prepare_todos_yaml() function.
 #
 # Expected scheduling sequence (from test_rules_k7.txt):
 #   Round 1: execute task 1 → ✅ success
@@ -41,12 +47,17 @@ ai_orchestrator:
     1:
       type: response
     2:
-      type: response
+      type: file
+      path: "{{PROJECT_ROOT}}/result_files/result_2.txt"
     3:
-      type: response
+      type: file
+      path: "{{PROJECT_ROOT}}/result_files/result_3.txt"
     # Task 4: no last_result config (type=none by default)
     5:
-      type: response
+      type: file
+      path:
+        - "{{PROJECT_ROOT}}/result_files/report_final.txt"
+        - "{{PROJECT_ROOT}}/result_files/report_missing.txt"
 
 description@5: >
   Round-scoped description for task 5: validates that the AI scheduler

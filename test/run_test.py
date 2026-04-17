@@ -136,6 +136,26 @@ def reset_test(project_root, log_dir):
             shutil.rmtree(target)
 
 
+def _prepare_todos_yaml(project_root):
+    """Substitute ``{{PROJECT_ROOT}}`` in todos.yaml with the real path.
+
+    This allows ``type=file`` last_result paths to use a portable
+    placeholder in the committed todos.yaml while resolving to an
+    absolute path at test time.
+    """
+    todos_path = os.path.join(project_root, "todos.yaml")
+    if not os.path.isfile(todos_path):
+        return
+    with open(todos_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    if "{{PROJECT_ROOT}}" not in content:
+        return
+    abs_root = project_root.replace("\\", "/")
+    content = content.replace("{{PROJECT_ROOT}}", abs_root)
+    with open(todos_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
 def find_session_dir(project_root, log_dir):
     """Find the session directory created by the orchestrator.
 
@@ -215,12 +235,17 @@ def run_orchestrator(project_root, autoagent_dir, test_schema, test_num, log_dir
         return 130, None
 
 
-def _normalize_log_content(text):
+def _normalize_log_content(text, project_root=None):
     """Normalize session-specific paths in conversation log content.
 
     Replaces absolute paths to autoagent-exec.bat with a stable placeholder
     and normalizes variable runtime values (PIDs, log file paths) so that
     logs from different runs can be compared.
+
+    Args:
+        project_root: If provided, replace this absolute path with
+                      ``<PROJECT_ROOT>`` so that ``type=file`` last_result
+                      paths become machine-independent.
     """
     text = text.replace("\\", "/")
     # Replace quoted autoagent-exec paths:
@@ -248,6 +273,11 @@ def _normalize_log_content(text):
         'logs/<SESSION>/',
         text,
     )
+    # Step 3: Replace project_root absolute path with <PROJECT_ROOT>
+    #   (for type=file last_result paths)
+    if project_root:
+        pr = project_root.replace("\\", "/")
+        text = text.replace(pr, "<PROJECT_ROOT>")
     return text
 
 
@@ -353,9 +383,9 @@ def compare_conversation_logs(session_dir, project_root, scope=None):
                 continue
 
             with open(expected_path, "r", encoding="utf-8") as f:
-                expected_text = _normalize_log_content(f.read())
+                expected_text = _normalize_log_content(f.read(), project_root=project_root)
             with open(actual_path, "r", encoding="utf-8") as f:
-                actual_text = _normalize_log_content(f.read())
+                actual_text = _normalize_log_content(f.read(), project_root=project_root)
 
             if expected_text != actual_text:
                 # Find first difference for diagnostics
@@ -728,6 +758,9 @@ Examples:
         print(f"  Resetting...", end=" ", flush=True)
         reset_test(project_root, log_dir)
         print(f"done")
+
+        # Substitute {{PROJECT_ROOT}} in todos.yaml (for type=file paths)
+        _prepare_todos_yaml(project_root)
 
         # Build extra_args (resolve relative paths)
         extra_args = []

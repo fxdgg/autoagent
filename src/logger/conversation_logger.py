@@ -481,10 +481,10 @@ class ConversationLogger:
             # Extract schedule round: schedule_N_...
             sm = re.search(r'schedule_(\d+)_', fname)
             sched = int(sm.group(1)) if sm else 0
-            m = re.search(r'_round_([\d.]+)', fname)
+            m = re.search(r'_round_(\d+(?:\.\d+)*)', fname)
             round_str = m.group(1) if m else '0'
             # Parse dotted round like 1.2 into tuple (1, 2)
-            parts = tuple(int(x) for x in round_str.split('.'))
+            parts = tuple(int(x) for x in round_str.split('.') if x)
             return (sched,) + parts
         files.sort(key=_sort_key)
         return files
@@ -515,9 +515,9 @@ class ConversationLogger:
                 order = 3
             sm = re.search(r'schedule_(\d+)_', fname)
             sched = int(sm.group(1)) if sm else 0
-            m = re.search(r'_round_([\d.]+)', fname)
+            m = re.search(r'_round_(\d+(?:\.\d+)*)', fname)
             round_str = m.group(1) if m else '0'
-            parts = tuple(int(x) for x in round_str.split('.'))
+            parts = tuple(int(x) for x in round_str.split('.') if x)
             return (order, sched) + parts
         files.sort(key=_sort_key)
         return files

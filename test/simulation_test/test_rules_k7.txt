@@ -3,7 +3,11 @@
 # =============================================================================
 # Exercises all scheduler prompt-building paths:
 #   - schedule_history accumulation
-#   - last_result (type=response, type=none)
+#   - last_result type=response (task 1)
+#   - last_result type=file, single file found (task 3)
+#   - last_result type=file, single file NOT found (task 2)
+#   - last_result type=file, multiple files mixed found/not-found (task 5)
+#   - last_result type=none (task 4)
 #   - task failure + continued scheduling
 #   - repeated task execution
 #   - nested task in AI scheduling mode
