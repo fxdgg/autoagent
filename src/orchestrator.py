@@ -16,6 +16,7 @@ import argparse
 import yaml
 
 from orchestrator.linear_orchestrator import TodoOrchestrator
+from orchestrator.orchestrator_common import SessionHelper
 from ai_client.ai_providers import (
     get_provider,
     list_providers,
@@ -214,8 +215,8 @@ def _list_sessions(log_dir: str, workspace: str):
         print(f"No sessions found in {log_dir}/")
         return
 
-    # Determine active session for this workspace
-    active_subdir = TodoOrchestrator._read_marker(workspace)
+    # Determine the latest session for this workspace (replaces .autoagent_log marker)
+    active_subdir = SessionHelper.find_latest_session_for_workspace(log_dir, workspace)
 
     print(f"\nSessions in {log_dir}/\n")
     print(f"{'Workspace':<50s} {'Session ID':<40s} {'Created':<22s} {'Status'}")
@@ -232,9 +233,9 @@ def _list_sessions(log_dir: str, workspace: str):
         session_path = os.path.join(log_dir, sid)
         status = TodoOrchestrator._get_session_status(session_path)
 
-        # Mark active session
+        # Mark latest session for this workspace
         if sid == active_subdir:
-            status += " (active)"
+            status += " (latest)"
 
         print(f"{ws_display:<50s} {sid:<40s} {created:<22s} {status}")
 
@@ -335,7 +336,7 @@ Examples:
     session.add_argument(
         '--continue', dest='continue_session',
         action='store_true',
-        help='Continue from the current session (reads .autoagent_log)',
+        help='Continue from the latest session for this workspace (from sessions.csv)',
     )
     session.add_argument(
         '--resume', dest='resume_session',
@@ -346,6 +347,14 @@ Examples:
         '--list-sessions',
         action='store_true',
         help='List all sessions and exit',
+    )
+    session.add_argument(
+        '--rename',
+        nargs=2,
+        metavar=('OLD_DIR', 'NEW_DIR'),
+        default=None,
+        help='Rename workspace path in sessions.csv. Updates all entries '
+             'whose workspace matches OLD_DIR to NEW_DIR, then exits.',
     )
 
     # ── Provider & Model ──────────────────────────────
@@ -497,6 +506,17 @@ Examples:
     _log_dir_abs = os.path.abspath(_log_dir_raw) if _log_dir_raw else os.path.abspath(".autoagent")
     _workspace_abs = os.path.abspath(args.workspace)
 
+    # ── Handle --rename early (before session resolution) ──
+    if args.rename:
+        old_dir = os.path.abspath(args.rename[0])
+        new_dir = os.path.abspath(args.rename[1])
+        count = SessionHelper.update_workspace_in_csv(_log_dir_abs, old_dir, new_dir)
+        if count:
+            print(f"✅ Updated {count} session(s): {old_dir} → {new_dir}")
+        else:
+            print(f"⚠️  No sessions found with workspace: {old_dir}")
+        return
+
     # ── Handle --list-sessions early (before session resolution) ──
     if args.list_sessions:
         _list_sessions(_log_dir_abs, _workspace_abs)
@@ -523,6 +543,10 @@ Examples:
             _log_dir_abs, _workspace_abs, mode="new"
         )
     os.makedirs(_session_dir, exist_ok=True)
+
+    # Print the resolved session ID
+    _session_id = os.path.basename(_session_dir)
+    print(f"📌 Session: {_session_id}")
 
     # Setup logging – orchestrator.log goes into the session directory
     setup_logging(

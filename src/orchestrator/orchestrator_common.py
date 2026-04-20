@@ -142,6 +142,9 @@ class SessionHelper:
     def read_marker(workspace: str) -> str:
         """Read the session subdir name from ``.autoagent_log``.
 
+        .. deprecated:: Use ``find_latest_session_for_workspace`` instead.
+           Kept only for backward compatibility with tests.
+
         Returns the name (e.g. ``cufftdx_optimization_4jvowsl3``)
         or empty string if the marker doesn't exist or is empty.
         """
@@ -156,7 +159,11 @@ class SessionHelper:
 
     @staticmethod
     def write_marker(workspace: str, subdir_name: str):
-        """Write *subdir_name* into ``<workspace>/.autoagent_log``."""
+        """Write *subdir_name* into ``<workspace>/.autoagent_log``.
+
+        .. deprecated:: No longer used by the main orchestrator.
+           Kept only for backward compatibility with tests.
+        """
         marker = os.path.join(workspace, ".autoagent_log")
         try:
             with open(marker, "w", encoding="utf-8") as f:
@@ -204,6 +211,56 @@ class SessionHelper:
         return rows
 
     @staticmethod
+    def find_latest_session_for_workspace(log_dir: str, workspace: str) -> str:
+        """Find the most recent session for *workspace* from ``sessions.csv``.
+
+        Returns the ``session_id`` string, or empty string if none found.
+        """
+        rows = SessionHelper.load_sessions_csv(log_dir)
+        norm_ws = os.path.normcase(os.path.normpath(workspace))
+        best = ""
+        for row in rows:
+            row_ws = os.path.normcase(os.path.normpath(row.get("workspace", "")))
+            if row_ws == norm_ws:
+                best = row.get("session_id", "")
+        return best
+
+    @staticmethod
+    def update_workspace_in_csv(
+        log_dir: str, old_workspace: str, new_workspace: str,
+    ) -> int:
+        """Replace *old_workspace* with *new_workspace* in ``sessions.csv``.
+
+        Returns the number of rows updated.
+        """
+        csv_path = os.path.join(log_dir, SessionHelper.SESSIONS_FILE)
+        if not os.path.isfile(csv_path):
+            return 0
+        rows = SessionHelper.load_sessions_csv(log_dir)
+        norm_old = os.path.normcase(os.path.normpath(old_workspace))
+        count = 0
+        for row in rows:
+            row_ws = os.path.normcase(os.path.normpath(row.get("workspace", "")))
+            if row_ws == norm_old:
+                row["workspace"] = os.path.normpath(new_workspace)
+                count += 1
+        if count:
+            try:
+                with open(csv_path, "w", encoding="utf-8", newline="") as f:
+                    writer = csv.writer(f, delimiter="\t")
+                    writer.writerow(["session_id", "workspace", "created_at"])
+                    for row in rows:
+                        writer.writerow([
+                            row.get("session_id", ""),
+                            row.get("workspace", ""),
+                            row.get("created_at", ""),
+                        ])
+            except Exception as e:
+                logger.warning(f"Failed to update {csv_path}: {e}")
+                return 0
+        return count
+
+    @staticmethod
     def resolve_session_dir(
         log_dir: str,
         workspace: str,
@@ -227,11 +284,37 @@ class SessionHelper:
         sh = SessionHelper
 
         if mode == "continue":
-            subdir = sh.read_marker(workspace)
+            # Look up the latest session for this workspace from sessions.csv
+            subdir = sh.find_latest_session_for_workspace(log_dir, workspace)
             if not subdir:
-                print("❌ No active session found (.autoagent_log missing or empty).")
-                print("   Use --resume <session_id> or run without --continue to start fresh.")
-                sys.exit(1)
+                # Workspace not found – maybe the folder was moved.
+                # Ask the user whether to supply the old path so we can
+                # update sessions.csv, or just start fresh.
+                print("⚠️  No session found for this workspace in sessions.csv.")
+                print(f"   Current workspace: {workspace}")
+                print()
+                print("   The workspace folder may have been moved or renamed.")
+                print("   If you know the OLD path that was used when the session")
+                print("   was created, enter it below and sessions.csv will be updated.")
+                print("   Otherwise, press Enter to exit.")
+                print()
+                try:
+                    old_path = input("   Old workspace path (or Enter to exit): ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    old_path = ""
+                if old_path:
+                    old_path = os.path.abspath(old_path)
+                    count = sh.update_workspace_in_csv(log_dir, old_path, workspace)
+                    if count:
+                        print(f"   ✅ Updated {count} session(s): {old_path} → {workspace}")
+                        # Retry lookup after the update
+                        subdir = sh.find_latest_session_for_workspace(log_dir, workspace)
+                    else:
+                        print(f"   ⚠️  No sessions matched the old path: {old_path}")
+                if not subdir:
+                    print("❌ Still no session found for this workspace.")
+                    print("   Use --resume <session_id> or run without --continue to start fresh.")
+                    sys.exit(1)
             session_dir = os.path.join(log_dir, subdir)
             if not os.path.isdir(session_dir):
                 print(f"❌ Session directory not found: {session_dir}")
@@ -259,7 +342,8 @@ class SessionHelper:
                             matches.append(d)
             if not matches:
                 print(f"❌ Session '{resume_id}' not found.")
-                print(f"   Use --list-sessions to see available sessions.")
+                print(f"   Please check the session ID, or use --list-sessions to see available sessions.")
+                print(f"   You can also remove the --resume flag to start a fresh session.")
                 sys.exit(1)
             if len(matches) > 1:
                 print(f"❌ Ambiguous session ID '{resume_id}', matches: {matches}")
@@ -270,13 +354,10 @@ class SessionHelper:
             if not os.path.isdir(session_dir):
                 print(f"❌ Session directory not found: {session_dir}")
                 sys.exit(1)
-            # Update .autoagent_log to point to this session
-            sh.write_marker(workspace, subdir)
             return session_dir
 
         # mode == "new"
         subdir = sh.generate_session_name(workspace)
-        sh.write_marker(workspace, subdir)
         sh.append_sessions_csv(log_dir, subdir, workspace)
         return os.path.join(log_dir, subdir)
 

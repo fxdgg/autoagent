@@ -71,10 +71,12 @@ class TodoOrchestrator(AISchedulerMixin):
     # ── Session management (delegated to SessionHelper) ─────────
 
     _generate_session_name = staticmethod(SessionHelper.generate_session_name)
-    _read_marker = staticmethod(SessionHelper.read_marker)
-    _write_marker = staticmethod(SessionHelper.write_marker)
+    _read_marker = staticmethod(SessionHelper.read_marker)       # deprecated
+    _write_marker = staticmethod(SessionHelper.write_marker)     # deprecated
     _append_sessions_csv = staticmethod(SessionHelper.append_sessions_csv)
     _load_sessions_csv = staticmethod(SessionHelper.load_sessions_csv)
+    _find_latest_session_for_workspace = staticmethod(SessionHelper.find_latest_session_for_workspace)
+    _update_workspace_in_csv = staticmethod(SessionHelper.update_workspace_in_csv)
     resolve_session_dir = staticmethod(SessionHelper.resolve_session_dir)
     _get_session_status = staticmethod(SessionHelper.get_session_status)
 
@@ -111,7 +113,7 @@ class TodoOrchestrator(AISchedulerMixin):
                 ``resolve_session_dir()`` to compute this.
             log_dir: Root directory for all output files.  Only used when
                 ``session_dir`` is None (fallback: resolve via
-                ``.autoagent_log`` marker — for backward compat with tests).
+                ``sessions.csv`` lookup).
             ideas_file: Path to ideas.md file (None to disable ideas watching)
             idle_interval: Seconds between idle checks for new ideas (default: 30)
             use_cli: If True, use CLI subprocess instead of CodeBuddy Agent SDK
@@ -146,12 +148,14 @@ class TodoOrchestrator(AISchedulerMixin):
         if session_dir:
             self.session_dir = session_dir
         else:
-            # Fallback for tests and simple usage: read .autoagent_log
+            # Fallback for tests and simple usage: look up sessions.csv
             if log_dir is None:
                 log_dir = os.path.abspath(".autoagent")
             else:
                 log_dir = os.path.abspath(log_dir)
-            subdir = self._read_marker(self.workspace)
+            subdir = SessionHelper.find_latest_session_for_workspace(
+                log_dir, self.workspace
+            )
             if subdir:
                 self.session_dir = os.path.join(log_dir, subdir)
             else:
@@ -774,12 +778,6 @@ class TodoOrchestrator(AISchedulerMixin):
         if os.path.exists(self.session_dir):
             shutil.rmtree(self.session_dir)
             print(f"  Removed: {self.session_dir}")
-
-        # Remove the .autoagent_log marker so a fresh session is created next run
-        marker_file = os.path.join(self.workspace, ".autoagent_log")
-        if os.path.exists(marker_file):
-            os.remove(marker_file)
-            print(f"  Removed: {marker_file}")
 
         print("✅ All task states have been reset.")
 

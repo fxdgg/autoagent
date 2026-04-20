@@ -95,7 +95,7 @@ def reset_test(project_root, log_dir):
     """Reset a test project to clean state.
 
     1. Git checkout + clean to restore tracked files and remove untracked ones
-    2. Remove the log session directory (from .autoagent_log marker)
+    2. Remove the log session directory (from sessions.csv)
     """
     # Git reset
     subprocess.run("git checkout -- .", shell=True, cwd=project_root,
@@ -103,7 +103,29 @@ def reset_test(project_root, log_dir):
     subprocess.run("git clean -fd", shell=True, cwd=project_root,
                     capture_output=True)
 
-    # Clean log session
+    # Clean log sessions for this project
+    csv_path = os.path.join(log_dir, "sessions.csv")
+    if os.path.exists(csv_path):
+        import csv as csv_mod
+        norm_ws = os.path.normcase(os.path.normpath(project_root))
+        try:
+            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                reader = csv_mod.DictReader(f, delimiter="\t")
+                for row in reader:
+                    row_ws = os.path.normcase(os.path.normpath(row.get("workspace", "")))
+                    if row_ws == norm_ws:
+                        subdir_name = row.get("session_id", "")
+                        if subdir_name:
+                            session_dir = os.path.join(log_dir, subdir_name)
+                            if os.path.exists(session_dir):
+                                try:
+                                    shutil.rmtree(session_dir)
+                                except OSError as e:
+                                    print(f"warning: failed to remove session dir {session_dir}: {e}")
+        except Exception:
+            pass
+
+    # Also clean via .autoagent_log marker for backward compatibility
     marker = os.path.join(project_root, ".autoagent_log")
     if os.path.exists(marker):
         try:
@@ -143,10 +165,31 @@ def reset_test(project_root, log_dir):
 def find_session_dir(project_root, log_dir):
     """Find the session directory created by the orchestrator.
 
-    Reads the .autoagent_log marker in project_root to get the session
-    subdirectory name, then joins it with log_dir.
+    Searches sessions.csv for the latest session matching this workspace.
+    Falls back to reading .autoagent_log marker for backward compatibility.
     Returns the absolute path, or None if not found.
     """
+    # Primary: look up sessions.csv
+    csv_path = os.path.join(log_dir, "sessions.csv")
+    if os.path.exists(csv_path):
+        import csv as csv_mod
+        norm_ws = os.path.normcase(os.path.normpath(project_root))
+        best_sid = None
+        try:
+            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                reader = csv_mod.DictReader(f, delimiter="\t")
+                for row in reader:
+                    row_ws = os.path.normcase(os.path.normpath(row.get("workspace", "")))
+                    if row_ws == norm_ws:
+                        best_sid = row.get("session_id", "")
+        except Exception:
+            pass
+        if best_sid:
+            session_dir = os.path.join(log_dir, best_sid)
+            if os.path.isdir(session_dir):
+                return session_dir
+
+    # Fallback: read .autoagent_log marker (backward compatibility)
     marker = os.path.join(project_root, ".autoagent_log")
     if not os.path.exists(marker):
         return None
@@ -446,7 +489,7 @@ def verify_test(test_case, session_dir, actual_exit_code):
 
     # 3. Check todos_state.yaml
     if session_dir is None:
-        errors.append("Session directory not found (no .autoagent_log marker)")
+        errors.append("Session directory not found (no matching session in sessions.csv)")
         return len(errors) == 0, errors
 
     state_file = os.path.join(session_dir, "todos_state.yaml")
