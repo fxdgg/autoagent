@@ -144,12 +144,14 @@ class IdeasDecomposerMixin:
             # issues carried over from a previous failed session.
             parsed_data = None
             result = ""
+            mode = self._detect_mode()
             for plan_attempt in range(1, self.max_plan_retries + 1):
                 prompt = build_ideas_decompose_prompt(
                     idea_content=idea['content'],
                     next_id=next_id,
                     temp_tasks_path=temp_tasks_path,
                     existing_todos_yaml=existing_todos_yaml,
+                    mode=mode,
                 )
 
                 try:

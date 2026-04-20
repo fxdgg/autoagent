@@ -21,6 +21,7 @@ def build_ideas_review_prompt(
     temp_tasks_path: str,
     next_id: int = 1,
     existing_todos_yaml: str = "",
+    mode: str = "linear",
 ) -> str:
     """Build the prompt that asks a reviewer AI to evaluate generated tasks.
 
@@ -32,8 +33,9 @@ def build_ideas_review_prompt(
         temp_tasks_path: File path where corrected YAML should be written.
         next_id: Starting task ID for this batch (used for ID validation context).
         existing_todos_yaml: Serialized YAML of existing todos (read-only context).
+        mode: Execution mode — ``"linear"`` or ``"ai"``.
     """
-    task_design_guide = load_task_design_guide()
+    task_design_guide = load_task_design_guide(mode)
 
     # Reviewer role is fixed — do NOT use the user-configured
     # system_prompt_prefix here, because the reviewer must be an

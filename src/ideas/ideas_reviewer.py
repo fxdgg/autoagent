@@ -236,6 +236,7 @@ class IdeasReviewerMixin:
             temp_tasks_path=temp_tasks_path,
             next_id=next_id,
             existing_todos_yaml=existing_todos_yaml,
+            mode=self._detect_mode(),
         )
 
         try:

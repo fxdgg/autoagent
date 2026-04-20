@@ -17,6 +17,7 @@ def build_ideas_decompose_prompt(
     next_id: int,
     temp_tasks_path: str,
     existing_todos_yaml: str = "",
+    mode: str = "linear",
 ) -> str:
     """Build the prompt that asks AI to decompose an idea into TODO tasks.
 
@@ -25,8 +26,9 @@ def build_ideas_decompose_prompt(
         next_id: The starting integer ID for new top-level tasks.
         temp_tasks_path: Path where the AI should write the YAML output.
         existing_todos_yaml: Serialized YAML of existing todos (read-only context).
+        mode: Execution mode — ``"linear"`` or ``"ai"``.
     """
-    task_design_guide = load_task_design_guide()
+    task_design_guide = load_task_design_guide(mode)
 
     # Truncate idea content if necessary
     if len(idea_content) > limits.get('max'):

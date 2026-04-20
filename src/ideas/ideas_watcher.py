@@ -120,6 +120,19 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
         self.max_validation_retries = ideas_cfg['max_validation_retries']
         self.max_plan_retries = ideas_cfg['max_plan_retries']
 
+    # ── Mode detection ──────────────────────────────────────────────────
+
+    def _detect_mode(self) -> str:
+        """Detect execution mode from todos.yaml.
+
+        Returns ``"ai"`` if the config contains an ``ai_orchestrator`` key,
+        otherwise ``"linear"``.
+        """
+        config = self._load_existing_config()
+        if config.get('ai_orchestrator'):
+            return "ai"
+        return "linear"
+
     # ── Plans state management ──────────────────────────────────────────
 
     def _load_plans_state(self) -> dict:
