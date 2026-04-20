@@ -80,7 +80,7 @@ tasks:
 | `ai_orchestrator.last_result` | dict | ❌ | `{}` | 每个 task 的最近结果文件配置 |
 | `ai_orchestrator.last_result.<id>.type` | string | ✅ | - | `"none"` / `"response"` / `"file"` |
 | `ai_orchestrator.last_result.<id>.path` | string \| list[string] | 条件必填 | - | `type=file` 时需要；支持 `${workspace}` 占位符 |
-| `tasks[].description` | string | ✅（AI 调度模式） | 回退到 task name | 对 task 的详细描述，供调度 AI 了解任务内容 |
+| `tasks[].description` | string | ✅（AI 调度模式） | 无 | 对 task 的详细描述，供调度 AI 了解任务内容 |
 
 ### 2.3 `${workspace}` 路径占位符
 

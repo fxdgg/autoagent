@@ -253,6 +253,24 @@ class TodoOrchestrator(AISchedulerMixin):
             self.ai_orchestrator = None
 
         # Validate each task
+        # ── Validate top-level task ID ordering (linear mode only) ──
+        # In AI scheduling mode, tasks can be executed in any order and
+        # the user may intentionally define them out of sequence.
+        if self.ai_orchestrator is None:
+            prev_top_id: int | None = None
+            for task in tasks:
+                raw = task.get('id')
+                if raw is not None:
+                    str_id = str(raw)
+                    if str_id.isdigit():
+                        tid = int(str_id)
+                        if prev_top_id is not None and tid <= prev_top_id:
+                            raise ConfigError(
+                                f"Top-level task IDs must be linearly increasing: "
+                                f"ID {tid} is not greater than previous ID {prev_top_id}"
+                            )
+                        prev_top_id = tid
+
         for task in tasks:
             self._validate_task(task)
         
@@ -349,13 +367,16 @@ class TodoOrchestrator(AISchedulerMixin):
 
     # ── _validate_ai_orchestrator → ai_orchestrator.AISchedulerMixin
 
-    def _validate_task(self, task: dict, is_subtask: bool = False):
+    def _validate_task(self, task: dict, is_subtask: bool = False,
+                       parent_id: str = None):
         """
         Validate a task configuration.
         
         Args:
             task: Task configuration dict
             is_subtask: Whether this is a subtask
+            parent_id: The parent task's ID string (used to validate subtask
+                ID prefix). ``None`` for top-level tasks.
             
         Raises:
             ConfigError: If validation fails
@@ -369,6 +390,47 @@ class TodoOrchestrator(AISchedulerMixin):
                 )
         
         task_type = task['type']
+
+        # ── Validate ID format ────────────────────────────────────
+        raw_id = task.get('id')
+        if raw_id is not None:
+            str_id = str(raw_id)
+            parts = str_id.split('.')
+            if is_subtask:
+                # Subtask ID must be X.Y (or deeper, e.g. X.Y.Z)
+                if len(parts) < 2:
+                    raise ConfigError(
+                        f"Subtask ID '{str_id}' must use dot notation "
+                        f"(e.g. '{parent_id}.1') but got a single-level ID"
+                    )
+                # Every component must be a positive integer
+                for i, p in enumerate(parts):
+                    if not p.isdigit() or int(p) < 1:
+                        raise ConfigError(
+                            f"Subtask ID '{str_id}': component '{p}' "
+                            f"(position {i+1}) must be a positive integer"
+                        )
+                # Prefix must match parent_id
+                if parent_id is not None:
+                    expected_prefix = str(parent_id)
+                    actual_prefix = '.'.join(parts[:-1])
+                    if actual_prefix != expected_prefix:
+                        raise ConfigError(
+                            f"Subtask ID '{str_id}' must start with "
+                            f"parent ID '{parent_id}.' but prefix is "
+                            f"'{actual_prefix}'"
+                        )
+            else:
+                # Top-level task ID must be a single positive integer
+                if len(parts) != 1:
+                    raise ConfigError(
+                        f"Top-level task ID '{str_id}' must be a single "
+                        f"integer (no dots), got '{str_id}'"
+                    )
+                elif not str_id.isdigit() or int(str_id) < 1:
+                    raise ConfigError(
+                        f"Top-level task ID '{str_id}' must be a positive integer"
+                    )
         
         # Validate task type
         if is_subtask:
@@ -390,8 +452,10 @@ class TodoOrchestrator(AISchedulerMixin):
                 raise ConfigError(
                     f"Nested task {task['id']} must have subtasks"
                 )
+            self._validate_subtask_ids(subtasks, str(task['id']))
             for subtask in subtasks:
-                self._validate_task(subtask, is_subtask=True)
+                self._validate_task(subtask, is_subtask=True,
+                                    parent_id=str(task['id']))
         
         # Validate looping tasks
         if task_type == 'looping':
@@ -409,8 +473,10 @@ class TodoOrchestrator(AISchedulerMixin):
                 raise ConfigError(
                     f"Looping task {task['id']}: repeat_count must be a positive integer"
                 )
+            self._validate_subtask_ids(subtasks, str(task['id']))
             for subtask in subtasks:
-                self._validate_task(subtask, is_subtask=True)
+                self._validate_task(subtask, is_subtask=True,
+                                    parent_id=str(task['id']))
         
         # Validate long_running tasks
         # Note: long_running tasks no longer require a 'command' field.
@@ -423,6 +489,36 @@ class TodoOrchestrator(AISchedulerMixin):
                 f"Task {task['id']} has invalid model: '{model}'. "
                 f"Must be a string: 'default', 'lite', or a direct model name"
             )
+
+    def _validate_subtask_ids(self, subtasks: list, parent_id: str):
+        """Validate that subtask IDs are linearly increasing under *parent_id*.
+
+        Each subtask ID must be ``parent_id.N`` where ``N`` is a positive
+        integer.  The sequence of ``N`` values must be strictly increasing
+        (gaps are allowed, e.g. 1, 3, 5).
+
+        Raises:
+            ConfigError: If subtask IDs are not linearly increasing.
+        """
+        prev_suffix: int | None = None
+        for st in subtasks:
+            raw = st.get('id')
+            if raw is None:
+                continue  # missing-id is caught elsewhere
+            str_id = str(raw)
+            parts = str_id.split('.')
+            # Extract the last component as the ordering suffix
+            suffix_str = parts[-1] if parts else ''
+            if not suffix_str.isdigit():
+                continue  # format error caught in _validate_task
+            suffix = int(suffix_str)
+            if prev_suffix is not None and suffix <= prev_suffix:
+                raise ConfigError(
+                    f"Subtask IDs under parent '{parent_id}' must be "
+                    f"linearly increasing: ID '{str_id}' (suffix {suffix}) "
+                    f"is not greater than previous suffix {prev_suffix}"
+                )
+            prev_suffix = suffix
 
     def validate_config(self) -> bool:
         """
