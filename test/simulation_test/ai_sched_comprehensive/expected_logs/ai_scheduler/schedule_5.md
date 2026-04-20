@@ -67,6 +67,8 @@ You must choose exactly ONE task per round.
         ✅ 4. (Integration validation)
             Reasoning: Run integration validation with the optimized algorithm
     </schedule_history>
+
+    NOTE: Only the last 10 rounds are shown above. For the complete scheduling history, read: logs/<SESSION>/schedule_history.txt
 </context>
 ```
 

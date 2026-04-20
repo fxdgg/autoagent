@@ -65,6 +65,8 @@ You must choose exactly ONE task per round.
         ✅ 3. (Optimize core algorithm)
             Reasoning: Task 2 failed but task 3 can proceed independently with synthetic data
     </schedule_history>
+
+    NOTE: Only the last 10 rounds are shown above. For the complete scheduling history, read: logs/<SESSION>/schedule_history.txt
 </context>
 ```
 

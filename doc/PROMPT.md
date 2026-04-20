@@ -265,7 +265,7 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 You previously launched this task using autoagent-exec:
     Command: python -c "import time; time.sleep(1)"
 The task has now finished. Output has been saved to:
-    D:/path/to/session/lr_tasks/lr_1.2_output.log
+    path/to/session/lr_tasks/lr_1.2_output.log
 ```
 
 ---
@@ -345,11 +345,11 @@ You must choose exactly ONE task per round.
         - Task 1: Nested comprehensive coverage | Type: nested | Executed: 1 time(s)
             Description:
                 Comprehensive nested task testing all prompt-building paths.
-            Last Result: See D:/path/to/session/task_results/result_1.txt
+            Last Result: See path/to/session/task_results/result_1.txt
         - Task 2: Looping comprehensive coverage | Type: looping | Executed: 1 time(s)
             Description:
                 Comprehensive looping task testing all prompt-building paths.
-            Last Result: See D:/path/to/session/task_results/result_2.txt
+            Last Result: See path/to/session/task_results/result_2.txt
         - Task 3: Nested edge case coverage | Type: nested | Executed: 0 time(s)
             Description:
                 Nested task testing edge cases with long_running subtasks.
@@ -366,6 +366,8 @@ You must choose exactly ONE task per round.
         ✅ 2. (Looping comprehensive coverage)
             Reasoning: Sequential execution order
     </schedule_history>
+
+    NOTE: Only the last 10 rounds are shown above. For the complete scheduling history, read: path/to/session/schedule_history.txt
 </context>
 ```
 

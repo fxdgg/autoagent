@@ -167,8 +167,8 @@ def build_scheduler_prompt(
             f"    </schedule_history>"
         )
 
-    # Full history file path hint
-    if session_dir:
+    # Full history file path hint (only when there is at least one record)
+    if session_dir and schedule_history:
         history_file = os.path.join(session_dir, "schedule_history.txt")
         ctx_inner.append(
             f"    NOTE: Only the last {scheduler_history_limit} rounds are shown above. "

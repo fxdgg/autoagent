@@ -70,6 +70,8 @@ You must choose exactly ONE task per round.
         ✅ 3. (Nested edge case coverage)
             Reasoning: Sequential execution order
     </schedule_history>
+
+    NOTE: Only the last 10 rounds are shown above. For the complete scheduling history, read: logs/<SESSION>/schedule_history.txt
 </context>
 ```
 

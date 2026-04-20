@@ -59,6 +59,8 @@ You must choose exactly ONE task per round.
         ✅ 1. (Initialize environment)
             Reasoning: Start with environment setup as it is a prerequisite for all other tasks
     </schedule_history>
+
+    NOTE: Only the last 10 rounds are shown above. For the complete scheduling history, read: logs/<SESSION>/schedule_history.txt
 </context>
 ```
 

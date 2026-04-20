@@ -73,6 +73,8 @@ You must choose exactly ONE task per round.
         ❌ 4. (Looping max attempts exhaustion)
             Reasoning: Sequential execution order
     </schedule_history>
+
+    NOTE: Only the last 10 rounds are shown above. For the complete scheduling history, read: logs/<SESSION>/schedule_history.txt
 </context>
 ```
 

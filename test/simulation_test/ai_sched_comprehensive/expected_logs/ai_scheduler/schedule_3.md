@@ -62,6 +62,8 @@ You must choose exactly ONE task per round.
         ❌ 2. (Run baseline benchmark)
             Reasoning: Run baseline benchmark now that environment is ready
     </schedule_history>
+
+    NOTE: Only the last 10 rounds are shown above. For the complete scheduling history, read: logs/<SESSION>/schedule_history.txt
 </context>
 ```
 

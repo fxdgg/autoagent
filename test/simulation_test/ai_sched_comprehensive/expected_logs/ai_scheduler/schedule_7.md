@@ -72,6 +72,8 @@ You must choose exactly ONE task per round.
         ✅ 5. (Generate final report)
             Reasoning: Generate final report now that all critical tasks are done
     </schedule_history>
+
+    NOTE: Only the last 10 rounds are shown above. For the complete scheduling history, read: logs/<SESSION>/schedule_history.txt
 </context>
 ```
 
