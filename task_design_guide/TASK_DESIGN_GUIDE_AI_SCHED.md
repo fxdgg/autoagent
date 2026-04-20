@@ -90,62 +90,7 @@ In AI scheduling mode, an AI scheduler dynamically decides which task to run eac
 | **Data pipeline / ETL** | Goal, Architecture, Key file paths, Key commands, Hard constraints, Rules | Emphasize file paths (input/output dirs) and commands (run pipeline, validate) |
 | **Research / exploration** (read code, write analysis) | Goal, Architecture, Key file paths, Reference docs, Rules | No build commands; emphasize reference docs and where to write findings |
 
-```yaml
-description: |
-  ## Project: GPU Compute Shader Performance Optimization
-
-  ### Goal
-  Iteratively optimize DX12 GPU compute shaders for minimum latency
-  while maintaining numerical correctness.
-
-  ### Architecture
-  - src/shaders/ — HLSL compute shaders (optimization targets)
-  - src/frame_processor.cpp — GPU dispatch logic
-  - src/test_reference.cpp — CPU reference implementation for correctness checks
-  - doc/compute_shader_specs.md — documentation for per-stage specifications
-
-  ### Key File Paths
-  All paths are relative to the project root, the shell working directory.
-  - Results log: doc/optimization_results_N.tsv (N = branch number from opt_<N>)
-  - Experiment log: doc/optimization_log_N.md
-  - Failure patterns: doc/failure_patterns.md
-
-  ### Key Commands
-  - Build: cmake --build build --config Release
-  - Correctness test: build/Release/Simulator.exe (exit code 0 = GPU matches CPU reference)
-
-  ### Naming Conventions
-  - Optimization docs are named by branch number N (from branch name opt_<N>)
-  - optimization_results_N.tsv — performance data table
-  - optimization_log_N.md — experiment log
-  - optimization_report_N.md — optimization report
-
-  ### Historical Branch References
-  - doc/ may contain optimization reports from previous branches (e.g., optimization_report_1.md)
-  - These document all previously attempted optimizations (both kept and reverted)
-  - New branches MUST reference these to avoid repeating reverted failures
-  - Already-kept optimizations are in the baseline code; already-reverted ones should not be retried as-is
-
-  ### Hard Constraints
-  - Do NOT modify CPU-side post-processing logic in main.cpp
-  - Do NOT modify resource/ binary data files
-  - One optimization per experiment, keep changes minimal
-
-  ### Architecture Notes
-  - Shaders share a constant buffer register with stage-dependent semantics
-  - When modifying shader thread group size, sync Dispatch() call in frame_processor.cpp
-  - When modifying GPU buffers, sync resource_manager.cpp and shader register declarations
-  - When changing shader algorithms, sync CPU reference in test_reference.cpp
-
-  ### Reference Docs (read only when needed)
-  - doc/pipeline_architecture.md — full pipeline overview
-  - doc/optimization_report_*.md — previous optimization branch reports
-
-  ### Rules
-  - Fully autonomous — never ask the user questions
-  - One optimization per experiment, keep changes minimal
-  - If you discover a bug, fix ONLY the bug in that round (no optimization)
-```
+See the [Complete Example](#11-complete-example) at the end of this document for a full `description` demonstration.
 
 ### 3.2 Common Fields (all types)
 
@@ -258,7 +203,7 @@ Configures how each task's outcome is surfaced to the scheduler in subsequent ro
 
 | Type | What the scheduler sees | When to use |
 |------|------------------------|-------------|
-| `file` | Contents of the specified file(s) | `looping` tasks (which produce cumulative results best captured in a file), or any task that explicitly produces an output file (benchmarks, test results) |
+| `file` | Contents of the specified file(s) | **`looping` tasks** (which produce cumulative results best captured in a file), or any task that **explicitly produces an output file** (benchmarks, test results) |
 | `response` | Auto-saved AI final response | `simple` tasks (default choice); `nested` tasks where the **last subtask is a summary/analysis step** |
 | `none` | Nothing (success/failure still visible in history) | Setup/infrastructure tasks with no meaningful output |
 
@@ -704,29 +649,190 @@ The patterns above apply universally. For detailed patterns tailored to specific
 
 ---
 
-## 9. Quick Reference
+## 9. Checklist
+Use this checklist to verify your `todos.yaml` before submission:
 
-| Rule | Details |
-|------|---------|
-| Always include root `description` | Explain the goal, constraints, and technical stack |
-| `tasks[].description` is effectively required | Scheduler can't make good decisions without it |
-| Keep task-specific descriptions to 1–3 sentences | Scheduler-focused: what it does, what it produces |
-| Required fields per task | `id`, `name`, `type`, `description`, `completion_criteria` |
-| `*_once` subtasks execute only once globally | Use for true one-time setup only |
-| `completion_criteria` | Must be specific, measurable, verifiable |
-| `model: "lite"` | For simple execution tasks |
-| `model: "default"` | For complex reasoning tasks |
-| Persist intermediate results | Write to files, not AI memory |
-| `max_attempts: 1` | For execution-only subtasks (build, benchmark) |
-| Subtask boundaries | Align with logical checkpoints and independent failure modes |
-| Don't over-decompose | 2–3 subtasks usually suffice; merge steps that succeed/fail together |
-| `ai_orchestrator.strategy` is required | Encodes all scheduling logic |
-| Use `last_result` for tasks the scheduler evaluates | Choose `file` for structured output, `response` for analysis |
-| Use `${workspace}` in paths | Auto-expanded at runtime |
-| Max ~5-8 top-level tasks | More than that bloats the scheduler prompt |
-| Tasks may run 0, 1, or many times | Design for re-execution |
-| Scheduler sees: description, execution count, last result, history | Design around these observables |
-| `strategy` rules should reference task IDs + names | e.g., "Task 1 (Baseline)" |
-| Include failure recovery in `strategy` | "If Task X fails, do Y" |
-| Include termination in `stop_condition` | Specific, measurable, with fallback |
-| Type-specific patterns | Read the relevant guide in §8 for your task type (build, test, optimization, etc.) |
+- [ ] **Root `description`** exists and covers: Goal, Architecture, Key file paths, Hard constraints, Rules
+- [ ] **`ai_orchestrator`** is configured with `strategy` (and optionally `stop_condition`, `max_rounds`, `last_result`)
+- [ ] **`strategy`** references task IDs by name, encodes dependencies, and includes failure recovery rules
+- [ ] **`last_result`** is configured for every task whose output the scheduler needs to make decisions
+- [ ] **Every task** has `id`, `name`, `type`, `description`, `completion_criteria`
+- [ ] **Task-specific `description`** is 1–3 sentences explaining what the task does and produces (scheduler-facing)
+- [ ] **`completion_criteria`** are specific, measurable, and verifiable by the AI (not vague like "code is good")
+- [ ] **`initial_hint`** provides key file paths, commands, and constraints — not a rigid step-by-step script
+- [ ] **No over-decomposition**: subtasks are grouped by failure mode, not by individual commands (2–3 subtasks typical)
+- [ ] **No under-decomposition**: expensive steps (training, build) are separate from cheap steps (evaluation, reporting)
+- [ ] **`long_running`** is used for any command that may take > 1 minute
+- [ ] **`max_attempts: 1`** is set on execution-only subtasks (build, benchmark, test) that don't write code
+- [ ] **`model: "lite"`** is set on straightforward execution tasks; complex reasoning uses default
+- [ ] **`*_once` types** are used only for true one-time setup that should survive retries
+- [ ] **State persistence**: inter-subtask data is written to files, not assumed in conversation context
+- [ ] **Retry resilience**: tasks that modify shared state mention cleanup in `initial_hint`
+- [ ] **ID assignment**: top-level IDs are sequential integers; subtask IDs use dot notation (e.g., 1.1, 1.2)
+- [ ] **Task independence**: each top-level task is self-contained; ordering is encoded in `strategy`, not assumed
+- [ ] **Subtask boundaries** align with logical checkpoints and independent failure modes
+- [ ] **Use `${workspace}` in file paths** within `last_result` (auto-expanded at runtime)
+- [ ] **Max ~5–8 top-level tasks** — more bloats the scheduler prompt
+- [ ] **Design for re-execution**: tasks may run 0, 1, or many times
+- [ ] **Scheduler observables**: design around what the scheduler can see (description, execution count, last result, history)
+- [ ] **`stop_condition`** is specific, measurable, and includes a fallback
+- [ ] **Type-specific patterns**: read the relevant guide in §8 for your task type (build, test, optimization, etc.)
+
+---
+
+---
+
+## 10. Complete Example
+
+Below is a concise `todos.yaml` for AI scheduling mode, demonstrating: root `description`, `ai_orchestrator` with `strategy`/`stop_condition`/`last_result`, task-specific `description`, and all key patterns.
+
+```yaml
+description: |
+  ## Project: Web API Performance Optimization
+
+  ### Goal
+  Iteratively optimize the REST API server to reduce p95 latency below 50ms
+  while maintaining all integration tests passing.
+
+  ### Architecture
+  - src/handlers/ — HTTP route handlers
+  - src/db/ — Database query layer (PostgreSQL)
+  - src/cache/ — Redis caching layer
+  - tests/ — Integration test suite
+  - benchmarks/ — Load testing scripts (k6)
+
+  ### Key File Paths
+  - Config: config/server.yaml
+  - Results: doc/optimization_results.tsv
+  - Benchmark script: benchmarks/load_test.js
+
+  ### Key Commands
+  - Build: cargo build --release
+  - Test: cargo test --all
+  - Benchmark: k6 run benchmarks/load_test.js --out json=results.json
+
+  ### Hard Constraints
+  - Do NOT modify the public API contract (request/response schemas)
+  - Do NOT remove or weaken any existing integration test
+  - One optimization per experiment, keep changes minimal
+
+  ### Rules
+  - Fully autonomous — never ask the user questions
+  - One optimization per experiment
+  - If you discover a bug, fix ONLY the bug (no optimization in the same commit)
+
+ai_orchestrator:
+  max_rounds: 15
+
+  strategy: |
+    Scheduling rules:
+    1. If Task 1 (Baseline) has never succeeded, execute Task 1 first.
+    2. After baseline is established, execute Task 2 (Optimize) to run one optimization round.
+    3. After Task 2 succeeds, check its result:
+       - If p95 latency < 50ms → stop (goal achieved).
+       - If improvement was made but target not reached → execute Task 2 again.
+       - If Task 2 was reverted (regression) → execute Task 2 again with a different approach.
+    4. If Task 2 fails 3 consecutive times, execute Task 3 (Diagnose) to analyze the situation.
+    5. After Task 3, resume with Task 2.
+
+  stop_condition: |
+    Stop when p95 latency < 50ms as reported in doc/optimization_results.tsv.
+
+  last_result:
+    1:
+      type: file
+      path: ${workspace}/doc/optimization_results.tsv
+    2:
+      type: file
+      path: ${workspace}/doc/optimization_results.tsv
+    3:
+      type: file
+      path: ${workspace}/doc/diagnosis.md
+
+tasks:
+  - id: 1
+    name: "Establish performance baseline"
+    type: nested
+    description: |
+      Build the project, run tests, run benchmark, and record baseline p95 latency
+      in doc/optimization_results.tsv.
+    max_attempts: 3
+    completion_criteria: |
+      1. cargo test --all passes
+      2. doc/optimization_results.tsv exists with a baseline row containing p95 latency
+    subtasks:
+      - id: 1.1
+        name: "Build and test"
+        type: simple
+        max_attempts: 1
+        model: lite
+        system_prompt_prefix: |
+          You are a build engineer. Do NOT modify any source code.
+        completion_criteria: |
+          1. cargo build --release succeeds
+          2. cargo test --all passes
+        initial_hint: |
+          Run: cargo build --release && cargo test --all
+
+      - id: 1.2
+        name: "Run benchmark and record baseline"
+        type: long_running
+        model: lite
+        completion_criteria: |
+          1. Benchmark completed, results.json exists
+          2. doc/optimization_results.tsv created with baseline row
+        initial_hint: |
+          Run: k6 run benchmarks/load_test.js --out json=results.json
+          Parse p95 from results.json, create doc/optimization_results.tsv with header + baseline row.
+
+  - id: 2
+    name: "Run one optimization round"
+    type: nested
+    description: |
+      Analyze the current bottleneck, implement one optimization, benchmark it,
+      and keep or revert based on results. Updates doc/optimization_results.tsv.
+    max_attempts: 3
+    completion_criteria: |
+      1. New row appended to doc/optimization_results.tsv (kept or reverted)
+      2. If kept: tests still pass, p95 improved
+      3. If reverted: code is back to previous state
+    subtasks:
+      - id: 2.1
+        name: "Analyze and implement optimization"
+        type: simple
+        system_prompt_prefix: |
+          You are a backend performance engineer specializing in Rust async services.
+        completion_criteria: |
+          1. Bottleneck identified
+          2. Optimization implemented, build succeeds, tests pass
+          3. Changes committed
+        initial_hint: |
+          Read doc/optimization_results.tsv for current metrics.
+          Identify bottleneck, implement one focused optimization, build, test, commit.
+
+      - id: 2.2
+        name: "Benchmark and evaluate"
+        type: simple
+        max_attempts: 1
+        model: lite
+        completion_criteria: |
+          1. Benchmark completed, new row in optimization_results.tsv
+          2. Decision made: kept (improved) or reverted (regressed)
+        initial_hint: |
+          Run: k6 run benchmarks/load_test.js --out json=results.json
+          Compare with previous best. Keep if improved, revert if regressed.
+          Append result row to doc/optimization_results.tsv.
+
+  - id: 3
+    name: "Diagnose repeated failures"
+    type: simple
+    description: |
+      Analyze why recent optimization attempts failed. Read optimization_results.tsv
+      and source code to identify root causes and suggest new directions.
+    completion_criteria: |
+      1. doc/diagnosis.md exists with root cause analysis and suggested next steps
+    initial_hint: |
+      Read doc/optimization_results.tsv (focus on recent reverted rows).
+      Read relevant source code to understand why optimizations regressed.
+      Write doc/diagnosis.md with analysis and actionable suggestions.
+```

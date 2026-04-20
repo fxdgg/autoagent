@@ -75,62 +75,7 @@ The AI agent can do anything a developer can: edit code, run commands, read logs
 | **Data pipeline / ETL** | Goal, Architecture, Key file paths, Key commands, Hard constraints, Rules | Emphasize file paths (input/output dirs) and commands (run pipeline, validate) |
 | **Research / exploration** (read code, write analysis) | Goal, Architecture, Key file paths, Reference docs, Rules | No build commands; emphasize reference docs and where to write findings |
 
-```yaml
-description: |
-  ## Project: GPU Compute Shader Performance Optimization
-
-  ### Goal
-  Iteratively optimize DX12 GPU compute shaders for minimum latency
-  while maintaining numerical correctness.
-
-  ### Architecture
-  - src/shaders/ — HLSL compute shaders (optimization targets)
-  - src/frame_processor.cpp — GPU dispatch logic
-  - src/test_reference.cpp — CPU reference implementation for correctness checks
-  - doc/compute_shader_specs.md — documentation for per-stage specifications
-
-  ### Key File Paths
-  All paths are relative to the project root, the shell working directory.
-  - Results log: doc/optimization_results_N.tsv (N = branch number from opt_<N>)
-  - Experiment log: doc/optimization_log_N.md
-  - Failure patterns: doc/failure_patterns.md
-
-  ### Key Commands
-  - Build: cmake --build build --config Release
-  - Correctness test: build/Release/Simulator.exe (exit code 0 = GPU matches CPU reference)
-
-  ### Naming Conventions
-  - Optimization docs are named by branch number N (from branch name opt_<N>)
-  - optimization_results_N.tsv — performance data table
-  - optimization_log_N.md — experiment log
-  - optimization_report_N.md — optimization report
-
-  ### Historical Branch References
-  - doc/ may contain optimization reports from previous branches (e.g., optimization_report_1.md)
-  - These document all previously attempted optimizations (both kept and reverted)
-  - New branches MUST reference these to avoid repeating reverted failures
-  - Already-kept optimizations are in the baseline code; already-reverted ones should not be retried as-is
-
-  ### Hard Constraints
-  - Do NOT modify CPU-side post-processing logic in main.cpp
-  - Do NOT modify resource/ binary data files
-  - One optimization per experiment, keep changes minimal
-
-  ### Architecture Notes
-  - Shaders share a constant buffer register with stage-dependent semantics
-  - When modifying shader thread group size, sync Dispatch() call in frame_processor.cpp
-  - When modifying GPU buffers, sync resource_manager.cpp and shader register declarations
-  - When changing shader algorithms, sync CPU reference in test_reference.cpp
-
-  ### Reference Docs (read only when needed)
-  - doc/pipeline_architecture.md — full pipeline overview
-  - doc/optimization_report_*.md — previous optimization branch reports
-
-  ### Rules
-  - Fully autonomous — never ask the user questions
-  - One optimization per experiment, keep changes minimal
-  - If you discover a bug, fix ONLY the bug in that round (no optimization)
-```
+See the [Complete Example](#complete-example) at the end of this document for a full `description` demonstration.
 
 ### 3.2 Common Fields (all types)
 
@@ -465,18 +410,149 @@ The patterns above apply universally. For detailed patterns tailored to specific
 
 ---
 
-## 8. Quick Reference
+## 8. Checklist
+Use this checklist to verify your `todos.yaml` before submission:
 
-| Rule | Details |
-|------|---------|
-| Always include root `description` | Explain the goal, constraints, and technical stack |
-| Required fields | `id`, `name`, `type`, `completion_criteria` |
-| `*_once` types | Subtask only — use sparingly |
-| `completion_criteria` | Must be specific, measurable, verifiable |
-| `model: "lite"` | For simple execution tasks |
-| `model: "default"` | For complex reasoning tasks |
-| Persist intermediate results | Write to files, not AI memory |
-| `max_attempts: 1` | For execution-only subtasks (build, benchmark) |
-| Subtask boundaries | Align with logical checkpoints and independent failure modes |
-| Don't over-decompose | 2–3 subtasks usually suffice; merge steps that succeed/fail together |
-| Type-specific patterns | Read the relevant guide in §7 for your task type (build, test, optimization, etc.) |
+- [ ] **Root `description`** exists and covers: Goal, Architecture, Key file paths, Hard constraints, Rules
+- [ ] **Every task** has `id`, `name`, `type`, `completion_criteria`
+- [ ] **`completion_criteria`** are specific, measurable, and verifiable by the AI (not vague like "code is good")
+- [ ] **`initial_hint`** provides key file paths, commands, and constraints — not a rigid step-by-step script
+- [ ] **No over-decomposition**: subtasks are grouped by failure mode, not by individual commands (2–3 subtasks typical)
+- [ ] **No under-decomposition**: expensive steps (training, build) are separate from cheap steps (evaluation, reporting)
+- [ ] **`long_running`** is used for any command that may take > 1 minute
+- [ ] **`max_attempts: 1`** is set on execution-only subtasks (build, benchmark, test) that don't write code
+- [ ] **`model: "lite"`** is set on straightforward execution tasks; complex reasoning uses default
+- [ ] **`*_once` types** are used only for true one-time setup that should survive retries
+- [ ] **State persistence**: inter-subtask data is written to files, not assumed in conversation context
+- [ ] **Retry resilience**: tasks that modify shared state mention cleanup in `initial_hint`
+- [ ] **ID assignment**: top-level IDs are sequential integers; subtask IDs use dot notation (e.g., 1.1, 1.2)
+- [ ] **Subtask boundaries** align with logical checkpoints and independent failure modes
+- [ ] **Type-specific patterns**: read the relevant guide in §7 for your task type (build, test, optimization, etc.)
+
+---
+
+---
+
+## 9. Complete Example
+
+Below is a concise `todos.yaml` demonstrating key patterns: root `description`, task types (`simple`, `long_running`, `looping`), `completion_criteria`, `initial_hint`, `system_prompt_prefix`, `model` selection, and `max_attempts`.
+
+```yaml
+description: |
+  ## Project: Web API Performance Optimization
+
+  ### Goal
+  Iteratively optimize the REST API server to reduce p95 latency below 50ms
+  while maintaining all integration tests passing.
+
+  ### Architecture
+  - src/handlers/ — HTTP route handlers
+  - src/db/ — Database query layer (PostgreSQL)
+  - src/cache/ — Redis caching layer
+  - tests/ — Integration test suite
+  - benchmarks/ — Load testing scripts (k6)
+
+  ### Key File Paths
+  - Config: config/server.yaml
+  - Results: doc/optimization_results.tsv
+  - Benchmark script: benchmarks/load_test.js
+
+  ### Key Commands
+  - Build: cargo build --release
+  - Test: cargo test --all
+  - Benchmark: k6 run benchmarks/load_test.js --out json=results.json
+
+  ### Hard Constraints
+  - Do NOT modify the public API contract (request/response schemas)
+  - Do NOT remove or weaken any existing integration test
+  - One optimization per experiment, keep changes minimal
+
+  ### Rules
+  - Fully autonomous — never ask the user questions
+  - One optimization per experiment
+  - If you discover a bug, fix ONLY the bug (no optimization in the same commit)
+
+tasks:
+  # ── Task 1: Establish Baseline ────────────────────────────────────────
+  - id: 1
+    name: "Build, test, and establish performance baseline"
+    type: nested
+    max_attempts: 3
+    completion_criteria: |
+      1. cargo test --all passes (exit code 0)
+      2. doc/optimization_results.tsv exists with a baseline row
+      3. Baseline p95 latency is recorded
+    subtasks:
+      - id: 1.1
+        name: "Build and run tests"
+        type: simple
+        max_attempts: 1
+        model: lite
+        system_prompt_prefix: |
+          You are a build engineer. Do NOT modify any source code.
+        completion_criteria: |
+          1. cargo build --release succeeds
+          2. cargo test --all passes
+        initial_hint: |
+          Run: cargo build --release && cargo test --all
+
+      - id: 1.2
+        name: "Run baseline benchmark and record results"
+        type: long_running
+        model: lite
+        completion_criteria: |
+          1. k6 benchmark completed successfully
+          2. doc/optimization_results.tsv created with baseline row
+        initial_hint: |
+          Run: k6 run benchmarks/load_test.js --out json=results.json
+          Parse results.json for p95 latency, create optimization_results.tsv.
+
+  # ── Task 2: Iterative Optimization Loop ───────────────────────────────
+  - id: 2
+    name: "Iterative API performance optimization"
+    type: looping
+    repeat_count: 5
+    max_attempts_per_loop: 3
+    completion_criteria: |
+      One complete cycle of: analyze → implement → benchmark → evaluate.
+    subtasks:
+      - id: 2.1
+        name: "Analyze bottleneck and propose optimization"
+        type: simple
+        system_prompt_prefix: |
+          You are a backend performance engineer specializing in Rust async services.
+        completion_criteria: |
+          1. Bottleneck identified and documented in doc/optimization_log.md
+          2. Proposed optimization does not violate hard constraints
+        initial_hint: |
+          Read doc/optimization_results.tsv for current metrics.
+          Read doc/optimization_log.md for past experiments (avoid repeating failures).
+          Identify the current bottleneck, propose one focused optimization.
+
+      - id: 2.2
+        name: "Implement optimization, build, and test"
+        type: simple
+        completion_criteria: |
+          1. Code changes implemented (minimal, focused)
+          2. cargo build --release succeeds
+          3. cargo test --all passes
+          4. Changes committed: git commit -m "opt: <description>"
+        initial_hint: |
+          Read doc/optimization_log.md for the latest proposed optimization.
+          Implement it, build, test. If tests fail, fix or revert.
+
+      - id: 2.3
+        name: "Benchmark and evaluate"
+        type: simple
+        max_attempts: 1
+        model: lite
+        completion_criteria: |
+          1. Benchmark completed, new row appended to optimization_results.tsv
+          2. If regression > 5%: git revert HEAD, record as "reverted"
+          3. If improvement: record as "kept"
+          4. doc/optimization_log.md updated with results
+        initial_hint: |
+          Run: k6 run benchmarks/load_test.js --out json=results.json
+          Compare p95 with previous best in optimization_results.tsv.
+          Keep if improved, revert if regressed. Update docs either way.
+```
