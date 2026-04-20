@@ -1,4 +1,4 @@
-﻿# AI Orchestrator
+﻿# AI Orchestrator 设计方案
 
 ## 1. 概述
 
@@ -433,104 +433,34 @@ scheduler_history_limit: 10
 
 ---
 
-## 8. Prompt 结构
+## 8. 与现有功能的交互
 
-### 8.1 System Prompt
-
-```
-You are an AI task scheduler. Your job is to decide which task to execute
-next, or whether to stop execution.
-
-You must respond with a JSON object in one of these formats:
-1. Execute a task: {"action": "execute", "task_id": <id>, "reasoning": "<why>"}
-2. Stop execution: {"action": "stop", "reasoning": "<why>"}
-
-You must choose exactly ONE task per round.
-```
-
-### 8.2 User Prompt 结构
-
-```xml
-<context>
-    Current Round: {current_round} / {max_rounds}
-
-    <project_description>
-        {project_description}
-    </project_description>
-
-    <scheduling_strategy>
-        {strategy}
-    </scheduling_strategy>
-
-    <stop_condition>
-        {stop_condition}
-    </stop_condition>
-
-    <available_tasks>
-        - Task {id}: {name} | Type: {type} | Executed: {count} time(s)
-            Description:
-                {description}
-            Last Result: See {path}
-        - Task {id}: {name} | Type: {type} | Executed: {count} time(s)
-            ...
-
-        IMPORTANT: If a result file is marked as NOTFOUND, it is probably
-        due to task failures — the task may have crashed or errored out
-        before it could write its result file. Consider re-running the
-        task or running a diagnostic task to investigate.
-    </available_tasks>
-
-    <schedule_history> (last {scheduler_history_limit} rounds)
-        ✅ {task_id}. ({task_name})
-            Reasoning: {reasoning}
-        ❌ {task_id}. ({task_name})
-            Reasoning: {reasoning}
-    </schedule_history>
-</context>
-```
-
-### 8.3 Last Result 显示规则
-
-- 仅在 task 被执行过至少一次后显示 `Last Result` 行
-- `type=none`：不显示
-- `type=response`：显示 `<session_dir>/task_results/result_<task_id>.txt` 路径
-- `type=file`：显示配置的文件路径
-- 文件不存在时路径后附加 `(NOTFOUND)`
-
-### 8.4 Task Description 注入
-
-`tasks[].description` 不仅注入调度 AI prompt，也注入执行 task 时的 task prompt（`<task_description>` 标签）。仅当 `description` 字段存在且非空时才渲染，对非 AI 调度模式无影响。
-
----
-
-## 9. 与现有功能的交互
-
-### 9.1 Ideas Watcher
+### 8.1 Ideas Watcher
 
 - Ideas 生成的新任务追加到 `tasks` 列表后，AI 调度器在下一轮可以看到新任务
 - `reload_todos()` 后，调度器自动获取更新的任务列表
 - 如果调度器已 `stopped`，但 Ideas Watcher 添加了新 task，调度器自动重启（将 `status` 重置为 `in_progress`）
 
-### 9.2 `--continue` / `--resume`
+### 8.2 `--continue` / `--resume`
 
 - 从 `orchestrator` 状态恢复调度进度
 - 如果 orchestrator 已经 `stopped` 或 `completed`（且无新 task），不继续执行
 
-### 9.3 `--reset`
+### 8.3 `--reset`
 
 重置时同时清除 `orchestrator` 状态。
 
-### 9.4 `--task` 参数
+### 8.4 `--task` 参数
 
 AI 调度模式下不支持 `--task` 参数。如果指定了该参数则直接报错退出。
 
-### 9.5 round_scoped description
+### 8.5 round_scoped description
 
 AI 调度模式下，`description@N` 始终使用**最新的** scoped description（`scope_id` 最大且 ≤ 当前最大已定义 task_id 的那个），而非线性模式的按 task_id 分段选择。
 
 ---
 
-## 10. 边界情况处理
+## 9. 边界情况处理
 
 | 场景 | 处理方式 |
 |------|----------|
@@ -548,9 +478,9 @@ AI 调度模式下，`description@N` 始终使用**最新的** scoped descriptio
 
 ---
 
-## 11. 代码结构
+## 10. 代码结构
 
-### 11.1 核心文件
+### 10.1 核心文件
 
 | 文件 | 职责 |
 |------|------|
@@ -561,7 +491,7 @@ AI 调度模式下，`description@N` 始终使用**最新的** scoped descriptio
 | `state_manager.py` | `get_orchestrator_state()` / `save_orchestrator_state()` |
 | `util/default_value.py` | 默认配置值 |
 
-### 11.2 关键方法
+### 10.2 关键方法
 
 | 方法 | 说明 |
 |------|------|
@@ -578,7 +508,7 @@ AI 调度模式下，`description@N` 始终使用**最新的** scoped descriptio
 
 ---
 
-## 12. 示例：cuFFTDx 优化场景
+## 11. 示例：cuFFTDx 优化场景
 
 ```yaml
 description: |
@@ -667,7 +597,7 @@ tasks:
 
 ---
 
-## 13. 执行摘要输出
+## 12. 执行摘要输出
 
 调度循环结束后输出执行摘要：
 

@@ -1,1006 +1,413 @@
 # 使用指南
 
-本文档提供 AutoAgent 的详细使用说明。
+本文档是 AutoAgent 的完整使用指南。
 
-## 目录
+---
 
-- [安装](#安装)
-- [快速开始](#快速开始)
-- [配置文件](#配置文件)
-- [任务类型](#任务类型)
-- [执行方式](#执行方式)
-- [最佳实践](#最佳实践)
-- [故障排除](#故障排除)
+## 1. 安装
 
-## 安装
-
-### 1. 环境要求
+### 环境要求
 
 - Python 3.8+
-- CodeBuddy 2.63.5+ (或其他 AI Provider)
-- Linux/macOS/Windows 系统
+- 至少一个 AI 编程工具已安装并登录
 
-### 2. 安装依赖
+### 安装步骤
 
 ```bash
+cd autoagent
 pip install -r requirements.txt
 ```
 
-或手动安装：
+### AI Provider 配置
 
-```bash
-pip install pyyaml>=6.0.1
-pip install codebuddy-agent-sdk  # 仅在使用 SDK 模式（非 --use-cli）时需要
-```
+| Provider | 安装 | 验证 |
+|----------|------|------|
+| CodeBuddy（默认） | 安装 IDE 插件或 CLI | `codebuddy --version` |
+| Claude Code | `npm install -g @anthropic-ai/claude-code` | `claude --version` |
+| Gemini CLI | `npm install -g @google/gemini-cli` | `gemini --version` |
+| Codex | `npm install -g @openai/codex` | `codex --version` |
+| OpenCode | 安装 CLI + 配置 API Key | `opencode --version` |
 
-### 3. 配置 AI Provider
+---
 
-确保 AI Provider 已正确安装：
+## 2. 快速开始
 
-```bash
-# CodeBuddy
-codebuddy --version
-
-# Claude Code
-claude --version
-
-# Gemini CLI
-gemini --version
-
-# OpenCode
-opencode --version
-
-# OpenAI Codex
-codex --version
-```
-
-### 4. 配置 Preset（可选）
-
-在 `config.yaml` 中定义常用配置预设：
+### Step 1：创建 `todos.yaml`
 
 ```yaml
-# config.yaml
-session_timeout: 3600  # Hard cap on total AI session time (seconds)
-bash_timeout: 300      # No-new-output timeout (seconds).
-                       # When triggered, the session is NOT reset — the AI
-                       # continues in the same session with a follow-up prompt
-                       # reminding it to use autoagent-exec.
+description: |
+  项目目标和全局上下文。AI 执行每个任务时都能看到这段描述。
 
-# Fast-fail timeout for autoagent-exec (in seconds, default: 30)
-fast_fail_timeout: 30
-
-# Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.
-# Uses exponential backoff: 5s, 10s, 20s, 40s, ... up to this limit.
-backoff_max_wait: 300
-
-# Maximum number of lightweight "nudge" follow-ups when the AI does not
-# output a completion status marker (e.g. AI forgot, or CLI/SDK crashed).
-# Nudges are sent in the same session instead of resetting and replaying
-# the entire task. The AI may continue unfinished work, but is told not to
-# re-run commands it already executed. Before each nudge, the system checks
-# for an autoagent-exec signal file — if one exists, the nudge is skipped
-# and a synthetic LONG_RUNNING_IN_PROGRESS is returned automatically.
-max_marker_nudges: 2
-
-# System prompt prefix (appended to the system prompt for all tasks)
-system_prompt_prefix: "You are an AI coding agent. ..."
-
-# Default AI model (used when no model is specified via CLI --model or preset)
-default_model: glm-5.0-ioa
-
-preset:
-  - name: default
-    ideas: ${workspace}/ideas.md
-    config: ${workspace}/todos.yaml
-    provider: codebuddy
-    use_cli: false
-    model:
-      plan: claude-opus-4.6
-      default: claude-opus-4.6
-      lite: glm-5.0-ioa
-      evaluation: claude-opus-4.6
-    human_review: true
-    verbose: true
-```
-
-使用 `--preset` 参数选择预设：
-
-```bash
-# 使用 default 预设
-python orchestrator.py
-
-# 使用指定预设
-python orchestrator.py --preset test
-
-# 使用预设并覆盖参数
-python orchestrator.py --preset default --verbose
-```
-
-### 5. 配置截断限制（可选）
-
-在 `config.yaml` 中可以调整提示词各字段的截断长度（单位：字符），防止上下文过长导致 token 浪费：
-
-```yaml
-# config.yaml
-# Only 3 keys are used:
-#   previous_subtask_summary: for subtask summaries, error text, log files
-#   history_summary: for history attempt summaries, ai_reasoning
-#   max: defensive upper bound for fields that should not normally be truncated
-truncation_limits:
-  previous_subtask_summary: 4000  # 子任务摘要、错误文本、日志文件
-  history_summary: 300            # 历史尝试摘要、AI 推理记录
-  max: 50000                      # 防御性上限
-```
-
-所有字段都有内置默认值，只需配置你想调整的项。
-
-## 快速开始
-
-### 步骤 1：创建配置文件
-
-创建 `todos.yaml` 文件：
-
-```yaml
 tasks:
-  # 简单任务示例
   - id: 1
-    name: "下载数据集"
+    name: "运行测试并修复失败"
     type: simple
-    completion_criteria: "data.csv 文件存在且大小 > 10MB"
-    initial_hint: "使用 python download.py"
-    
-  # 嵌套任务示例
-  - id: 2
-    name: "优化模型性能"
-    type: nested
-    completion_criteria: "训练成功完成且 val_loss < 0.5"
-    subtasks:
-      - id: 2.1
-        name: "修改训练代码"
-        type: simple
-        completion_criteria: "代码修改完成"
-        
-      - id: 2.2
-        name: "运行训练"
-        type: long_running
-        completion_criteria: "训练正常退出且验证集指标满足要求"
-```
-
-### 步骤 2：运行 Orchestrator
-
-```bash
-# 使用默认 provider（CodeBuddy）运行所有任务
-python orchestrator.py
-
-# 使用 Claude Code
-python orchestrator.py --provider claude
-
-# 使用 Gemini CLI
-python orchestrator.py --provider gemini
-```
-
-### 步骤 3：查看输出
-
-Orchestrator 会实时输出执行日志：
-
-```
-📋 执行任务 1: 下载数据集
-   类型: simple
-
-   尝试 #1
-      AI 尝试完成任务...
-   ✅ 任务 1 完成！
-
-📋 执行任务 2: 优化模型性能
-   类型: nested
-
-   📌 执行子任务 2.1: 修改训练代码
-      类型: simple
-      
-      尝试 #1
-         AI 尝试完成任务...
-      ✅ 子任务 2.1 完成！
-
-   📌 执行子任务 2.2: 运行训练
-      类型: long_running
-      
-      启动长时间任务...
-      命令: python train.py --config modified_config.yaml
-      日志: logs/2.2.log
-      ✅ 任务已启动，正在监控...
-
-   📊 子任务全部完成，检查主任务完成条件...
-      AI 检查结果...
-   ✅ 主任务 2 完成！
-```
-
-## 配置文件
-
-### 完整配置示例
-
-```yaml
-tasks:
-  # 简单任务
-  - id: 1
-    name: "prepare_data"
-    type: simple
-    completion_criteria: "data.csv 文件存在且包含 10000 条数据"
-    initial_hint: "运行 python prepare_data.py"
-    
-  # 嵌套任务
-  - id: 2
-    name: "optimize_accuracy"
-    type: nested
     completion_criteria: |
-      训练成功完成
-      验证集精度 >= 0.9
-      验证集 loss < 0.1
-    subtasks:
-      - id: 2.1
-        name: "修改模型配置"
-        type: simple
-        completion_criteria: "配置修改完成"
-        
-      - id: 2.2
-        name: "训练模型"
-        type: long_running
-        completion_criteria: "训练成功完成且指标达标"
+      1. pytest 全部通过
+      2. 无新增 lint 警告
+    initial_hint: |
+      运行 pytest，分析失败原因，修复代码。
 ```
 
-### 配置字段说明
+### Step 2：启动执行
 
-#### 全局字段
+```bash
+python orchestrator.py --config todos.yaml --workspace ./my_project
+```
+
+### Step 3：查看结果
+
+执行日志保存在 `.autoagent/` 目录下，包含完整的 AI 对话记录。
+
+---
+
+## 3. 执行模式
+
+### 3.1 线性模式（默认）
+
+按 `todos.yaml` 中的任务顺序依次执行：
+
+```bash
+python orchestrator.py --config todos.yaml
+```
+
+### 3.2 AI 调度模式
+
+AI 调度器动态决定执行哪个任务。需要在 `todos.yaml` 中配置 `ai_orchestrator` 部分：
+
+```yaml
+ai_orchestrator:
+  strategy: |
+    1. 先执行 Task 1 建立基准
+    2. 然后交替执行 Task 2（分析）和 Task 3（优化）
+    3. 每次优化后执行 Task 4 验证正确性
+  max_rounds: 20
+  stop_condition: |
+    性能提升 >= 20% 且正确性验证通过
+
+tasks:
+  - id: 1
+    name: "建立基准"
+    description: "编译项目并运行基准测试，生成 baseline.txt"
+    # ...
+```
+
+启动方式（自动检测 `ai_orchestrator` 配置）：
+
+```bash
+python orchestrator.py --config todos.yaml
+```
+
+或显式指定模式：
+
+```bash
+python orchestrator.py --config todos.yaml --mode ai
+```
+
+### 3.3 Idle 监听模式
+
+后台持续运行，监听 `ideas.md` 文件变化：
+
+```bash
+python orchestrator.py --ideas ideas.md --config todos.yaml --workspace ./project
+```
+
+在 `ideas.md` 中写入想法（用 `---` 分隔），AI 自动拆解为任务并执行。
+
+### 3.4 仅处理 Ideas
+
+只拆解 ideas 不执行任务：
+
+```bash
+python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
+```
+
+---
+
+## 4. 任务配置
+
+### 4.1 根级字段
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
+| `description` | string | 是 | 全局项目描述，所有任务可见 |
+| `ai_orchestrator` | dict | 否 | AI 调度配置（启用 AI 调度模式） |
 | `tasks` | list | 是 | 任务列表 |
 
-#### 任务通用字段
+### 4.2 任务通用字段
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `id` | int/string | 是 | 任务 ID（唯一标识） |
-| `name` | string | 是 | 任务名称 |
-| `type` | string | 是 | 顶层任务类型：`simple`、`nested`、`looping`、`long_running`；子任务额外支持：`simple_once`、`long_running_once` |
-| `completion_criteria` | string | 是 | 完成标准（自然语言描述） |
-| `model` | string | 否 | 模型选择：`"default"`、`"lite"` 或直接模型名称（默认 `"default"`） |
-| `system_prompt_prefix` | string | 否 | 任务级系统提示词前缀，覆盖 config.yaml 中的全局设置 |
+| `id` | int/float | 是 | 唯一 ID（顶层整数，子任务点号表示法如 `1.1`） |
+| `name` | string | 是 | 简短任务名 |
+| `type` | string | 是 | 任务类型 |
+| `completion_criteria` | string | 是 | 完成标准 |
+| `description` | string | 否 | 任务描述（AI 调度模式下建议填写） |
+| `initial_hint` | string | 否 | 执行提示 |
+| `model` | string | 否 | 模型角色覆盖 |
+| `max_attempts` | int | 否 | 最大重试次数（默认 5） |
+| `system_prompt_prefix` | string | 否 | 自定义系统 prompt |
 
-#### 简单任务 (type: simple)
+### 4.3 任务类型
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `initial_hint` | string | 否 | 静态上下文提示（每次尝试都会传入，给 AI 的参考信息） |
+| 类型 | 说明 | 适用范围 |
+|------|------|---------|
+| `simple` | 单步任务，AI 自评估完成 | 顶层 + 子任务 |
+| `nested` | 包含子任务，有 AI 失败分析和主任务评估 | 顶层 + 子任务 |
+| `looping` | 子任务重复 N 轮 | 顶层 + 子任务 |
+| `long_running` | 后台运行长时间命令 | 顶层 + 子任务 |
+| `simple_once` | 同 simple，但只执行一次 | 仅子任务 |
+| `long_running_once` | 同 long_running，但只执行一次 | 仅子任务 |
 
-#### 嵌套任务 (type: nested)
+### 4.4 类型特有字段
+
+**nested：**
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `subtasks` | list | 是 | 子任务列表 |
-| `max_attempts` | int | 否 | 最大重试轮数（默认 5） |
 
-#### 循环任务 (type: looping)
+**looping：**
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `subtasks` | list | 是 | 子任务列表 |
-| `repeat_count` | int | 是 | 循环次数（正整数） |
-| `max_attempts_per_loop` | int | 否 | 每轮循环内最大重试次数（默认 5） |
-| `completion_criteria` | string | 是 | 完成标准 |
+| `repeat_count` | int | 是 | 循环次数 |
+| `max_attempts_per_loop` | int | 否 | 每轮最大重试次数 |
 
-#### 长时间任务 (type: long_running)
+### 4.5 AI 调度配置
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `initial_hint` | string | 否 | 静态上下文提示（每次尝试都会传入，给 AI 的参考信息，如要运行的命令） |
-| `completion_criteria` | string | 是 | 完成标准 |
+| `strategy` | string | 是 | 调度策略（注入 AI prompt） |
+| `max_rounds` | int | 否 | 最大调度轮次（默认 50） |
+| `stop_condition` | string | 否 | 停止条件 |
+| `last_result` | dict | 否 | 任务结果配置 |
 
-## 任务类型
+`last_result` 类型：
 
-### 1. 简单任务 (simple)
+| 类型 | 说明 |
+|------|------|
+| `file` | 指定文件路径，调度器读取文件内容 |
+| `response` | 自动保存 AI 最终响应 |
+| `none` | 不向调度器展示结果 |
 
-**适用场景**：由 AI 自主完成的任务，包括命令执行、代码修改、分析等所有场景
+---
 
-**配置示例**：
+## 5. 命令行参数
+
+### 通用
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--config`, `-c` | `todos.yaml` | 任务配置文件路径 |
+| `--workspace`, `-w` | `.` | AI 工作目录 |
+| `--mode` | 自动检测 | `linear` 或 `ai` |
+| `--task`, `-t` | 无 | 只执行指定任务 ID |
+
+### Provider 与模型
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--provider`, `-P` | `codebuddy` | AI Provider |
+| `--model`, `-m` | 配置默认 | 模型指定 |
+| `--executable` | 无 | 覆盖 Provider 可执行文件路径 |
+| `--extra-args` | 无 | 传递给 AI 工具的额外参数 |
+| `--use-cli` | false | 使用 CLI 子进程模式 |
+
+### Ideas
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--ideas` | 无 | ideas.md 文件路径 |
+| `--ideas-only` | false | 只处理 ideas 不执行任务 |
+| `--human-review` | false | Ideas 人工审核 |
+| `--no-idle` | false | 禁用 Idle 模式 |
+
+### 会话管理
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--continue` | false | 继续上次会话 |
+| `--resume` | 无 | 恢复指定会话 ID |
+| `--list-sessions` | false | 列出所有会话 |
+
+### Preset 与配置
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--preset` | `default` | 使用的 Preset 名称 |
+| `--generate-default-config` | false | 生成默认配置文件 |
+
+### 工具
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--validate` | false | 验证配置后退出 |
+| `--reset` | false | 重置所有任务状态 |
+| `--log-dir` | `.autoagent` | 输出目录 |
+| `--verbose`, `-v` | false | 调试日志 |
+
+---
+
+## 6. Preset 配置
+
+Preset 是 `config.yaml` 中预定义的参数组合，避免每次输入大量命令行参数。
+
+### 定义 Preset
+
 ```yaml
-# 顶层任务
+# config.yaml
+preset:
+  default: {}
+
+  general:
+    ideas: "${workspace}/../ideas.md"
+    config: "${workspace}/../todos.yaml"
+    provider: codebuddy
+    use_cli: false
+    model: "plan:claude-opus-4.6;default:claude-opus-4.6;lite:glm-4-flash;evaluation:claude-opus-4.6;scheduler:claude-opus-4.6"
+    human_review: true
+    verbose: true
+
+  test:
+    provider: test
+    use_cli: true
+```
+
+### 使用 Preset
+
+```bash
+python orchestrator.py --preset general --workspace ./my_project
+```
+
+**优先级**：命令行参数 > Preset > config.yaml 全局设置 > 内置默认值
+
+`${workspace}` 变量会在加载时自动展开为实际工作目录。
+
+---
+
+## 7. 模型配置
+
+### 单模型
+
+```bash
+python orchestrator.py --model claude-opus-4.6
+```
+
+### 多角色模型
+
+```bash
+python orchestrator.py --model "plan:claude-opus-4.6;default:claude-sonnet-4;lite:glm-4-flash;evaluation:claude-opus-4.6;scheduler:claude-opus-4.6"
+```
+
+| 角色 | 用途 |
+|------|------|
+| `plan` | Ideas 拆解 |
+| `default` | 任务执行 |
+| `lite` | 轻量操作 |
+| `evaluation` | 失败分析、主任务评估 |
+| `scheduler` | AI 调度决策 |
+
+### 逐任务覆盖
+
+在 `todos.yaml` 中为特定任务指定模型：
+
+```yaml
 - id: 1
-  name: "下载数据集"
-  type: simple
-  completion_criteria: "data.csv 文件存在且大小 > 10MB"
-  initial_hint: "使用 python download.py"
-
-# 作为子任务（代码修改）
-- id: 2.1
-  name: "修改训练代码"
-  type: simple
-  completion_criteria: "代码修改完成，添加了 dropout 层"
-```
-
-> **设计理念**：不区分"执行命令"和"修改代码"——对 AI 来说这是同一件事。用户只需要判断：**"这个任务需要在后台长时间运行吗？"** 需要就用 `long_running`，不需要就用 `simple`。
-
-**执行流程**：
-1. AI 根据 initial_hint 尝试完成任务
-2. AI 自我评估是否满足完成条件
-3. 如果满足：标记完成
-4. 如果不满足：AI 决定如何改进，重新尝试
-5. 循环直到满足条件或达到最大尝试次数
-
-### 2. 嵌套任务 (nested)
-
-**适用场景**：需要多个步骤的复杂任务
-
-**配置示例**：
-```yaml
-- id: 2
-  name: "优化模型性能"
-  type: nested
-  completion_criteria: "训练成功完成且 val_loss < 0.5"
-  subtasks:
-    - id: 2.1
-      name: "修改训练代码"
-      type: simple
-      completion_criteria: "代码修改完成"
-      
-      - id: 2.2
-        name: "运行训练"
-        type: long_running
-        completion_criteria: "训练正常退出且验证集指标满足要求"
-```
-
-**执行流程**：
-1. 按顺序执行所有子任务
-2. 如果某个子任务失败，**立即停止后续子任务**，**调用AI分析失败原因**，AI决定从哪个子任务开始重试
-3. 所有子任务完成后，**调用AI评估主任务是否完成**
-4. 如果未完成，AI提出下一轮的优化策略，通过`retry_from`指定重试起点，开始新一轮尝试
-5. 循环直到满足条件或达到最大尝试次数
-
-**AI决策机制**：
-
-系统会在两个关键时刻调用AI：
-
-1. **子任务失败时**：
-   - 系统提供失败信息、历史记录、错误日志等上下文
-   - AI分析失败原因，决定从哪个子任务开始重试
-   - AI提出具体的修复建议
-   - 系统完全听从AI的决策，重置相应的子任务状态
-
-2. **所有子任务完成后**：
-   - 系统提供所有子任务的执行结果、训练日志、指标数据等上下文
-   - AI判断主任务是否满足完成条件
-   - 如果未完成，AI提出下一轮的优化方向和具体建议
-   - 系统根据AI的评估决定是标记完成还是开始新一轮尝试
-
-### 3. 循环任务 (looping)
-
-**适用场景**：需要固定循环 N 次执行所有子任务的迭代优化场景（如 profile → optimize → benchmark → commit）
-
-**配置示例**：
-```yaml
-- id: 15
-  name: "迭代优化 CUDA 内核性能"
-  type: looping
-  repeat_count: 5
-  max_attempts_per_loop: 10
-  completion_criteria: |
-    完成 5 轮优化迭代
-    每轮包含：性能分析、代码优化、基准测试、提交
-  subtasks:
-    - id: 15.1
-      name: "使用 ncu 分析性能瓶颈"
-      type: long_running
-      completion_criteria: "ncu 分析完成，生成性能报告"
-      
-    - id: 15.2
-      name: "根据分析结果优化代码"
-      type: simple
-      completion_criteria: "代码优化完成，编译通过"
-      
-    - id: 15.3
-      name: "运行基准测试验证优化效果"
-      type: simple
-      completion_criteria: "基准测试完成，记录性能数据"
-```
-
-**与 nested 的区别**：
-- `nested`：AI 每轮评估是否完成，可能提前结束或继续重试
-- `looping`：固定循环 N 次，不做完成度评估，每轮使用独立的 round-scoped state keys
-
-**执行流程**：
-1. 每轮循环使用新的 round-scoped keys（如 `1.1@2.1`），子任务状态自动为 pending
-2. 按顺序执行所有子任务
-3. 子任务失败时 AI 分析原因并决定重试策略（在当前轮内重试）
-4. 循环完指定次数即完成
-
-### 4. 长时间任务 (long_running)
-
-**适用场景**：可能超过 CodeBuddy 超时限制的任务（如模型训练、Profiling）
-
-**配置示例**：
-```yaml
-- id: 2.2
-  name: "运行训练"
+  name: "运行基准测试"
   type: long_running
-  completion_criteria: "训练正常退出且验证集指标满足要求"
+  model: lite          # 只是跑命令，用便宜模型
 ```
 
-**执行流程**：
-1. AutoAgent 构造 prompt，告知 AI 使用 `autoagent-exec` wrapper 脚本启动长时间命令
-2. AI 通过 wrapper 脚本调用 `autoagent-exec.bat <command>`（内部参数由 wrapper 预填）
-3. `autoagent-exec` 启动命令并监视（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置）：
-   - 超时内失败：智能输出（短输出内联打印，长输出只给路径），AI 可修复并重试
-   - 超时内成功：智能输出（短输出内联打印并标注 not truncated，长输出只给路径）
-   - 超时后仍在运行：输出 "TASK SUBMITTED"，AI 结束会话
-4. AutoAgent 检测到 `LONG_RUNNING_IN_PROGRESS`，开始轮询信号文件
-   （如果 AI 遗漏了此标记，信号文件预检测会在 nudge 前自动补充）
-5. 任务完成后，重新启动 AI 分析输出日志并判断完成条件
+---
 
-**技术细节**：
-- 使用 `autoagent_exec.py` 作为启动器（通过 wrapper 脚本调用），支持快速失败检测（超时时间由 `config.yaml` 的 `fast_fail_timeout` 配置）
-- 信号文件（`lr_tasks/lr_<task_id>_signal.json`）用于进程间通信
-- 输出日志（`lr_tasks/lr_<task_id>_output.log`）记录命令完整输出
-- 信号文件和输出日志均位于 `session_dir/lr_tasks/`（由 orchestrator 的 `--log-dir` 参数决定）
+## 8. 会话管理
 
-## 执行方式
+### 会话存储
 
-### 1. 使用 Preset 配置
+所有执行数据保存在 `.autoagent/` 目录下，每次运行创建一个会话目录。
 
-通过 `config.yaml` 中的 preset 快速切换常用配置：
+### 断点续传
 
 ```bash
-# 使用 default 预设
-python orchestrator.py
-
-# 使用指定预设
-python orchestrator.py --preset test
-
-# 使用预设但覆盖特定参数
-python orchestrator.py --preset default --model claude-sonnet-4-6
-```
-
-**Preset 优先级**：命令行参数 > Preset 配置 > 默认值
-
-支持的 Preset 字段：
-- `config`: 任务配置文件路径
-- `ideas`: ideas.md 文件路径
-- `provider`: AI Provider 名称
-- `model`: AI 模型名称
-- `executable`: 可执行文件路径
-- `workspace`: 工作目录
-- `verbose`: 是否启用详细日志
-- `no_skip`: 是否不跳过已完成任务
-- `no_idle`: 是否禁用 idle 模式
-- `use_cli`: 是否使用 CLI 模式
-- `ideas_only`: 是否仅处理 ideas
-- `human_review`: 是否启用人工审核
-- `timeout`: AI 调用超时时间
-- `log_dir`: 日志目录
-- `idle_interval`: idle 轮询间隔
-- `include_directories`: 额外目录（Gemini 专用）
-- `test_rules`: 测试规则文件路径
-
-### 2. 交互式执行
-
-默认模式，实时输出日志：
-
-```bash
-python orchestrator.py
-```
-
-### 3. 选择 AI Provider
-
-支持多种 AI CLI 工具：
-
-```bash
-# CodeBuddy（默认，默认模型从 config.yaml 的 default_model 加载）
-python orchestrator.py
-
-# Claude Code（默认模型 claude-sonnet-4-6）
-python orchestrator.py --provider claude
-
-# Gemini Cli（默认模型 gemini-3-flash）
-python orchestrator.py --provider gemini
-
-# OpenCode（使用 opencode 自身配置的默认模型）
-python orchestrator.py --provider opencode
-
-# OpenAI Codex（默认模型 gpt-5.4-mini）
-python orchestrator.py --provider codex
-
-# 指定模型
-python orchestrator.py --provider codebuddy --model deepseek-v3.2
-python orchestrator.py --provider gemini --model gemini-3-flash
-
-# 使用自定义可执行文件路径
-python orchestrator.py --provider claude --executable /usr/local/bin/claude
-
-# 传递额外 CLI 参数给 AI 工具
-python orchestrator.py --extra-args "--max-turns 1000"
-
-# 查看所有可用 provider
-python orchestrator.py --list-providers
-```
-
-### 4. 后台执行
-
-```bash
-nohup python orchestrator.py > orchestrator.log 2>&1 &
-```
-
-### 5. 会话管理
-
-AutoAgent 使用**会话（session）**来隔离不同运行的状态和日志。每次运行默认创建新会话，你也可以继续或恢复历史会话。
-
-#### 会话存储结构
-
-```
-<log_dir>/                              # 默认 .autoagent
-├── sessions.csv                        # 会话注册表（Tab 分隔）
-├── <workspace>_<random8>/              # 会话目录（如 my_project_2xrsx0i7）
-│   ├── todos_state.yaml
-│   ├── orchestrator.log
-│   └── conversations/
-├── <workspace>_<random8>/              # 另一个会话
-│   └── ...
-└── ...
-
-<workspace>/
-├── .autoagent_log                      # 当前活跃会话标记（内容为会话目录名）
-└── ...
-```
-
-#### 查看所有会话
-
-```bash
-python orchestrator.py --list-sessions
-```
-
-输出示例：
-```
-Workspace                  Session ID                          Created             Status
-/path/to/project           my_project_2xrsx0i7 (active)        2026-04-03 17:58    3 completed, 1 failed
-/path/to/project           my_project_po0ydek6                  2026-04-03 17:53    2 completed
-```
-
-#### 继续当前会话
-
-```bash
-# 继续 .autoagent_log 指向的会话（恢复已有状态和进度）
-python orchestrator.py --continue
-```
-
-#### 恢复特定会话
-
-```bash
-# 用完整会话名
-python orchestrator.py --resume my_project_2xrsx0i7
-
-# 用短 ID（随机后缀即可，只要不歧义）
-python orchestrator.py --resume 2xrsx0i7
-```
-
-恢复时会自动更新 `.autoagent_log` 指向被恢复的会话。
-
-#### 默认行为
-
-不指定 `--continue` 或 `--resume` 时，每次运行都会**创建新会话**，不影响历史会话的状态。
-
-> **注意**：`--continue` 和 `--resume` 不能同时使用。
-
-### 6. 断点续传
-
-如果执行中断（如 Ctrl+C），可以使用 `--continue` 从断点继续：
-
-```bash
-python orchestrator.py --continue
-```
-
-断点续传会加载上次会话的 `todos_state.yaml`，自动跳过已完成的任务，继续未完成的部分。
-
-**中断恢复机制**：
-- 当用户按 Ctrl+C 中断时，系统会保存当前的 session_id 并标记 `interrupt_pending`
-- 下次运行时，如果 session 仍然存活，系统会在同一 session 中发送轻量级的 follow-up prompt 继续工作，而不是重置 session 并重播完整的任务 prompt
-- 这与 BashTimeoutError / StreamTimeoutError 的处理方式一致，AI 的上下文完整保留，恢复速度更快
-
-**断点续传的具体行为**：
-- 子任务状态使用 round-scoped key（`subtask_id@round_label`，如 `1.2@3.1`），每轮循环/每次 failure retry 有独立状态
-- 中断后 resume 时只检查当前轮次的 key，已完成的子任务被精确跳过，未完成的继续执行
-- `previous_subtask_summary` 会持久化到磁盘（`previous_subtask_summary.txt`），恢复后下一个子任务仍能获得前一个子任务的上下文
-- **looping 任务**的当前循环索引（`current_loop`）也会持久化，中断后从上次的 loop 继续
-- `*_once` 类型的子任务使用 plain key，跨所有轮次共享（完成一次后不再重复执行）
-
-### 7. 查看状态
-
-```bash
-# 查看任务状态
-python orchestrator.py --status
-```
-
-### 8. 其他常用命令
-
-```bash
-# 验证配置文件是否合法
-python orchestrator.py --validate
-
-# 不跳过已完成的任务，全部重新执行
-python orchestrator.py --no-skip
-
-# 重置当前会话状态
-python orchestrator.py --reset
-
-# 启用详细日志
-python orchestrator.py --verbose
-
-# 使用预设配置
-python orchestrator.py --preset test
-
-# 列出所有可用 provider
-python orchestrator.py --list-providers
-
-# 列出所有历史会话
-python orchestrator.py --list-sessions
-
-# 继续当前会话
+# 继续上次会话
 python orchestrator.py --continue
 
 # 恢复指定会话
 python orchestrator.py --resume <session_id>
+
+# 查看所有会话
+python orchestrator.py --list-sessions
 ```
 
-## 最佳实践
-
-### 1. 任务设计原则
-
-- ✅ 任务描述要清晰明确
-- ✅ 完成标准要可验证
-- ✅ 合理设置初始提示
-- ✅ 避免任务过于复杂
-
-**示例**：
-
-```yaml
-# ❌ 不好：任务过于复杂
-- id: 1
-  name: "优化整个项目"
-  type: simple
-  completion_criteria: "所有指标都好"
-
-# ✅ 好：任务拆分
-- id: 1
-  name: "优化数据加载速度"
-  type: simple
-  completion_criteria: "数据加载时间 < 1s"
-
-- id: 2
-  name: "优化训练速度"
-  type: nested
-  completion_criteria: "每个 epoch < 5min"
-  subtasks:
-    - id: 2.1
-      name: "修改训练代码"
-      type: simple
-      completion_criteria: "代码修改完成"
-    - id: 2.2
-      name: "运行训练测试"
-      type: simple
-      completion_criteria: "测试完成且性能达标"
-```
-
-### 2. 完成标准编写
-
-- ✅ 使用具体数值
-- ✅ 明确验证方式
-- ✅ 考虑边界情况
-
-**示例**：
-
-```yaml
-# ❌ 不好：模糊不清
-completion_criteria: "精度要高"
-
-# ✅ 好：具体明确
-completion_criteria: |
-  模型精度（accuracy）需要 >= 0.9
-  在验证集上的 loss < 0.1
-  训练过程中无 OOM 错误
-  最后 3 个 epoch 的准确率方差 < 0.01
-```
-
-### 3. 嵌套任务使用
-
-**适用场景**：
-- 需要多步骤的复杂任务
-- 某些步骤可能需要很长时间（如训练）
-- 需要根据后续步骤的结果判断整体是否完成
-
-**示例**：
-
-```yaml
-- id: 2
-  name: "优化模型性能"
-  type: nested
-  completion_criteria: "训练成功完成且 val_loss < 0.5"
-  subtasks:
-    # 步骤1：AI 修改代码
-    - id: 2.1
-      name: "修改训练代码"
-      type: simple
-      completion_criteria: "代码修改完成"
-      
-    # 步骤2：长时间训练（避免超时）
-      - id: 2.2
-        name: "运行训练"
-        type: long_running
-        completion_criteria: "训练正常退出且验证集指标满足要求"
-```
-
-### 4. 长时间任务使用
-
-**适用场景**：
-- 任务执行时间可能超过 CodeBuddy 超时限制
-- 模型训练、数据处理等长时间任务
-
-**注意事项**：
-- 确保日志中有明确的完成标志
-- 监控进程会定期检查日志
-- CodeBuddy 必须先登录（settings.json 存在）
-
-### 5. 日志管理
-
-```bash
-# 查看长时间任务的输出日志（在会话目录的 lr_tasks/ 下）
-tail -f .autoagent/*/lr_tasks/lr_*_output.log
-
-# 查看长时间任务的信号文件（状态：running/finished/error）
-cat .autoagent/*/lr_tasks/lr_*_signal.json
-
-# 查看 orchestrator 运行日志
-tail -f .autoagent/*/orchestrator.log
-
-# 查看 AI 对话日志
-ls .autoagent/*/conversations/
-```
-
-### 6. AI决策的最佳实践
-
-#### 子任务完成条件
-
-- ✅ 明确且可验证
-- ✅ 避免模糊的描述
-- ✅ 考虑AI的判断能力
-
-**示例**：
+### 中断恢复
 
-```yaml
-# ❌ 不好：AI很难判断
-- id: 2.1
-  name: "优化模型"
-  type: simple
-  completion_criteria: "代码变好了"
+`Ctrl+C` 中断时，系统自动保存当前状态。下次 `--continue` 时：
+- 已完成的任务自动跳过
+- 中断的任务从断点继续（同一 AI 会话）
+- 后台长时间任务继续轮询
 
-# ✅ 好：明确的标准
-- id: 2.1
-  name: "优化模型"
-  type: simple
-  completion_criteria: |
-    代码修改已完成，具体包括：
-    1. 添加了dropout层
-    2. 调整了学习率
-    3. 代码可以正常运行
-```
+---
 
-#### 主任务完成条件
+## 9. 最佳实践
 
-- ✅ 基于具体的指标
-- ✅ 考虑边界情况
-- ✅ 给出明确的数值要求
+### 任务设计
 
-**示例**：
+1. **completion_criteria 要具体可验证**：引用具体文件、命令输出、数值阈值
+2. **initial_hint 提供上下文而非剧本**：给 AI 关键信息，让它自主决策
+3. **合理分解子任务**：2-3 个子任务通常足够，不要过度拆分
+4. **用 `model: lite` 节省 Token**：编译、跑命令等不需要推理的任务用便宜模型
+5. **用 `*_once` 避免重复**：环境搭建、依赖安装等一次性操作
 
-```yaml
-# ❌ 不好：模糊不清
-- id: 2
-  name: "优化模型性能"
-  type: nested
-  completion_criteria: "性能要好"
+### AI 调度模式
 
-# ✅ 好：具体明确
-- id: 2
-  name: "优化模型性能"
-  type: nested
-  completion_criteria: |
-    在验证集上满足以下所有条件：
-    1. val_loss < 0.5
-    2. val_accuracy >= 0.9
-    3. 训练过程中无OOM错误
-    4. 最后3个epoch的loss稳定（方差<0.01）
-```
+1. **strategy 用编号规则**：清晰的条件-动作规则
+2. **description 必填**：调度器靠它理解任务
+3. **配置 last_result**：让调度器看到执行结果
+4. **任务数控制在 5-8 个**：太多会撑爆调度器 prompt
+5. **设计可重复执行的任务**：同一任务可能被调度多次
 
-#### 利用AI的决策能力
+### 长时间任务
 
-系统会在两个关键点调用AI，你可以通过合理的任务设计来充分利用AI的决策能力：
+1. **超过 1 分钟的命令用 `long_running`**：避免 session timeout
+2. **completion_criteria 引用输出日志中的模式**
+3. **用 `long_running_once` 做一次性基准测试**
 
-1. **子任务失败时**：
-   - AI会分析失败原因
-   - AI会决定从哪个子任务开始重试
-   - AI会提出修复建议
+---
 
-2. **主任务评估时**：
-   - AI会评估是否满足完成条件
-   - AI会分析结果与目标的差距
-   - AI会提出下一轮的优化方向
+## 10. 故障排除
 
-**建议**：
-- 提供足够的历史信息（系统会自动收集）
-- 给出明确的完成条件（让AI有明确的判断标准）
-- 信任AI的决策（系统完全听从AI）
-- 记录AI的决策（便于回顾和调试）
+| 问题 | 原因 | 解决方案 |
+|------|------|---------|
+| AI 反复重试同一错误 | completion_criteria 不够具体 | 添加更明确的成功/失败判断条件 |
+| 任务超时 | 命令执行时间超过 session_timeout | 改用 `long_running` 类型 |
+| AI 忘记输出完成标记 | 任务过于复杂 | 系统会自动 nudge，无需干预 |
+| 子任务间信息丢失 | 未持久化中间结果 | 在 initial_hint 中指示写入文件 |
+| AI 调度器选错任务 | strategy 规则不清晰 | 用更明确的条件-动作规则 |
+| Rate limit 错误 | API 调用频率过高 | 系统自动退避，无需干预 |
+| 会话恢复失败 | 会话目录被删除 | 使用 `--reset` 重新开始 |
 
-## 故障排除
+---
 
-### 问题 1：CodeBuddy 认证失败
+## 11. FAQ
 
-**错误信息**：
-```
-Authentication required. Please use /login command to sign in to your account
-```
+**Q: 任务失败后会阻塞后续任务吗？**
 
-**解决方案**：
+A: 不会。线性模式下，失败的任务不阻塞后续任务执行。
 
-```bash
-# 在交互式终端执行登录
-codebuddy -p "login_test"
+**Q: 如何在不同任务间传递数据？**
 
-# 验证 settings.json 存在
-ls ~/.codebuddy/settings.json
-```
+A: 通过文件系统。在 `initial_hint` 中指示 AI 将结果写入特定文件，后续任务读取该文件。
 
-### 问题 2：长时间任务卡住
+**Q: AI 调度模式和线性模式可以混用吗？**
 
-**检查步骤**：
+A: 不能同时使用。如果 `todos.yaml` 包含 `ai_orchestrator` 配置，系统自动使用 AI 调度模式。
 
-```bash
-# 查看任务状态（状态文件在会话目录下）
-cat .autoagent/*/todos_state.yaml
+**Q: 如何查看 AI 的完整对话记录？**
 
-# 查看长时间任务的信号文件（在会话目录的 lr_tasks/ 下）
-cat .autoagent/*/lr_tasks/lr_*_signal.json
+A: 查看 `.autoagent/<session>/conversations/` 目录下的 Markdown 文件。
 
-# 查看长时间任务的输出日志
-tail -f .autoagent/*/lr_tasks/lr_*_output.log
+**Q: 支持哪些 AI Provider？**
 
-# 查看后台运行的进程
-ps aux | grep train.py
-```
-
-### 问题 3：AI 无限循环
-
-**原因**：完成条件设置不合理，AI 无法满足
-
-**解决方案**：
-- 检查完成条件是否合理
-- 重新设计任务，拆分为更小的任务
-- 设置更合理的初始提示
-
-### 问题 3.5：AI CLI 连续调用失败
-
-**现象**：AI CLI 工具反复返回错误（网络问题、认证过期、服务端限流等）
-
-**内置机制**：系统自动使用指数退避策略（5s → 10s → 20s → 40s → ... → `backoff_max_wait`），成功后自动重置。系统永远不会因为连续失败而主动退出。
-
-**配置**：在 `config.yaml` 中调整 `backoff_max_wait`（默认 300 秒）。
-
-### 问题 4：状态文件损坏
-
-**解决方案**：
-
-```bash
-# 删除状态文件，重新开始（状态文件在会话目录下）
-rm .autoagent/*/todos_state.yaml
-```
-
-### 问题 5：长时间任务的监控进程异常
-
-**说明**：`autoagent-exec` 在将命令转入后台运行时，会启动一个独立的监控进程来跟踪命令的完成状态并更新信号文件。
-
-**检查步骤**：
-
-```bash
-# 检查信号文件是否存在且状态正确
-cat .autoagent/*/lr_tasks/lr_*_signal.json
-
-# 检查监控进程是否在运行（监控进程也是 autoagent_exec.py）
-ps aux | grep autoagent_exec
-
-# 如果信号文件卡在 "running" 状态但命令已结束，
-# 可以手动更新信号文件的 status 为 "finished"
-```
-
-## 常见问题
-
-### Q: 如何查看当前任务进度？
-
-```bash
-# 查看状态文件（在会话目录下）
-cat .autoagent/*/todos_state.yaml
-
-# 或使用内置命令
-python orchestrator.py --status
-```
-
-### Q: 如何中断执行？
-
-```bash
-# Ctrl+C 中断当前任务
-# 系统会保存 session_id 和中断标志
-# 下次运行时会在同一 session 中继续（不重置上下文）
-python orchestrator.py --continue
-```
-
-### Q: 如何重新开始某个任务？
-
-```bash
-# 删除该任务的状态，重新运行
-# 编辑 todos_state.yaml，删除对应任务的状态
-python orchestrator.py
-```
-
-### Q: 支持哪些 AI 工具和模型？
-
-支持五种 AI CLI 工具：
-
-| Provider | 命令 | 默认模型 | 别名 |
-|----------|------|----------|------|
-| CodeBuddy | `codebuddy` | 从 config.yaml 的 `default_model` 加载 | `cb` |
-| Claude Code | `claude` | `claude-sonnet-4-6` | `claude-code`, `claude` |
-| Gemini CLI | `gemini` | `gemini-3-flash` | `gemini-cli`, `gemini` |
-| OpenCode | `opencode` | （使用自身配置默认） | `oc` |
-| Test | `test` | `test` | - |
-
-> **Test Provider** 不调用真实 AI，而是从 `--test-rules` 指定的规则文件中按顺序读取预定义响应，用于测试编排逻辑。
-
-使用 `--list-providers` 查看所有可用 provider和别名。
-
-### Q: 如何自定义模型？
-
-通过命令行 `--model` 参数指定：
-
-```bash
-# 单模型（所有阶段使用同一模型）
-python orchestrator.py --model deepseek-v3.2
-
-# 多模型（不同阶段使用不同模型）
-# 格式: "plan:模型A;default:模型B;lite:模型C"
-# - plan: idea 分解为 TODO 阶段
-# - default: 任务执行默认模型
-# - lite: 简单任务使用的轻量模型
-python orchestrator.py --model "plan:GLM-4-Flash;default:GLM-5;lite:GLM-4-Flash"
-
-# 只指定部分角色（缺失的角色使用 default 的值）
-python orchestrator.py --model "default:GLM-5;lite:GLM-4-Flash"
-```
-
-或在代码中指定：
-
-```python
-from ai_providers import get_provider
-from orchestrator import TodoOrchestrator
-
-provider = get_provider("codebuddy", model="deepseek-v3.2")
-orchestrator = TodoOrchestrator(provider=provider)
-```
-
-## 总结
-
-本文档涵盖了：
-
-- ✅ 完整的安装和配置流程
-- ✅ 详细的任务类型说明
-- ✅ 多 AI Provider 支持（CodeBuddy / Claude Code / Gemini CLI / OpenCode）
-- ✅ 完整的使用指南
-- ✅ 最佳实践建议
-- ✅ 常见问题和解决方案
-
-如有其他问题，请参考：
-- [README.md](../README.md) - 项目介绍
-- [ARCHITECTURE.md](ARCHITECTURE.md) - 架构设计
+A: CodeBuddy（默认）、Claude Code、Gemini CLI、OpenCode、Codex。使用 `--list-providers` 查看完整列表。

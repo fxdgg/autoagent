@@ -1,51 +1,41 @@
 # 文档索引
 
-欢迎使用 AutoAgent！
-
-本文档索引帮助你快速找到需要的文档。
+欢迎使用 AutoAgent！本索引帮助你快速找到需要的文档。
 
 ## 📚 文档列表
 
 | 文档 | 说明 | 适合谁 |
 |------|------|--------|
-| **[README.md](../README.md)** ⭐ | 项目介绍、核心特性、快速开始 | 所有人 |
-| **[ARCHITECTURE.md](ARCHITECTURE.md)** 🏗️ | 系统架构、核心组件、AI 决策机制、状态管理 | 开发者 |
-| **[USAGE.md](USAGE.md)** 📖 | 使用指南、配置详解、最佳实践、故障排除 | 使用者 |
-| **[API_REFERENCE.md](API_REFERENCE.md)** 🔧 | 完整 API 参考、类定义、状态类型 | 开发者 |
-| **[EXAMPLES.md](EXAMPLES.md)** 💡 | 实际使用示例（ML、代码质量、性能优化） | 所有人 |
-| **[FILES.md](FILES.md)** 📁 | 项目文件结构说明 | 开发者 |
-| **[AI Orchestrator 设计方案](ai_orchestrator/DESIGN.md)** 🤖 | AI 调度器设计方案（WIP） | 开发者 |
-| **[AI Orchestrator TASK_DESIGN_GUIDE 修改方案](ai_orchestrator/TASK_DESIGN_GUIDE_CHANGES.md)** 📝 | TASK_DESIGN_GUIDE 修改方案（WIP，实现后删除） | 开发者 |
+| [README.md](../README.md) ⭐ | 项目介绍、核心特性、快速开始 | 所有人 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) 🏗️ | 系统架构、模块设计、执行流程、AI 决策机制 | 开发者 |
+| [USAGE.md](USAGE.md) 📖 | 使用指南、配置详解、执行模式、最佳实践 | 使用者 |
+| [API_REFERENCE.md](API_REFERENCE.md) 🔧 | 模块接口、类定义、配置项、异常类型 | 开发者 |
+| [EXAMPLES.md](EXAMPLES.md) 💡 | 实际使用示例（线性模式、AI 调度模式、Ideas 模式） | 所有人 |
+| [FILES.md](FILES.md) 📁 | 项目文件结构与模块说明 | 开发者 |
+| [PROMPT.md](PROMPT.md) 📝 | Prompt 工程：所有 AI 交互的提示词模板 | 开发者 |
+| [AI Orchestrator 设计](ai_orchestrator/DESIGN.md) 🤖 | AI 调度器的详细设计方案 | 开发者 |
 
 ## 🎯 按需求查找
 
 | 我想... | 去哪里 |
 |---------|--------|
-| 快速上手 | [README.md](../README.md) → 快速开始 |
+| 快速上手 | [README.md](../README.md) → 30 秒上手 |
 | 了解系统架构 | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| 配置任务 | [USAGE.md](USAGE.md) → 配置文件 |
-| 使用 Preset 配置 | [USAGE.md](USAGE.md) → 使用 Preset 配置 |
+| 配置任务 YAML | [USAGE.md](USAGE.md) → 任务配置 |
+| 使用 AI 调度模式 | [USAGE.md](USAGE.md) → AI 调度模式 |
+| 使用 Preset 配置 | [USAGE.md](USAGE.md) → Preset 配置 |
 | 看使用示例 | [EXAMPLES.md](EXAMPLES.md) |
-| 了解 AI 决策机制 | [ARCHITECTURE.md](ARCHITECTURE.md) → AI 决策点 |
-| 了解长时间任务处理 | [ARCHITECTURE.md](ARCHITECTURE.md) → 长时间任务处理 |
+| 了解 AI 调度器设计 | [ai_orchestrator/DESIGN.md](ai_orchestrator/DESIGN.md) |
+| 了解 Prompt 设计 | [PROMPT.md](PROMPT.md) |
 | 查看 API 定义 | [API_REFERENCE.md](API_REFERENCE.md) |
+| 了解文件结构 | [FILES.md](FILES.md) |
 | 排查问题 | [USAGE.md](USAGE.md) → 故障排除 |
-| 了解 AI 调度器设计 | [AI Orchestrator 设计方案](ai_orchestrator/DESIGN.md) |
-| 了解 AI 调度模式的任务设计变更 | [TASK_DESIGN_GUIDE 修改方案](ai_orchestrator/TASK_DESIGN_GUIDE_CHANGES.md) |
 
 ## 📖 推荐阅读顺序
 
 **新手**：README → EXAMPLES → USAGE
 
-**开发者**：README → ARCHITECTURE → API_REFERENCE → FILES
-
-## 📝 文档更新记录
-
-- **2026-04-14 v5**: 添加 AI Orchestrator 设计方案
-- **2026-03-29 v4**: 添加 Preset 配置文档
-- **2026-03-24 v3**: 精简索引页，去除重复内容
-- **2026-03-23 v2**: 更新为统一任务模型
-- **2026-03-23 v1**: 初始版本发布
+**开发者**：README → ARCHITECTURE → FILES → API_REFERENCE
 
 ---
 

@@ -1,32 +1,47 @@
-# AutoAgent 提示词构建文档 (PROMPT.md)
+# Prompt 工程
 
-本文档总结了 AutoAgent 中使用的所有核心提示词（Prompt）的构建方式。提示词中的可变部分使用 `[xxx]` 标识，条件渲染的 section 用 *(条件)* 标注。
-
-**核心原则**：每个可能包含长文本的字段都用独立的 XML tag 包裹，tag 内的文本缩进一级（4 空格）。短标量字段（如 ID、名称）可以在同一行。
+本文档描述 AutoAgent 中所有 AI 交互的 Prompt 模板设计。每个 Prompt 的结构和缩进与实际发送给 AI 的内容完全一致。
 
 ---
 
-## 1. 共享组件 (Shared Components)
+## 1. Prompt 架构概览
 
-### 1.1 系统提示词前缀 (System Prompt Prefix)
-用户可以在 `config.yaml` 或任务定义中配置 `system_prompt_prefix`，用于自定义 AI 的角色或添加特定指令。
-如果配置了该前缀，它会被放置在用户提示词的最前面（Continuation prompt 除外，见 §3.4）：
-```
-[system_prompt_prefix]
+所有 Prompt 构建逻辑集中在 `src/prompts/` 包中：
 
-[user_prompt]
-```
+| 文件 | 用途 |
+|------|------|
+| `shared.py` | 系统 prompt 构建、公共工具函数（缩进、截断、workflow 构建等） |
+| `simple_task.py` | 简单任务执行 prompt |
+| `long_running_task.py` | 长时间任务执行和结果分析 prompt |
+| `failure_analysis.py` | 失败分析 prompt（AI 决定重试点） |
+| `main_evaluation.py` | 主任务评估 prompt（AI 判断是否完成） |
+| `scheduler.py` | AI 调度 prompt（AI 决定下一个任务） |
+| `marker_nudge.py` | 标记提醒 prompt |
+| `timeout_continuation.py` | 超时续传 prompt |
+| `ideas_decompose.py` | Ideas 拆解 prompt |
+| `ideas_review.py` | Ideas 审查 prompt |
 
-### 1.2 编码代理系统指令 (Coding Agent System Instructions)
-对于执行代码任务的 AI，会生成编号规则列表作为系统指令（如果模型支持原生 system prompt，通过 `--append-system-prompt` 传递；否则包裹在 `<instructions>` 标签中附加到用户 prompt 末尾）：
+---
+
+## 2. 系统 Prompt（System Prompt）
+
+系统 prompt 由 `shared.py` 中的 `build_system_prompt_coding_agent()` 构建。
+
+### 2.1 支持 system prompt 的 Provider（CodeBuddy、Claude Code）
+
+直接作为 `--append-system-prompt` 参数传入：
+
 ```
 1. You are fully autonomous — make all decisions independently. NEVER ask the user questions or wait for confirmation.
 
-2. For any command that may run longer than a few minutes (compilation, benchmarking, profiling, training, etc.),   *(有 exec_script_path 时)*
+2. For any command that may run longer than a few minutes (compilation, benchmarking, profiling, training, etc.), 
 you MUST use autoagent-exec instead of running it directly in Bash:
-  "[exec_script_path]" "<your entire command>"
+  "<exec_script_path>" "<your entire command>"
 Always wrap the command in double quotes so that shell operators are passed correctly.
-When autoagent-exec prints "TASK SUBMITTED", output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+autoagent-exec has three possible outcomes:
+  - "TASK SUBMITTED" → the command is running in the background. Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+  - "[OK]" → the command finished quickly with exit code 0. Continue working — treat it as a normal completed command.
+  - "[FAST-FAIL]" → the command failed quickly. Read the error output, fix the issue, and retry.
 NEVER run long commands directly in Bash — the session may be killed due to timeout, wasting time or leaving the project in broken state.
 
 3. When you are done, end your response with EXACTLY one of:
@@ -35,222 +50,404 @@ NEVER run long commands directly in Bash — the session may be killed due to ti
   ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints "TASK SUBMITTED")
 ```
 
-> **Note**: 规则编号根据 `exec_script_path` 是否存在动态调整（无 exec_script_path 时规则 2 省略，编号变为 1/2）。
+### 2.2 不支持 system prompt 的 Provider（Gemini、OpenCode、Codex）
+
+包裹在 `<instructions>` 标签中，附加到用户 prompt 末尾：
+
+```
+<instructions>
+    1. You are fully autonomous — make all decisions independently. NEVER ask the user questions or wait for confirmation.
+    
+    2. For any command that may run longer than a few minutes ...
+    (same content as above, indented 4 spaces)
+    
+    3. When you are done, end your response with EXACTLY one of:
+      ✅ completed
+      ❌ not completed: <reason>
+      ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints "TASK SUBMITTED")
+</instructions>
+```
+
+### 2.3 system_prompt_prefix
+
+用户配置的 `system_prompt_prefix`（来自 config.yaml 或任务级覆盖）始终 prepend 到**用户 prompt** 的最前面（不是 system prompt），确保无论 Provider 是否支持 system prompt 通道，AI 都能看到角色设定。
 
 ---
 
-## 2. 任务执行提示词 (Task Execution Prompts)
+## 3. 简单任务 Prompt（Simple Task）
 
-### 2.1 简单任务执行 (Simple Task)
-用于 `simple` 和 `simple_once` 子任务的执行。
+**构建函数**：`simple_task.build_simple_task_prompt()`
+
+用户 prompt 以 `ROLE_CODING_AGENT` 开头，后接 XML 结构化内容。
+
+### 3.1 首次执行（顶层任务，无子任务上下文）
 
 ```
-[system_prompt_prefix]
+You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 <task>
     <task_name>
-        [task_name]
+        Round-scoped description validation
     </task_name>
 
+    <task_description>
+        Simple task testing round-scoped description selection.
+    </task_description>
+
     <completion_criteria>
-        [completion_criteria]
+        Round-scoped description verified in prompt context.
     </completion_criteria>
 
-    <initial_hint>                                                  *(有 initial_hint 时)*
-        [initial_hint]
+    <initial_hint>
+        Verify that description@7 appears in the project context.
     </initial_hint>
 </task>
 
-<context>                                                           *(有任何 context 内容时)*
-    <project_description>                                           *(有 project_description 时)*
-        [project_description]
+<context>
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths.
+    </project_description>
+</context>
+```
+
+### 3.2 子任务执行（带 workflow、subtask_goal、previous_step_result）
+
+```
+You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+
+
+<task>
+    <task_name>
+        One-time data preparation
+    </task_name>
+
+    <completion_criteria>
+        Data pipeline executed, output files generated.
+    </completion_criteria>
+
+    <initial_hint>
+        Run the data preparation pipeline using autoagent-exec.
+    </initial_hint>
+</task>
+
+<context>
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths.
     </project_description>
 
-    <subtask_goal>                                                  *(作为子任务时)*
-        [main_task_criteria]
+    <subtask_goal>
+        All subtasks completed with optimized performance.
+        Processing pipeline produces correct output.
     </subtask_goal>
 
-    <workflow>                                                      *(有兄弟子任务时)*
-        → [current_id]. [current_name]
-          [other_id]. [other_name]
-          ...
+    <workflow>
+        1.1. One-time environment setup
+        → 1.2. One-time data preparation
+          1.3. Core processing
+          1.4. Benchmark and validate
+          1.5. Commit results
 
         IMPORTANT: Only work on the current step (→). Do NOT perform work that belongs to later steps.
     </workflow>
 
-    <previous_step_result ([id])>                                   *(有 previous_subtask_summary 时)*
-        [previous_subtask_summary]
+    <previous_step_result (1.1)>
+        I have set up the environment:
+        - Installed Python 3.11 with all required packages
+        - Configured CUDA toolkit paths
+        - Created output directories
+
+        ✅ completed
     </previous_step_result>
 </context>
 
-<previous_attempts>                                                 *(attempt > 1 时)*
-    <previous_attempt_output>                                       *(session 被 reset 且有上次输出时)*
-        [previous_attempt_output_text]
+<constraints>
+    ⚠️ Long-Running Task: You MUST use autoagent-exec to run your command, Do NOT run it directly in Bash (see system instructions).
+</constraints>
+```
+
+**条件出现的字段**：
+- `<task_description>` — 仅当 `task.description` 有值时出现
+- `<initial_hint>` — 仅当 `task.initial_hint` 有值时出现
+- `<subtask_goal>` — 仅子任务时出现（内容为父任务的 `completion_criteria`）
+- `<workflow>` — 仅子任务时出现（当前步骤用 `→` 标记）
+- `<previous_step_result (X.Y)>` — 仅当前一个子任务有输出时出现
+- `<constraints>` — 仅当有超时警告或 long_running 提醒时出现
+
+### 3.3 重试执行（带 previous_attempts 和 guidance_from_previous_failure）
+
+```
+You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+
+
+<task>
+    <task_name>
+        Core processing
+    </task_name>
+
+    <completion_criteria>
+        Processing completed with correct output.
+    </completion_criteria>
+
+    <initial_hint>
+        Run the core processing pipeline.
+    </initial_hint>
+</task>
+
+<context>
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths.
+    </project_description>
+
+    <subtask_goal>
+        All subtasks completed with optimized performance.
+        Processing pipeline produces correct output.
+    </subtask_goal>
+
+    <workflow>
+        1.1. One-time environment setup
+          1.2. One-time data preparation
+        → 1.3. Core processing
+          1.4. Benchmark and validate
+          1.5. Commit results
+
+        IMPORTANT: Only work on the current step (→). Do NOT perform work that belongs to later steps.
+    </workflow>
+</context>
+
+<guidance_from_previous_failure>
+    Update config.yaml to set timestamp_format='datetime64' and add a type coercion step for string-to-datetime conversion in the processing pipeline.
+
+    Please take this analysis into account and try a different approach.
+</guidance_from_previous_failure>
+```
+
+**重试时额外出现的字段**：
+- `<previous_attempts>` — 包含 `<previous_attempt_output>` 和 `<attempt_history>`
+- `<guidance_from_previous_failure>` — 来自 AI 失败分析的修复建议
+- `<guidance_from_main_task_evaluator>` — 来自主任务评估的下一步策略
+
+### 3.4 重试执行（带 previous_attempts 完整结构）
+
+```
+<previous_attempts>
+    <previous_attempt_output>
+        I attempted to process the data but hit an error:
+        Error: ConfigurationError - processing parameters do not match...
+        ❌ not completed: Configuration mismatch
     </previous_attempt_output>
 
-    <attempt_history>                                               *(有非 completed 的 history 时)*
-        - Attempt [N]: [result_str]
-            Error: [error_msg]                                      *(result=error)*
-            Note: [summary]                                         *(result=interrupted)*
-            Summary: [summary]                                      *(result=not_completed 且非 "cannot find")*
+    <attempt_history>
+        - Attempt 1: not_completed
+            Summary: ❌ not completed: Configuration mismatch with prepared data schema
     </attempt_history>
 
     Please analyze what went wrong and try a different approach.
 </previous_attempts>
-
-<guidance_from_previous_failure>                                    *(有 suggested_fix 时)*
-    [suggested_fix]
-
-    Please take this analysis into account and try a different approach.
-</guidance_from_previous_failure>
-
-<guidance_from_main_task_evaluator>                                 *(有 next_strategy 时)*
-    The last round didn't match the subtask goal. Please take this analysis into account and try a different approach.
-
-    [next_strategy]
-</guidance_from_main_task_evaluator>
-
-<constraints>                                                       *(有超时反馈时)*
-    ⏰ TIMEOUT WARNING: The previous session was killed due to session timeout.
-    If your task involves a long-running command, remember to use `autoagent-exec` (see system instructions).
-</constraints>
 ```
 
-### 2.2 长时间运行任务执行 (Long-Running Task)
-用于 `long_running` 和 `long_running_once` 任务的执行。
+---
 
-```
-[system_prompt_prefix]
+## 4. 长时间任务 Prompt（Long Running Task）
 
-<task>
-    <task_name>
-        [task_name]
-    </task_name>
+**构建函数**：`long_running_task.build_long_running_prompt()`
 
-    <completion_criteria>
-        [completion_criteria]
-    </completion_criteria>
+结构与简单任务相同，区别在于：
+- `<constraints>` 始终出现（包含 long-running 提醒）
+- `<previous_attempts>` 中没有 `<previous_attempt_output>` 子标签
 
-    <initial_hint>                                                  *(有 initial_hint 时)*
-        [initial_hint]
-    </initial_hint>
-</task>
+### 4.1 结果分析 Prompt
 
-<context>                                                           *(有任何 context 内容时)*
-    <project_description>                                           *(有 project_description 时)*
-        [project_description]
-    </project_description>
+**构建函数**：`long_running_task.build_long_running_analysis_prompt()`
 
-    <subtask_goal>                                                  *(作为子任务时)*
-        [main_task_criteria]
-    </subtask_goal>
-
-    <workflow>                                                      *(有兄弟子任务时)*
-        → [current_id]. [current_name]
-          [other_id]. [other_name]
-          ...
-
-        IMPORTANT: Only work on the current step (→). Do NOT perform work that belongs to later steps.
-    </workflow>
-
-    <previous_step_result ([id])>                                   *(有 previous_subtask_summary 时)*
-        [previous_subtask_summary]
-    </previous_step_result>
-</context>
-
-<previous_attempts>                                                 *(attempt > 1 时)*
-    <attempt_history>                                               *(有非 completed 的 history 时；注：无 previous_attempt_output）*
-        - Attempt [N]: [result_str]
-            Error: [error_msg]                                      *(result=error)*
-            Note: [summary]                                         *(result=interrupted)*
-            Summary: [summary]                                      *(result=not_completed 且非 "cannot find")*
-    </attempt_history>
-
-    Please analyze what went wrong and try a different approach.
-</previous_attempts>
-
-<guidance_from_previous_failure>                                    *(有 suggested_fix 时)*
-    [suggested_fix]
-
-    Please take this analysis into account and try a different approach.
-</guidance_from_previous_failure>
-
-<guidance_from_main_task_evaluator>                                 *(有 next_strategy 时)*
-    The last round didn't match the subtask goal. Please take this analysis into account and try a different approach.
-
-    [next_strategy]
-</guidance_from_main_task_evaluator>
-
-<constraints>                                                       *(始终存在)*
-    ⏰ TIMEOUT WARNING: The previous session was killed due to session timeout.    *(有超时反馈时，替代下面的 reminder)*
-    If your task involves a long-running command, remember to use `autoagent-exec` (see system instructions).
-
-    ⚠️ Long-Running Task: You MUST use autoagent-exec to run your command, Do NOT run it directly in Bash (see system instructions).    *(无超时反馈时显示)*
-</constraints>
-```
-
-### 2.3 长时间运行结果分析 (Long-Running Analysis)
-任务完成后重启 AI 分析结果（在同一会话上下文中，AI 已知任务背景）：
+当后台命令完成后，在同一会话中发送：
 
 ```
 You previously launched this task using autoagent-exec:
-    [command_info]
+    Command: python -c "import time; time.sleep(1)"
 The task has now finished. Output has been saved to:
-    [output_log_path]
+    D:/path/to/session/lr_tasks/lr_1.2_output.log
 ```
 
 ---
 
-## 3. AI 决策提示词 (AI Decision Prompts)
+## 5. AI 调度器 Prompt（Scheduler）
 
-### 3.1 失败分析 (Failure Analysis)
-当子任务失败时，AI 分析原因并决定重试策略。用于 Nested 和 Looping 任务。
+**构建函数**：`scheduler.build_scheduler_prompt()`
+
+### 5.1 System Prompt
+
+```
+You are an AI task scheduler. Your job is to decide which task to execute next, or whether to stop execution.
+
+You must respond with a JSON object in one of these formats:
+1. Execute a task: {"action": "execute", "task_id": <id>, "reasoning": "<why>"}
+2. Stop execution: {"action": "stop", "reasoning": "<why>"}
+
+You must choose exactly ONE task per round.
+```
+
+### 5.2 User Prompt（首轮，无历史）
+
+```
+<context>
+    Current Round: 1 / 10
+
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths.
+    </project_description>
+
+    <scheduling_strategy>
+        Execute tasks sequentially.
+    </scheduling_strategy>
+
+    <stop_condition>
+        All tasks completed.
+    </stop_condition>
+
+    <available_tasks>
+        - Task 1: Nested comprehensive coverage | Type: nested | Executed: 0 time(s)
+            Description:
+                Comprehensive nested task testing all prompt-building paths.
+        - Task 2: Looping comprehensive coverage | Type: looping | Executed: 0 time(s)
+            Description:
+                Comprehensive looping task testing all prompt-building paths.
+        - Task 3: Nested edge case coverage | Type: nested | Executed: 0 time(s)
+            Description:
+                Nested task testing edge cases with long_running subtasks.
+
+        IMPORTANT: If a result file is marked as NOTFOUND, it is probably
+        due to task failures — the task may have crashed or errored out
+        before it could write its result file. Consider re-running the
+        task or running a diagnostic task to investigate.
+    </available_tasks>
+</context>
+```
+
+### 5.3 User Prompt（后续轮次，带历史和 Last Result）
+
+```
+<context>
+    Current Round: 3 / 10
+
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths.
+    </project_description>
+
+    <scheduling_strategy>
+        Execute tasks sequentially.
+    </scheduling_strategy>
+
+    <stop_condition>
+        All tasks completed.
+    </stop_condition>
+
+    <available_tasks>
+        - Task 1: Nested comprehensive coverage | Type: nested | Executed: 1 time(s)
+            Description:
+                Comprehensive nested task testing all prompt-building paths.
+            Last Result: See D:/path/to/session/task_results/result_1.txt
+        - Task 2: Looping comprehensive coverage | Type: looping | Executed: 1 time(s)
+            Description:
+                Comprehensive looping task testing all prompt-building paths.
+            Last Result: See D:/path/to/session/task_results/result_2.txt
+        - Task 3: Nested edge case coverage | Type: nested | Executed: 0 time(s)
+            Description:
+                Nested task testing edge cases with long_running subtasks.
+
+        IMPORTANT: If a result file is marked as NOTFOUND, it is probably
+        due to task failures — the task may have crashed or errored out
+        before it could write its result file. Consider re-running the
+        task or running a diagnostic task to investigate.
+    </available_tasks>
+
+    <schedule_history> (last 10 rounds)
+        ✅ 1. (Nested comprehensive coverage)
+            Reasoning: Sequential execution order
+        ✅ 2. (Looping comprehensive coverage)
+            Reasoning: Sequential execution order
+    </schedule_history>
+</context>
+```
+
+**条件出现的字段**：
+- `<project_description>` — 仅当有值时出现
+- `<scheduling_strategy>` — 仅当有值时出现
+- `<stop_condition>` — 仅当有值时出现
+- `Last Result:` — 仅当任务已执行过至少一次时出现
+- `(NOTFOUND)` — 当结果文件不存在时附加
+- `<schedule_history>` — 仅当有历史记录时出现
+
+**历史记录格式**：
+- `✅` — 成功
+- `❌` — 失败
+- `🛑` — 停止
+- `⏳` — 进行中
+
+---
+
+## 6. 失败分析 Prompt（Failure Analysis）
+
+**构建函数**：`failure_analysis.build_failure_analysis_prompt()`
+
+用于 Nested 和 Looping 任务的子任务失败分析。
 
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
 
 <failed_subtask>
     <task_name>
-        [task_name]                                                 *(注：是父任务 name，非子任务)*
+        Nested comprehensive coverage
     </task_name>
 
     <main_task_completion_criteria>
-        [task_completion_criteria]
+        All subtasks completed with optimized performance.
+        Processing pipeline produces correct output.
     </main_task_completion_criteria>
 
-    <workflow>                                                      *(有 subtasks_with_status 时)*
-          [other_id]. [other_name] (COMPLETED)
+    <workflow>
+        1.1. One-time environment setup (COMPLETED)
                 Criteria:
-                    [criteria]
+                    Environment configured and dependencies installed.
                 Summary:
-                    [ai_reasoning]
-        → [failed_id]. [failed_name] (FAILED)
+                    ✅ completed
+          1.2. One-time data preparation (COMPLETED)
                 Criteria:
-                    [criteria]
-          [other_id]. [other_name]
-          ...
+                    Data pipeline executed, output files generated.
+                Summary:
+                    ✅ completed
+        → 1.3. Core processing (FAILED)
+                Criteria:
+                    Processing completed with correct output.
+          1.4. Benchmark and validate
+          1.5. Commit results
     </workflow>
 </failed_subtask>
 
-<outputs>                                                           *(有任何输出内容时)*
-    <previous_step_context ([id])>                                  *(有 previous_context 时)*
-        [previous_context_text]
+<outputs>
+    <previous_step_context (1.2)>
+        The data preparation pipeline completed successfully.
+
+        Output files generated:
+        - prepared_data.parquet (800MB)
+        - feature_index.json
+
+        ✅ completed
     </previous_step_context>
 
-    <failed_subtask_output ([id])>                                  *(有实际输出时)*
-        [error_text]
+    <failed_subtask_output (1.3)>
+        I attempted to run the core processing pipeline but hit an error:
+
+        Error: ConfigurationError - processing parameters do not match
+        the prepared data schema.
+
+        ❌ not completed: Configuration mismatch with prepared data schema
     </failed_subtask_output>
 
-    <failed_subtask_attempt_history ([id])>                         *(有 attempt history 时)*
-        - Attempt [N]: [result]
-            Detail: [summary_or_error]
+    <failed_subtask_attempt_history (1.3)>
+        - Attempt 1: not_completed
+            Detail: ❌ not completed: Configuration mismatch with prepared data schema
     </failed_subtask_attempt_history>
 </outputs>
-
-<previous_failure_analyses>                                         *(有当前 round 的历史 decisions 时)*
-    - Round [N]: failed at [id], retried from [id]
-        Fix attempted: [suggested_fix]
-</previous_failure_analyses>
 
 <instructions>
     ⚠️ Do NOT suggest the same fix that was already tried. Try a fundamentally different approach.
@@ -266,40 +463,70 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
 
     - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
     - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
-    - Available subtask IDs: [available_ids]
+    - Available subtask IDs: ['1.1', '1.2', '1.3', '1.4', '1.5']
 </instructions>
 ```
 
-### 3.2 主任务评估 (Main Task Evaluation)
-所有子任务完成后，AI 评估主任务是否达成目标。仅用于 Nested 任务。
+**Workflow 中的状态标注**：
+- `(COMPLETED)` — 已完成的子任务，显示 Criteria 和 Summary
+- `(FAILED)` — 失败的子任务（用 `→` 标记），显示 Criteria
+- 无标注 — 待执行的子任务，只显示名称
+
+**条件出现的字段**：
+- `<previous_step_context (X.Y)>` — 仅当前一步有输出时出现
+- `<failed_subtask_output (X.Y)>` — 仅当失败输出非空时出现
+- `<failed_subtask_attempt_history (X.Y)>` — 仅当有历史记录时出现
+- `<previous_failure_analyses>` — 仅当有之前的失败分析决策时出现
+
+---
+
+## 7. 主任务评估 Prompt（Main Task Evaluation）
+
+**构建函数**：`main_evaluation.build_main_evaluation_prompt()`
+
+仅用于 Nested 任务，在所有子任务完成后评估主任务是否达标。
 
 ```
 You are a task evaluation expert. Evaluate whether the main task's completion criteria have been fully met based on the execution results.
 
 <context>
     <main_task>
-        [task_name]
+        Nested comprehensive coverage
     </main_task>
 
     <completion_criteria>
-        [task_completion_criteria]
+        All subtasks completed with optimized performance.
+        Processing pipeline produces correct output.
     </completion_criteria>
 </context>
 
-<workflow>                                                          *(有 subtasks_with_status 时)*
-    [id]. [name] (COMPLETED)
-        Criteria:
-            [criteria]
-        Result:                                                     *(注：是 Result 非 Summary)*
-            [ai_reasoning]
-    ...
+<workflow>
+    1.1. One-time environment setup (COMPLETED)
+            Criteria:
+                Environment configured and dependencies installed.
+            Result:
+                ✅ completed
+      1.2. One-time data preparation (COMPLETED)
+            Criteria:
+                Data pipeline executed, output files generated.
+            Result:
+                ✅ completed
+      1.3. Core processing (COMPLETED)
+            Criteria:
+                Processing completed with correct output.
+            Result:
+                ✅ completed
+      1.4. Benchmark and validate (COMPLETED)
+            Criteria:
+                Benchmark results recorded and correctness validated.
+            Result:
+                ✅ completed
+      1.5. Commit results (COMPLETED)
+            Criteria:
+                Results committed to git.
+            Result:
+                ✅ completed
 </workflow>
-
-<previous_evaluations>                                              *(有历史评估时)*
-    - Round [N]: completed/not completed
-        Analysis: [analysis]
-        Strategy: [next_strategy]
-</previous_evaluations>
 
 <instructions>
     Evaluate whether ALL completion criteria are met based on the execution results above.
@@ -316,12 +543,20 @@ You are a task evaluation expert. Evaluate whether the main task's completion cr
 
     - `retry_from` and `next_strategy`: Only required when `main_task_completed` is false.
     - `next_strategy`: Will be passed to the AI executing the next round — be specific and actionable.
-    - Available subtask IDs: [available_ids]
+    - Available subtask IDs: ['1.1', '1.2', '1.3', '1.4', '1.5']
 </instructions>
 ```
 
-### 3.3 Marker Nudge（标记追问）
-当 AI 未输出完成标记时，在同一 session 中发送轻量级追问（不重建完整 prompt）：
+**条件出现的字段**：
+- `<previous_evaluations>` — 仅当有之前的评估记录时出现
+
+---
+
+## 8. 标记提醒 Prompt（Marker Nudge）
+
+**常量**：`marker_nudge.MARKER_NUDGE_PROMPT`
+
+当 AI 完成工作但忘记输出完成标记时，在**同一会话**内发送轻量级跟进：
 
 ```
 Your previous response did not end with a status marker.
@@ -334,12 +569,16 @@ When you are done, end your response with EXACTLY one of:
   ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints "TASK SUBMITTED")
 ```
 
-### 3.4 In-Session Continuation（会话内继续）
-当 session 仍然存活但被中断时（BashTimeout、StreamTimeout、用户 Ctrl+C），在同一 session 中发送轻量级 follow-up（不重置 session，不重建完整 prompt）。
+最多发送 `max_marker_nudges` 次（默认 3），超过后视为失败。
 
-> **Note**: Continuation prompt 不会添加 `system_prompt_prefix`，因为 session 上下文里已包含原始 prompt 的角色设定。
+---
 
-**Bash 超时**：
+## 9. 超时续传 Prompt（Timeout Continuation）
+
+三种续传 prompt，均在**同一会话**内发送（会话仍存活）：
+
+### 9.1 Bash 超时（无输出超时）
+
 ```
 Your previous command was terminated and triggered session timeout.
 The command was likely too long-running for direct Bash execution. 
@@ -351,7 +590,8 @@ When you are done, end your response with EXACTLY one of:
   ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints "TASK SUBMITTED", then end your session immediately)
 ```
 
-**Stream 超时**：
+### 9.2 Stream 超时（SDK 流超时）
+
 ```
 Your previous response was interrupted due to a network/stream timeout.
 Please continue working on the task from where you left off.
@@ -361,7 +601,8 @@ When you are done, end your response with EXACTLY one of:
   ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints "TASK SUBMITTED", then end your session immediately)
 ```
 
-**用户中断（Ctrl+C）**：
+### 9.3 用户中断（Ctrl+C 恢复）
+
 ```
 Your session was interrupted by the user (Ctrl+C). Previous context is preserved.
 Please continue working on the task from where you left off.
@@ -371,14 +612,11 @@ When you are done, end your response with EXACTLY one of:
   ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints "TASK SUBMITTED", then end your session immediately)
 ```
 
-> **Note**: 用户中断与超时的区别在于，中断通过持久化的 `interrupt_pending` 标志跨进程传递（因为 Ctrl+C 会终止整个进程），而超时在同一进程的 retry 循环内通过 transient 变量传递。当运行在 nested/looping 父任务内部时，`interrupt_pending` 设置在父任务 key 上，子任务恢复时会从父任务 state 中查找该标志。
-
 ---
 
-## 4. Ideas 处理提示词 (Ideas Processing Prompts)
+## 10. Ideas 拆解 Prompt（Ideas Decompose）
 
-### 4.1 Idea 分解 (Ideas Decompose)
-将 ideas.md 中的想法分解为结构化 TODO 任务：
+**构建函数**：`ideas_decompose.build_ideas_decompose_prompt()`
 
 ```
 You are a task planner. Your job is to decompose a given idea into concrete, actionable
@@ -388,110 +626,173 @@ These tasks will be executed by an AI coding agent that can read/modify files, r
 commands, and analyze code and outputs. Design your tasks and completion criteria accordingly.
 
 <idea>
-[idea_content]
+    ## Idea: Add optimization pass
+
+    After running the baseline, we should add an optimization pass to improve performance.
+    The optimization should focus on memory access patterns.
 </idea>
 
 Understanding this following guide is essential for designing effective tasks. Read it carefully before generating your task decomposition.
 
-<task_design_guide>
-[TASK_DESIGN_GUIDE.md 内容]
-</task_design_guide>
+<task_design_guide>(TASK_DESIGN_GUIDE.md full content)</task_design_guide>
 
-<output_instructions>
-- Task IDs start from **[next_id]** (integer for top-level, dot notation for subtasks, e.g., [next_id].1, [next_id].2).
-- Write ONLY valid YAML into the following file:
-    [temp_tasks_path]
-- Do NOT include markdown code fences or any extra text in the file.
-- The file content must be a YAML dictionary containing a `description` string and a `tasks` list.
-</output_instructions>
+The following are the existing tasks already defined in the project. They are provided
+for reference only — do NOT modify, duplicate, or regenerate them.
+Ensure new tasks do not conflict with or duplicate existing tasks.
+
+<existing_todos>
+    description: |
+      AI scheduler test project.
+    tasks:
+    - id: 1
+      name: Initial setup
+      ...
+</existing_todos>
+
+<instructions>
+    - Task IDs start from **3** (integer for top-level, dot notation for subtasks, e.g., 3.1, 3.2).
+    - Write ONLY valid YAML into the following file:
+        /path/to/session/.ideas_tasks_temp.yaml
+    - Do NOT include markdown code fences or any extra text in the file.
+    - The file content must be a YAML dictionary containing a `tasks` list.
+    - You may optionally include a `description@3` field (string) to describe the purpose of this new batch of tasks.
+    - Do NOT include a root-level `description` field — the existing one will be preserved.
+</instructions>
 ```
 
-### 4.2 任务审查 (Ideas Review)
-独立 AI 审查生成的任务质量。使用独立的 `ROLE_TASK_REVIEWER` 角色（非 `system_prompt_prefix`）：
+**条件变化**：
+- 当 `next_id == 1`（首批任务）时，instructions 要求包含 `description` 字段
+- 当 `next_id > 1`（追加任务）时，instructions 要求使用 `description@N` 字段
+
+---
+
+## 11. Ideas 审查 Prompt（Ideas Review）
+
+**构建函数**：`ideas_review.build_ideas_review_prompt()`
 
 ```
-You are a task decomposition review expert. You evaluate TODO task YAML files for schema correctness, appropriate task type selection, completion criteria quality, and decomposition granularity.
+You are a task decomposition review expert. You evaluate TODO task YAML files for schema correctness, appropriate task type selection, completion criteria quality, and decomposition granularity. 
 You focus on whether the tasks are actionable and verifiable by an autonomous AI coding agent. Review the following TODO task decomposition
 for quality, completeness, and correctness.
 
 <original_idea>
-[idea_content]
+    ## Idea: Add optimization pass
+    ...
 </original_idea>
 
 The generated tasks have been saved to the following file:
-  [temp_tasks_path]
+    /path/to/session/.ideas_tasks_temp.yaml
 
 Please read this file to review the tasks.
 
 The following guide serves as the authoritative reference for task types, schema, hierarchy rules,
 and best practices when reviewing the generated tasks.
 
-<task_design_guide>
-[TASK_DESIGN_GUIDE.md 内容]
-</task_design_guide>
+<task_design_guide>(TASK_DESIGN_GUIDE.md full content)</task_design_guide>
+
+The following are the existing tasks already defined in the project. They are provided
+for reference only — the new tasks under review must not conflict with or duplicate them.
+
+<existing_todos>
+    ...
+</existing_todos>
+
+<id_context>
+    New top-level task IDs must start from 3.
+    Subtask IDs use dot notation: 3.1, 3.2, etc.
+    IDs below 3 are already in use by existing tasks.
+</id_context>
 
 <review_criteria>
-Evaluate the generated tasks against these criteria. Refer to <task_design_guide> for
-detailed rules and examples on each point.
+    Evaluate the generated tasks against these criteria. Refer to <task_design_guide> for
+    detailed rules and examples on each point.
 
-1. **YAML & schema**: Well-formed YAML; correct IDs (integers + dot notation); all
-   required fields present per type; `*_once` types only as subtasks.
-2. **Type selection**: `nested` vs `looping` vs `simple` chosen correctly per §4.1;
-   commands > 1 min use `long_running`; `*_once` used sparingly.
-3. **Decomposition granularity**: No over-decomposition (merge steps that fail together)
-   and no under-decomposition (split logically independent steps). See §4.2.
-4. **Root-level `description`**: Present, meaningful, covers goal/architecture/key
-   paths/commands/constraints as applicable. Missing = review failure.
-   Order of tasks and description fields doesn't matter. See §3.1.
-5. **`completion_criteria`**: Specific, measurable, AI-verifiable. Top-level criteria
-   describe end state; subtask criteria describe step output. No unverifiable or
-   process-describing criteria. See §5.1.
-6. **`initial_hint`**: Provides context (paths, commands, constraints), not step-by-step
-   playbooks. Subtasks use filesystem for state passing across sessions. See §5.2, §4.3.
-7. **`system_prompt_prefix`**: Used appropriately (persona, restrictions); NOT set on
-   top-level `nested`/`looping`. See §5.3.
-8. **`model`**: `"default"` for reasoning, `"lite"` for execution. See §5.5.
-9. **Retry strategy**: `max_attempts: 1` for execution-only subtasks; 2–5 for code-writing
-   tasks. Hints mention residual state cleanup when relevant. See §5.4, §6.
-10. **Looping discipline** (if applicable): Doc commits separated from code commits;
-    failure pattern tracking; structured keep/discard rules; workspace cleanup. See §6.4.
+    1. **YAML & schema**: Well-formed YAML; correct IDs starting from 3
+       (integers + dot notation); all required fields present per type; `*_once` types only as subtasks.
+    2. **Type selection**: `nested` vs `looping` vs `simple` chosen correctly per §4.1;
+       commands > 1 min use `long_running`; `*_once` used sparingly.
+    3. **Decomposition granularity**: No over-decomposition (merge steps that fail together)
+       and no under-decomposition (split logically independent steps). See §4.2.
+    4. **Description field**: `description@3` is optional. If present, it must
+       be meaningful and cover goal/architecture/key paths/commands/constraints.
+       Root-level `description` must NOT be included (it belongs to the first batch). See §3.1.
+    5. **`completion_criteria`**: Specific, measurable, AI-verifiable. Top-level criteria
+       describe end state; subtask criteria describe step output. See §5.1.
+    6. **`initial_hint`**: Provides context (paths, commands, constraints), not step-by-step
+       playbooks. Subtasks use filesystem for state passing across sessions. See §5.2, §4.3.
+    7. **`system_prompt_prefix`**: Used appropriately (persona, restrictions); NOT set on
+       top-level `nested`/`looping`. See §5.3.
+    8. **`model`**: `"default"` for reasoning, `"lite"` for execution. See §5.5.
+    9. **Retry strategy**: `max_attempts: 1` for execution-only subtasks; 2–5 for code-writing
+       tasks. Hints mention residual state cleanup when relevant. See §5.4, §6.
+    10. **Task-type best practices**: Read the relevant guide listed in §7 for the task type
+        and verify the generated tasks follow the recommended patterns.
 </review_criteria>
 
 <instructions>
-If the tasks pass ALL criteria, respond with EXACTLY:
-✅ completed
+    If the tasks pass ALL criteria, respond with EXACTLY:
+    ✅ completed
 
-If the tasks need improvement:
-DIRECTLY modify the YAML file at:
-    [temp_tasks_path]
-Do NOT include markdown code fences or any extra text in the file.
-After modifying the file, respond with EXACTLY:
-❌ not completed
+    If the tasks need improvement:
+    DIRECTLY modify the YAML file at:
+        /path/to/session/.ideas_tasks_temp.yaml
+    Do NOT include markdown code fences or any extra text in the file.
+    After modifying the file, respond with EXACTLY:
+    ❌ not completed
 </instructions>
 ```
 
-### 4.3 任务修订 (Ideas Revision)
-人工反馈后的修订提示（在 reviewer 的同一 session 中）：
+### 11.1 修订 Prompt（Revision）
+
+**构建函数**：`ideas_review.build_revision_prompt()`
+
+在同一审查会话中，人工反馈后发送：
 
 ```
 The current tasks are saved in the following file:
-  [temp_tasks_path]
+    /path/to/session/.ideas_tasks_temp.yaml
 
 Please read this file to see the current tasks.
 
-<human_feedback>                                                    *(有人工反馈时)*
-    [human_feedback_text]
+<human_feedback>
+    请把 Task 3 拆分为两个子任务，一个负责分析，一个负责实现。
 </human_feedback>
 
 <instructions>
-Please revise the task decomposition based on the information above.
-Remember to validate against all review criteria from the initial review
-(schema correctness, type appropriateness, completion criteria quality,
-decomposition granularity, root-level description, hint quality, retry strategy, etc.).
+    Please revise the task decomposition based on the information above.
+    Remember to validate against all review criteria from the initial review
+    (schema correctness, type appropriateness, completion criteria quality,
+    decomposition granularity, description field, hint quality, retry strategy, etc.).
 
-Write ONLY valid YAML (a dictionary containing a `description` string and a `tasks` list) into the following file:
-  [temp_tasks_path]
+    Write ONLY valid YAML (a dictionary containing a `tasks` list (and optionally a `description@3` string)) into the following file:
+        /path/to/session/.ideas_tasks_temp.yaml
 
-Do NOT include markdown code fences or any extra text in the file.
+    Do NOT include markdown code fences or any extra text in the file.
 </instructions>
 ```
+
+---
+
+## 12. Prompt 截断策略
+
+为防止 prompt 超出上下文窗口，系统对各字段设置截断限制（`src/util/truncation_limits.py`）：
+
+| 字段 | 默认限制 | 说明 |
+|------|---------|------|
+| `previous_subtask_summary` | 4000 字符 | 前一步输出、任务结果文件 |
+| `history_summary` | 300 字符 | 每条历史记录摘要 |
+| `max` | 50000 字符 | 防御性上限（idea 内容、description 等） |
+
+截断方式：保留末尾内容，前面加 `...(truncated)` 标记。
+
+---
+
+## 13. 设计原则
+
+1. **XML 结构化**：所有 prompt 使用 XML 标签组织，4 空格缩进，嵌套标签 8 空格缩进
+2. **条件包含**：可选字段仅在有值时出现，减少噪音
+3. **角色分离**：System Prompt 定义操作规则，User Prompt 提供任务上下文
+4. **最小上下文**：只包含当前决策所需的信息
+5. **明确输出格式**：JSON 决策 prompt 明确指定输出 schema 和可选字段
+6. **截断保护**：所有可变长度字段有截断限制
+7. **同会话轻量跟进**：Nudge、Timeout Continuation 在同一会话内发送，避免昂贵的全量重放

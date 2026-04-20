@@ -1,378 +1,396 @@
-# 示例和用例
+# 使用示例
 
-本文档提供 AutoAgent 的实际使用示例。
+本文档提供 AutoAgent 的实际使用示例，覆盖三种执行模式。
 
-## 目录
+---
 
-- [基础示例](#基础示例)
-- [机器学习场景](#机器学习场景)
-- [代码质量场景](#代码质量场景)
-- [性能优化场景](#性能优化场景)
+## 1. 线性模式示例
 
-## 基础示例
-
-### 示例 1：简单任务
-
-创建一个简单的一次性任务，AI 自主判断如何完成。
-
-**配置文件 (todos.yaml)**：
+### 1.1 简单任务：修复测试
 
 ```yaml
+description: |
+  Python Web 项目，使用 pytest 测试框架。
+  项目根目录：./webapp
+
 tasks:
   - id: 1
-    name: "下载数据集"
+    name: "修复失败的单元测试"
     type: simple
-    completion_criteria: "data.csv 文件存在且大小 > 10MB"
-    initial_hint: "使用 python download.py"
+    completion_criteria: |
+      1. pytest tests/ 全部通过（exit code 0）
+      2. 无新增 pylint 警告
+    initial_hint: |
+      运行 pytest tests/ -v 查看失败详情。
+      修复代码后重新运行确认通过。
 ```
 
-**执行流程**：
-
-```
-📋 执行任务 1: 下载数据集
-   类型: simple
-
-   尝试 #1
-      AI 尝试完成任务...
-      AI 判断: ✅ 完成
-   任务 1 完成！
+```bash
+python orchestrator.py --config todos.yaml --workspace ./webapp
 ```
 
-### 示例 2：多个简单任务
-
-按顺序执行多个简单任务。
+### 1.2 嵌套任务：实现功能
 
 ```yaml
+description: |
+  Node.js REST API 项目。
+  构建：npm run build
+  测试：npm test
+
 tasks:
   - id: 1
-    name: "准备环境"
-    type: simple
-    completion_criteria: "所有依赖安装完成，python -c 'import torch' 无报错"
-    initial_hint: "运行 pip install -r requirements.txt"
-
-  - id: 2
-    name: "运行代码检查"
-    type: simple
-    completion_criteria: "pylint 评分 >= 9.0 且无严重错误"
-    initial_hint: "运行 pylint src/"
-
-  - id: 3
-    name: "分析性能瓶颈"
-    type: simple
-    completion_criteria: "生成性能分析报告并保存到 profile_report.txt"
-    initial_hint: "运行 python profile.py"
-```
-
-### 示例 3：嵌套任务
-
-包含多个子任务的复杂任务，子任务失败时 AI 分析原因并决定重试策略。
-
-```yaml
-tasks:
-  - id: 1
-    name: "优化模型精度"
+    name: "实现用户注册 API"
     type: nested
     completion_criteria: |
-      训练成功完成
-      验证集精度 >= 0.9
-      验证集 loss < 0.1
+      POST /api/register 接口可用，输入验证完整，测试覆盖 > 80%
     subtasks:
       - id: 1.1
-        name: "修改模型配置"
+        name: "实现注册逻辑"
         type: simple
-        completion_criteria: "模型配置修改完成，包括学习率、网络结构等参数"
+        completion_criteria: |
+          src/routes/register.ts 存在，包含输入验证和数据库写入
+        initial_hint: |
+          参考 src/routes/login.ts 的结构。
+          需要：邮箱格式验证、密码强度检查、重复注册检测。
 
       - id: 1.2
-        name: "训练模型"
-        type: long_running
-        completion_criteria: "训练正常退出且验证集指标满足要求"
+        name: "编写测试并验证"
+        type: simple
+        completion_criteria: |
+          1. npm test 通过
+          2. tests/register.test.ts 覆盖正常和异常场景
+        max_attempts: 3
 ```
 
-**执行流程**：
-
-```
-📋 执行任务 1: 优化模型精度
-   类型: nested
-
-   📌 子任务 1.1: 修改模型配置 (simple)
-      AI 修改代码...
-      ✅ 子任务 1.1 完成
-
-   📌 子任务 1.2: 训练模型 (long_running)
-      启动后台训练: nohup python train.py --config config.yaml > logs/1.2.log 2>&1 &
-      监控中...
-      ❌ 子任务 1.2 失败 (CUDA out of memory)
-
-   🤖 【AI 决策点1：失败分析】
-      AI 分析: "模型参数过多导致 GPU 内存不足，需要回到 1.1 减少网络层数"
-      AI 决策: retry_from = "1.1"
-
-   📌 子任务 1.1: 修改模型配置 (simple) [重试]
-      AI 修改代码: 减少网络层数
-      ✅ 子任务 1.1 完成
-
-   📌 子任务 1.2: 训练模型 (long_running) [重试]
-      启动后台训练...
-      ✅ 子任务 1.2 完成 (accuracy=0.92, loss=0.08)
-
-   🤖 【AI 决策点2：主任务评估】
-      AI 评估: accuracy=0.92 >= 0.9 ✅, loss=0.08 < 0.1 ✅
-      AI 决策: main_task_completed = true
-
-   ✅ 主任务 1 完成！
-```
-
-## 机器学习场景
-
-### 示例 4：端到端训练流程
+### 1.3 循环任务：迭代优化
 
 ```yaml
+description: |
+  CUDA 图像处理项目。
+  构建：cmake --build build --config Release
+  运行：build/Release/main.exe
+  正确性：输出 "Score: 100/100"
+  性能数据：results.tsv
+
 tasks:
   - id: 1
-    name: "准备训练数据"
+    name: "建立基准"
     type: simple
-    completion_criteria: "训练数据和验证数据准备完成，文件格式正确"
-    initial_hint: "运行 python prepare_data.py"
+    model: lite
+    completion_criteria: |
+      1. 编译成功
+      2. Score: 100/100
+      3. 基准耗时写入 results.tsv
+    initial_hint: |
+      cmake --build build --config Release
+      运行 main.exe，记录耗时到 results.tsv
 
   - id: 2
-    name: "训练并优化模型"
-    type: nested
-    completion_criteria: |
-      验证集精度 >= 0.95
-      验证集 loss < 0.05
-      模型文件保存成功
+    name: "迭代优化"
+    type: looping
+    repeat_count: 50
+    max_attempts_per_loop: 3
+    completion_criteria: "完成一轮分析→优化→验证循环"
     subtasks:
       - id: 2.1
-        name: "实现数据增强"
+        name: "分析瓶颈并提出方案"
         type: simple
-        completion_criteria: "数据增强功能实现完成，包括随机裁剪、旋转等"
+        completion_criteria: |
+          优化方案已记录到 ideas/ 目录
+        initial_hint: |
+          读取 results.tsv 中 SOTA 数据。
+          用 ncu profiling 找到瓶颈。
+          方案写入 ideas/<N>.md。
 
       - id: 2.2
-        name: "训练模型"
-        type: long_running
-        completion_criteria: "训练正常完成，模型文件保存成功"
+        name: "实现优化"
+        type: simple
+        completion_criteria: "代码修改已提交"
 
       - id: 2.3
+        name: "编译并运行基准"
+        type: long_running
+        model: lite
+        completion_criteria: "基准测试完成，日志已保存"
+        initial_hint: |
+          cmake --build build --config Release
+          ./main.exe 2>&1 | tee logs/exp_<N>.log
+
+      - id: 2.4
+        name: "评估结果"
+        type: simple
+        completion_criteria: |
+          结果已追加到 results.tsv。
+          提升 >= 5% 则保留，否则回滚。
+```
+
+### 1.4 长时间任务：模型训练
+
+```yaml
+description: |
+  PyTorch 模型训练项目。
+  训练脚本：python train.py --config configs/base.yaml
+  预计训练时间：2-4 小时
+
+tasks:
+  - id: 1
+    name: "准备训练环境"
+    type: simple
+    model: lite
+    completion_criteria: |
+      1. pip install -r requirements.txt 成功
+      2. python -c "import torch; print(torch.cuda.is_available())" 输出 True
+
+  - id: 2
+    name: "训练模型"
+    type: nested
+    completion_criteria: "模型训练完成，验证集准确率 > 90%"
+    subtasks:
+      - id: 2.1
+        name: "启动训练"
+        type: long_running
+        model: lite
+        completion_criteria: |
+          训练完成，输出日志包含 "Training complete"
+        initial_hint: |
+          python train.py --config configs/base.yaml --epochs 50
+
+      - id: 2.2
         name: "评估模型"
         type: simple
-        completion_criteria: "模型评估完成，生成评估报告"
-        initial_hint: "运行 python evaluate.py --model model.pth"
+        completion_criteria: |
+          评估报告保存到 results/eval_report.txt，准确率 > 90%
+        initial_hint: |
+          python evaluate.py --checkpoint checkpoints/best.pt
+          将结果写入 results/eval_report.txt
 ```
 
-**AI 决策场景**：
+---
 
-- 如果子任务 2.2 训练失败（OOM）→ AI 可能决定 `retry_from: "2.1"` 减少数据增强的复杂度
-- 如果子任务 2.3 评估不达标 → 所有子任务完成后，AI 在主任务评估中决定 `retry_from: "2.1"` 调整策略
-- 如果子任务 2.2 训练成功但指标不够 → AI 在主任务评估中建议调整学习率或网络结构
+## 2. AI 调度模式示例
 
-### 示例 5：模型压缩
+### 2.1 性能优化（AI 自主决策循环）
 
 ```yaml
+description: |
+  cuFFTDx 3D DCT 性能优化项目。
+  核心文件：cufftdx_dct3d.cuh（CUDA kernel）
+  构建：cmake --build build --config Release
+  正确性：main.exe 输出 "Score: 100/100"
+  目标：性能提升 >= 20%
+
+ai_orchestrator:
+  strategy: |
+    调度规则：
+    1. 若 Task 1 未执行过，先执行 Task 1 建立基准。
+    2. 基准建立后，执行 Task 2 分析性能瓶颈。
+    3. 分析完成后，执行 Task 3 实施一轮优化。
+    4. 优化后执行 Task 4 验证正确性。
+       - Task 4 失败 → 再次执行 Task 3 修复回归。
+       - Task 4 成功且提升 >= 20% → 执行 Task 5 生成报告并停止。
+       - 否则 → 回到 Task 2 重新分析。
+    5. Task 3 连续失败 3 次 → 回到 Task 2 重新分析。
+  max_rounds: 20
+  stop_condition: |
+    性能提升 >= 20% 且 Score: 100/100，或 20 轮调度耗尽。
+  last_result:
+    1:
+      type: file
+      path: ${workspace}/baseline_profile.txt
+    2:
+      type: response
+    3:
+      type: response
+    4:
+      type: file
+      path: ${workspace}/test_result.txt
+    5:
+      type: file
+      path: ${workspace}/final_report.txt
+
 tasks:
   - id: 1
-    name: "压缩模型参数量"
+    name: "环境搭建与基准测试"
+    description: "编译项目，验证正确性，运行 ncu profiling 建立基准。"
     type: nested
     completion_criteria: |
-      模型参数量 < 2.5M（原模型 5M）
-      精度下降 < 2%
-      推理速度提升 > 30%
+      1. 编译成功
+      2. Score: 100/100
+      3. baseline_profile.txt 存在
     subtasks:
       - id: 1.1
-        name: "实现模型剪枝"
-        type: simple
-        completion_criteria: "模型剪枝代码实现完成"
-
+        name: "编译项目"
+        type: simple_once
+        completion_criteria: "编译成功，可执行文件存在"
+        max_attempts: 3
       - id: 1.2
-        name: "训练压缩模型"
-        type: long_running
-        completion_criteria: "训练完成，模型保存成功"
-
-      - id: 1.3
-        name: "对比评估"
+        name: "运行正确性测试和 profiling"
         type: simple
-        completion_criteria: "生成压缩前后的对比报告"
-        initial_hint: "运行 python compare_models.py"
-```
+        completion_criteria: "Score: 100/100，baseline_profile.txt 已保存"
+        max_attempts: 3
 
-## 代码质量场景
+  - id: 2
+    name: "性能分析"
+    description: "分析 ncu profiling 数据，识别瓶颈并提出优化策略。"
+    type: simple
+    completion_criteria: |
+      识别至少 2 个瓶颈，提出排序的优化策略。
+    max_attempts: 3
 
-### 示例 6：修复代码规范问题
-
-```yaml
-tasks:
-  - id: 1
-    name: "修复所有 Pylint 警告"
+  - id: 3
+    name: "实施优化"
+    description: "实施一轮优化，重新编译并 profiling 测量效果。"
     type: nested
-    completion_criteria: |
-      Pylint 评分 >= 9.0
-      符合 PEP8 规范
-      无严重警告
+    completion_criteria: "代码修改完成，重新编译和 profiling 成功"
     subtasks:
-      - id: 1.1
-        name: "分析代码警告"
+      - id: 3.1
+        name: "实现优化"
         type: simple
-        completion_criteria: "分析所有 pylint 警告，生成问题列表和修复方案"
+        completion_criteria: "代码修改完成"
+        max_attempts: 3
+      - id: 3.2
+        name: "重新编译和 profiling"
+        type: simple
+        completion_criteria: "编译成功，新 profiling 数据已生成"
+        max_attempts: 3
 
-      - id: 1.2
-        name: "修复代码问题"
-        type: simple
-        completion_criteria: "所有警告和问题已修复"
+  - id: 4
+    name: "正确性验证"
+    description: "运行正确性测试，结果保存到 test_result.txt。"
+    type: simple
+    completion_criteria: "Score: 100/100，结果保存到 test_result.txt"
+    max_attempts: 2
+
+  - id: 5
+    name: "生成最终报告"
+    description: "汇总所有优化轮次，生成 final_report.txt。"
+    type: simple
+    completion_criteria: "final_report.txt 包含基准、优化内容和最终提升百分比"
+    max_attempts: 2
 ```
 
-### 示例 7：提高测试覆盖率
+```bash
+python orchestrator.py --config todos.yaml --workspace ./cufftdx_project
+```
+
+### 2.2 自动化 Bug 修复
 
 ```yaml
+description: |
+  Go 微服务项目，存在多个已知 bug。
+  测试：go test ./...
+  Lint：golangci-lint run
+
+ai_orchestrator:
+  strategy: |
+    1. 先执行 Task 1 获取当前测试状态。
+    2. 根据失败测试数量，执行 Task 2 修复 bug。
+    3. 每次修复后执行 Task 3 验证。
+       - 全部通过 → 执行 Task 4 并停止。
+       - 仍有失败 → 回到 Task 2 继续修复。
+  max_rounds: 15
+  stop_condition: "所有测试通过且 lint 无错误"
+  last_result:
+    1: { type: file, path: "${workspace}/test_status.txt" }
+    2: { type: response }
+    3: { type: file, path: "${workspace}/test_status.txt" }
+
 tasks:
   - id: 1
-    name: "提高测试覆盖率到 90%"
-    type: nested
-    completion_criteria: |
-      代码覆盖率 >= 90%
-      所有测试通过
-    subtasks:
-      - id: 1.1
-        name: "分析未覆盖代码"
-        type: simple
-        completion_criteria: "生成未覆盖代码的分析报告"
+    name: "获取测试状态"
+    description: "运行全部测试，将结果摘要保存到 test_status.txt。"
+    type: simple
+    model: lite
+    completion_criteria: "test_status.txt 包含测试通过/失败统计"
 
-      - id: 1.2
-        name: "编写测试用例"
-        type: simple
-        completion_criteria: "为未覆盖的代码编写测试用例"
+  - id: 2
+    name: "修复 Bug"
+    description: "分析失败测试，修复一个 bug。"
+    type: simple
+    completion_criteria: "代码修改完成并提交"
 
-      - id: 1.3
-        name: "运行测试验证"
-        type: simple
-        completion_criteria: "所有测试通过且覆盖率 >= 90%"
-        initial_hint: "运行 pytest --cov=src --cov-report=term"
+  - id: 3
+    name: "验证修复"
+    description: "重新运行测试，更新 test_status.txt。"
+    type: simple
+    model: lite
+    completion_criteria: "test_status.txt 已更新"
+
+  - id: 4
+    name: "最终清理"
+    description: "运行 lint，修复警告，提交最终代码。"
+    type: simple
+    completion_criteria: "golangci-lint run 无错误，代码已提交"
 ```
 
-## 迭代优化场景
+---
 
-### 示例 8：循环任务（looping）
+## 3. Ideas 模式示例
 
-使用 `looping` 类型进行固定次数的迭代优化，每轮循环重新执行所有子任务。
+### 启动 Idle 监听
 
-```yaml
-tasks:
-  - id: 1
-    name: "迭代优化 CUDA 内核性能"
-    type: looping
-    repeat_count: 5
-    max_attempts_per_loop: 10
-    completion_criteria: |
-      完成 5 轮优化迭代
-      每轮包含：性能分析、代码优化、基准测试
-    subtasks:
-      - id: 1.1
-        name: "使用 ncu 分析性能瓶颈"
-        type: long_running
-        completion_criteria: "ncu 分析完成，生成性能报告"
-
-      - id: 1.2
-        name: "根据分析结果优化代码"
-        type: simple
-        completion_criteria: "代码优化完成，编译通过"
-
-      - id: 1.3
-        name: "运行基准测试验证优化效果"
-        type: simple
-        completion_criteria: "基准测试完成，记录性能数据"
+```bash
+python orchestrator.py --ideas ideas.md --config todos.yaml --workspace ./project --preset general
 ```
 
-**执行流程**：
+### ideas.md 内容
 
-```
-📋 执行任务 1: 迭代优化 CUDA 内核性能
-   类型: looping (5 轮)
+```markdown
+把项目的单元测试覆盖率从 60% 提升到 90%，优先覆盖 core/ 目录下的关键模块
 
-   🔄 第 1 轮 / 共 5 轮
-      📌 子任务 1.1: 使用 ncu 分析性能瓶颈 (long_running)
-         AI 通过 autoagent-exec 启动 ncu...
-         ✅ 子任务 1.1 完成
-      📌 子任务 1.2: 根据分析结果优化代码 (simple)
-         AI 修改代码...
-         ✅ 子任务 1.2 完成
-      📌 子任务 1.3: 运行基准测试 (simple)
-         ✅ 子任务 1.3 完成
-   ✅ 第 1 轮完成
+---
 
-   🔄 第 2 轮 / 共 5 轮
-      （使用新的 round-scoped keys 执行子任务）
-      ...
-
-   🔄 第 5 轮 / 共 5 轮
-      ...
-   ✅ 第 5 轮完成
-
-   ✅ 主任务 1 完成！（5 轮循环全部完成）
+给 API 添加 rate limiting 中间件，每个 IP 每分钟最多 100 次请求
 ```
 
-**与 nested 的区别**：
-- `nested`：AI 每轮评估是否完成，可能提前结束或继续重试
-- `looping`：固定循环 N 次，不做完成度评估，每轮使用独立的 round-scoped state keys
+AI 会自动将每个 idea 拆解为结构化任务并执行。
 
-## 性能优化场景
+### 带人工审核
 
-### 示例 9：算法优化
-
-```yaml
-tasks:
-  - id: 1
-    name: "优化核心算法性能"
-    type: nested
-    completion_criteria: |
-      运行时间 < 1 秒
-      结果正确
-      内存使用 < 500MB
-    subtasks:
-      - id: 1.1
-        name: "优化算法实现"
-        type: simple
-        completion_criteria: "使用更高效的算法和数据结构"
-
-      - id: 1.2
-        name: "运行基准测试"
-        type: simple
-        completion_criteria: "基准测试完成，运行时间 < 1s，结果正确"
-        initial_hint: "运行 python benchmark.py"
+```bash
+python orchestrator.py --ideas ideas.md --config todos.yaml --human-review
 ```
 
-### 示例 10：数据库查询优化
+AI 生成任务后会暂停等待确认，输入 `y` 接受或 `n` 拒绝并提供反馈。
 
-```yaml
-tasks:
-  - id: 1
-    name: "优化慢查询"
-    type: nested
-    completion_criteria: |
-      所有查询响应时间 < 100ms
-      返回结果正确
-    subtasks:
-      - id: 1.1
-        name: "分析并优化查询"
-        type: simple
-        completion_criteria: "查询优化完成，添加必要索引"
+---
 
-      - id: 1.2
-        name: "运行查询测试"
-        type: simple
-        completion_criteria: "所有查询响应时间 < 100ms"
-        initial_hint: "运行 python test_queries.py"
+## 4. 多 Provider 示例
+
+```bash
+# 使用 Claude Code
+python orchestrator.py --provider claude --config todos.yaml
+
+# 使用 Gemini CLI
+python orchestrator.py --provider gemini --config todos.yaml
+
+# 使用 Codex
+python orchestrator.py --provider codex --config todos.yaml
+
+# 使用 CodeBuddy SDK 模式（默认）
+python orchestrator.py --config todos.yaml
+
+# 使用 CodeBuddy CLI 模式
+python orchestrator.py --use-cli --config todos.yaml
 ```
 
-## 总结
+---
 
-所有示例都遵循统一的设计原则：
+## 5. 常用命令组合
 
-- ✅ 任务描述清晰明确
-- ✅ 完成标准可量化验证
-- ✅ 合理使用任务类型（顶层：simple / nested / looping；子任务：simple / long_running / simple_once / long_running_once）
-- ✅ 子任务粒度适中
-- ✅ 充分利用 AI 的决策能力
+```bash
+# 验证配置
+python orchestrator.py --config todos.yaml --validate
 
-如有其他问题，请参考：
-- [README.md](README.md) - 项目介绍
-- [ARCHITECTURE.md](ARCHITECTURE.md) - 架构设计
-- [USAGE.md](USAGE.md) - 使用指南
-- [API_REFERENCE.md](API_REFERENCE.md) - API 文档
+# 重置状态重新开始
+python orchestrator.py --config todos.yaml --reset
+
+# 只执行某个任务
+python orchestrator.py --config todos.yaml --task 2
+
+# 使用 Preset + 指定工作目录
+python orchestrator.py --preset general --workspace ./my_project
+
+# 生成默认配置文件
+python orchestrator.py --generate-default-config
+```

@@ -10,7 +10,7 @@ AutoAgent drives an AI coding agent (e.g. Codex, Gemini CLI, Claude Code) throug
 The AI agent can do anything a developer can: edit code, run commands, read logs, install packages, use git, etc.
 
 | Property | Implication for task design |
-|----------|---------------------------|
+|----------|-----------------------------|
 | **Fully autonomous** | No human in the loop. `completion_criteria` and `initial_hint` must be specific enough for the AI to act without clarification. |
 | **Context window limit** | Avoid tasks requiring extremely large files/outputs in a single step. |
 | **No shared conversation context between tasks and subtasks** | Tasks and subtasks **share the filesystem only**. Each subtask automatically receives a workflow overview and a summary of the previous step, but **detailed intermediate results must be persisted to files** — conversation context is NOT shared. |
@@ -450,7 +450,7 @@ When a subtask fails, earlier subtasks may be retried with guidance.
 
 ## 7. Task-Type-Specific Best Practices
 
-The patterns above (§6.1–6.3) apply universally. For detailed patterns tailored to specific task types, read the relevant guide:
+The patterns above apply universally. For detailed patterns tailored to specific task types, read the relevant guide:
 
 | Task type | Guide | When to use |
 |-----------|-------|-------------|
