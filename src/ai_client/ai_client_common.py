@@ -40,6 +40,17 @@ class StreamTimeoutError(AICallError):
 
     pass
 
+
+class RateLimitError(AICallError):
+    """Raised when the AI service returns a transient rate-limit (429) or server error (503).
+
+    These errors are external to the task execution and should NOT consume
+    retry attempts.  The backoff mechanism in AIClient/AIClientSDK will
+    handle the wait-and-retry automatically.
+    """
+
+    pass
+
 def _load_default_model():
     """Load default model from config.yaml."""
     config_path = os.path.join(

@@ -5,7 +5,7 @@ import logging
 import yaml
 from typing import Optional
 
-from ai_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
+from ai_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError, RateLimitError
 from state_manager import StateManager
 from logger import ConversationLogger
 from task_executor.task_executor_common import (
@@ -308,6 +308,26 @@ class SimpleTaskExecutor:
                         "summary": summary,
                     })
                     
+            except RateLimitError as e:
+                # Rate-limit (429) and server errors (503) are transient
+                # external issues — do NOT consume an attempt.
+                logger.error(f"AI call rate-limited for task {task_id}: {e}")
+                print(f"   ❌ AI call error: {e}")
+                print(f"   ⚠️ Rate-limit/server error — attempt NOT consumed")
+                should_reset = True  # Reset session (the call never started properly)
+                # Roll back the attempt counter so this doesn't count
+                attempts -= 1
+                # Append error as response (prompt was already logged above)
+                if conv_logger:
+                    conv_logger.log_response(
+                        task_id=task_id,
+                        response=f"AI Call Error (rate-limited, attempt not consumed): {e}",
+                        parent_task_id=parent_task_id,
+                        attempt=_log_round,
+                    )
+                # Do NOT record in task history as a real attempt failure
+                # (the backoff in AIClient will handle the wait)
+
             except AICallError as e:
                 logger.error(f"AI call failed for task {task_id}: {e}")
                 print(f"   ❌ AI call error: {e}")

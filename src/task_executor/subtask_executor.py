@@ -4,7 +4,7 @@ import json
 import time
 import logging
 
-from ai_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
+from ai_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError, RateLimitError
 from logger import ConversationLogger
 from task_executor.task_executor_common import (
     ConfigError,
@@ -319,7 +319,9 @@ class SubtaskExecutor:
                 f"with no signal file — will continue in same session"
             )
 
-        for attempt in range(1, max_attempts + 1):
+        attempt = 0
+        while attempt < max_attempts:
+            attempt += 1
             # Reset session before each retry to prevent context accumulation
             # (same rationale as SimpleTaskExecutor — see comment there).
             # Skip reset after StreamTimeoutError (session still alive).
@@ -617,6 +619,18 @@ class SubtaskExecutor:
                     "result": "not_completed",
                     "summary": summary,
                 })
+
+            except RateLimitError as e:
+                # Rate-limit (429) and server errors (503) are transient
+                # external issues — do NOT consume an attempt.
+                logger.error(f"AI call rate-limited for long-running task {subtask_id}: {e}")
+                print(f"      ❌ AI call error: {e}")
+                print(f"      ⚠️ Rate-limit/server error — attempt NOT consumed")
+                should_reset = True
+                # Roll back the attempt counter so this doesn't count
+                attempt -= 1
+                # Do NOT record in task history
+                # (the backoff in AIClient will handle the wait)
 
             except AICallError as e:
                 logger.error(f"AI call failed for long-running task {subtask_id}: {e}")

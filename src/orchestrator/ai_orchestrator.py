@@ -25,7 +25,7 @@ import re
 import time
 import logging
 
-from ai_client import AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
+from ai_client import AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError, RateLimitError
 from logger import ScheduleAwareConvLogger
 from state_manager import StateManager
 from orchestrator.orchestrator_common import (
@@ -675,6 +675,22 @@ class AISchedulerMixin:
                     decision = None
                     _escalate_to_session_reset = True
                     break  # Break level-1 loop
+
+                except RateLimitError as e:
+                    # Rate-limit (429) / server error (503) — transient,
+                    # retry in same session (backoff handles the wait).
+                    logger.warning(
+                        f"Scheduler round {current_round}: RateLimitError "
+                        f"(L1 retry {retry}, session attempt {session_attempt}): {e}"
+                    )
+                    print(f"   ⚠️ Rate-limit/server error — retrying (attempt NOT consumed)")
+                    if self.conv_logger:
+                        self.conv_logger.log_scheduler_response(
+                            schedule_round=current_round,
+                            response=f"[Rate Limit]: {e}",
+                        )
+                    error_msg = "CLI/SDK Rate-limited. Please try again and respond with a valid JSON scheduling decision."
+                    continue  # Stay in level-1 loop
 
                 except AICallError as e:
                     # Other AI errors — escalate to level-2 (session reset)

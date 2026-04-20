@@ -5,6 +5,7 @@ from ai_client.ai_client_common import (
     BashTimeoutError,
     SessionTimeoutError,
     StreamTimeoutError,
+    RateLimitError,
     DEFAULT_MODEL,
 )
 from ai_client.ai_providers import (

@@ -24,7 +24,7 @@ import asyncio
 from typing import Union, Optional, List
 
 from ai_client.ai_providers import AIProvider, CodeBuddyProvider, get_provider
-from ai_client.ai_client_common import AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
+from ai_client.ai_client_common import AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError, RateLimitError
 from util.truncation_limits import limits
 from util.default_value import DEFAULTS
 
@@ -271,10 +271,14 @@ class AIClient:
                         f"Error: {message}"
                     )
                 prefix = f"[{error_type}] " if error_type else ""
-                raise AICallError(
+                error_msg = (
                     f"{self.provider.name} returned exit code {process.returncode}: "
                     f"{prefix}{message}"
                 )
+                # Detect rate-limit (429) and server errors (503)
+                if self._is_rate_limit_error(error_msg):
+                    raise RateLimitError(error_msg)
+                raise AICallError(error_msg)
 
             # Combine all assistant text from stream-json events
             response = "".join(assistant_text_parts).strip()
@@ -910,6 +914,27 @@ class AIClient:
             f"Failed to parse JSON from CodeBuddy response. "
             f"Response preview: {response[:limits.get('previous_subtask_summary')]}"
         )
+
+    @staticmethod
+    def _is_rate_limit_error(error_msg: str) -> bool:
+        """Check if an error message indicates a rate-limit (429) or server error (503).
+
+        These are transient errors from the AI service that should not
+        consume retry attempts.
+        """
+        lower = error_msg.lower()
+        # HTTP 429 rate limit patterns
+        if "429" in error_msg and ("rate" in lower or "limit" in lower or "frequency" in lower or "usage exceeds" in lower):
+            return True
+        # HTTP 503 server error patterns
+        if "503" in error_msg and "server error" in lower:
+            return True
+        # Generic rate limit phrases
+        if "rate limit" in lower or "rate_limit" in lower:
+            return True
+        if "usage exceeds frequency limit" in lower:
+            return True
+        return False
 
     def reset_session(self):
         """Reset the session state, so next call starts a new session."""
