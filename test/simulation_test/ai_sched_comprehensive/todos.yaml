@@ -19,8 +19,8 @@
 #  14. orchestrator state completeness (current_round, status,
 #      schedule_history, task_execution_counts)
 #
-# NOTE: {{PROJECT_ROOT}} is replaced with the actual absolute path at
-#       test time by run_test.py's _prepare_todos_yaml() function.
+# NOTE: ${workspace} is expanded to the actual workspace absolute path
+#       at load time by the orchestrator's _expand_workspace_in_ai_orch().
 #
 # Expected scheduling sequence (from test_rules_k7.txt):
 #   Round 1: execute task 1 → ✅ success
@@ -48,16 +48,16 @@ ai_orchestrator:
       type: response
     2:
       type: file
-      path: "{{PROJECT_ROOT}}/result_files/result_2.txt"
+      path: "${workspace}/result_files/result_2.txt"
     3:
       type: file
-      path: "{{PROJECT_ROOT}}/result_files/result_3.txt"
+      path: "${workspace}/result_files/result_3.txt"
     # Task 4: no last_result config (type=none by default)
     5:
       type: file
       path:
-        - "{{PROJECT_ROOT}}/result_files/report_final.txt"
-        - "{{PROJECT_ROOT}}/result_files/report_missing.txt"
+        - "${workspace}/result_files/report_final.txt"
+        - "${workspace}/result_files/report_missing.txt"
 
 description@5: >
   Round-scoped description for task 5: validates that the AI scheduler

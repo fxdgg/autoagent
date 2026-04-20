@@ -246,6 +246,8 @@ class TodoOrchestrator(AISchedulerMixin):
         # Extract optional ai_orchestrator configuration
         ai_orch = config.get('ai_orchestrator')
         if ai_orch is not None:
+            # Expand ${workspace} in last_result paths before validation
+            self._expand_workspace_in_ai_orch(ai_orch)
             self.ai_orchestrator = self._validate_ai_orchestrator(ai_orch, tasks)
         else:
             self.ai_orchestrator = None
@@ -256,6 +258,28 @@ class TodoOrchestrator(AISchedulerMixin):
         
         logger.info(f"Loaded {len(tasks)} tasks from {self.todos_file}")
         return tasks
+
+    def _expand_workspace_in_ai_orch(self, ai_orch: dict):
+        """Expand ``${workspace}`` in ai_orchestrator.last_result paths.
+
+        Modifies the dict in-place so that subsequent validation sees
+        absolute paths.
+        """
+        last_result = ai_orch.get('last_result')
+        if not last_result or not isinstance(last_result, dict):
+            return
+        workspace = self.workspace.replace("\\", "/")
+        for _tid, lr_config in last_result.items():
+            if not isinstance(lr_config, dict):
+                continue
+            path = lr_config.get('path')
+            if isinstance(path, str) and '${workspace}' in path:
+                lr_config['path'] = path.replace('${workspace}', workspace)
+            elif isinstance(path, list):
+                lr_config['path'] = [
+                    p.replace('${workspace}', workspace) if isinstance(p, str) and '${workspace}' in p else p
+                    for p in path
+                ]
 
     def reload_todos(self):
         """

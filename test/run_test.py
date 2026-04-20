@@ -136,24 +136,8 @@ def reset_test(project_root, log_dir):
             shutil.rmtree(target)
 
 
-def _prepare_todos_yaml(project_root):
-    """Substitute ``{{PROJECT_ROOT}}`` in todos.yaml with the real path.
 
-    This allows ``type=file`` last_result paths to use a portable
-    placeholder in the committed todos.yaml while resolving to an
-    absolute path at test time.
-    """
-    todos_path = os.path.join(project_root, "todos.yaml")
-    if not os.path.isfile(todos_path):
-        return
-    with open(todos_path, "r", encoding="utf-8") as f:
-        content = f.read()
-    if "{{PROJECT_ROOT}}" not in content:
-        return
-    abs_root = project_root.replace("\\", "/")
-    content = content.replace("{{PROJECT_ROOT}}", abs_root)
-    with open(todos_path, "w", encoding="utf-8") as f:
-        f.write(content)
+
 
 
 def find_session_dir(project_root, log_dir):
@@ -758,9 +742,6 @@ Examples:
         print(f"  Resetting...", end=" ", flush=True)
         reset_test(project_root, log_dir)
         print(f"done")
-
-        # Substitute {{PROJECT_ROOT}} in todos.yaml (for type=file paths)
-        _prepare_todos_yaml(project_root)
 
         # Build extra_args (resolve relative paths)
         extra_args = []

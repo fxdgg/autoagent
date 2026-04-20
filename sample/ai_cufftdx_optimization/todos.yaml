@@ -1,0 +1,184 @@
+description: |
+  cuFFTDx 3D DCT/IDCT performance optimization project.
+  The codebase implements fused 3D DCT-II and IDCT-II transforms using NVIDIA cuFFTDx library.
+  Core files:
+    - cufftdx_dct3d.cuh: CUDA kernel templates for fused DCT/IDCT per axis
+    - cufftdx_dct3d_dispatch.cu: Compile-time dispatch table for supported FFT sizes
+    - main.cpp: Test harness that runs 100 random DCT->IDCT round-trips on 64x64x64 data
+    - CMakeLists.txt: Build configuration (CUDA 12.4, SM 7.5)
+  Goal: Achieve at least 20% performance improvement while maintaining correctness (Score: 100/100).
+
+ai_orchestrator:
+  strategy: |
+    Scheduling rules:
+    1. If baseline has not been established (Task 1 never executed), execute Task 1 first.
+    2. After baseline is established, execute Task 2 to analyze ncu profiling results and identify bottlenecks.
+    3. After analysis, execute Task 3 to implement one round of optimization.
+    4. After each optimization round (Task 3), execute Task 4 to verify correctness.
+       - If Task 4 fails (Score < 100/100), execute Task 3 again to fix the regression.
+       - If Task 4 succeeds, check performance improvement:
+         - If improvement >= 20% compared to baseline, execute Task 5 (final report) and stop.
+         - If improvement < 20%, execute Task 2 again to re-analyze and find more optimization opportunities.
+    5. After Task 5 completes, stop.
+    6. If Task 3 fails 3 consecutive times, execute Task 2 to re-analyze before trying again.
+
+  max_rounds: 20
+
+  stop_condition: |
+    Stop when:
+    - Performance improvement reaches at least 20% compared to baseline AND correctness is verified (Score: 100/100), OR
+    - 20 scheduling rounds have been exhausted.
+
+  last_result:
+    1:
+      type: file
+      path: ${workspace}/baseline_profile.txt
+    2:
+      type: response
+    3:
+      type: response
+    4:
+      type: file
+      path: ${workspace}/test_result.txt
+    5:
+      type: file
+      path: ${workspace}/final_report.txt
+
+tasks:
+  - id: 1
+    name: "Environment setup and baseline profiling"
+    completion_criteria: |
+      1. Project builds successfully and the executable exists at build/Release/main.exe
+      2. Correctness test passes with Score: 100/100
+      3. baseline_profile.txt exists and contains structured ncu profiling metrics (kernel time, memory throughput, compute throughput, occupancy)
+    description: |
+      Build the project, verify correctness, and run ncu profiling to establish baseline performance metrics.
+      Produces baseline_profile.txt with kernel timing, memory throughput, compute throughput, and occupancy.
+    type: nested
+    subtasks:
+      - id: 1.1
+        name: "Build project"
+        type: simple
+        completion_criteria: "Project builds successfully with CMake. The executable is produced at build/Release/main.exe."
+        initial_hint: |
+          Use CMake to build:
+            cd cufftdx_optimization
+            mkdir build 2>nul
+            cd build
+            cmake .. -G "Visual Studio 17 2022"
+            cmake --build . --config Release
+          Verify the executable exists.
+        max_attempts: 3
+        run_once: true
+
+      - id: 1.2
+        name: "Run correctness test and ncu baseline profiling"
+        type: simple
+        completion_criteria: |
+          1. Correctness test passes with Score: 100/100
+          2. ncu profiling completes and baseline_profile.txt is saved with structured metrics
+        initial_hint: |
+          First run the executable to check correctness:
+            cd cufftdx_optimization/build/Release
+            main.exe
+          Expected output: "Score: 100/100"
+
+          Then run ncu profiling:
+            ncu --set full --target-processes all --csv ./main.exe > ../../../baseline_profile.txt 2>&1
+          Parse the CSV output and create a clean baseline_profile.txt with key metrics.
+        max_attempts: 3
+
+  - id: 2
+    name: "Performance analysis"
+    description: |
+      Analyze ncu profiling data to identify performance bottlenecks and propose optimization strategies.
+    type: simple
+    completion_criteria: |
+      A detailed performance analysis is provided that:
+      1. Identifies at least 2 specific bottlenecks with supporting ncu metrics
+      2. Proposes concrete optimization strategies ranked by expected impact
+      3. References specific code locations (file, function, line) for each optimization
+    initial_hint: |
+      Read the profiling results from baseline_profile.txt (or the latest profiling data).
+      Also read the kernel source code in cufftdx_dct3d.cuh and cufftdx_dct3d_dispatch.cu.
+      Focus on the fused_dct_axis_kernel and fused_idct_axis_kernel functions.
+      Look for:
+        - Memory coalescing issues in the reordering steps
+        - Redundant twiddle factor computations
+        - Suboptimal thread-to-element mapping
+        - Shared memory bank conflicts
+        - Register spilling
+    max_attempts: 3
+
+  - id: 3
+    name: "Optimization implementation"
+    completion_criteria: |
+      1. Code changes are applied to kernel files (cufftdx_dct3d.cuh and/or cufftdx_dct3d_dispatch.cu)
+      2. Project rebuilds successfully
+      3. ncu profiling results are captured showing the performance impact of the optimization
+    description: |
+      Implement one round of optimization based on the analysis, then rebuild and re-profile to measure impact.
+    type: nested
+    subtasks:
+      - id: 3.1
+        name: "Implement optimization"
+        type: simple
+        completion_criteria: |
+          Code changes are made to the kernel files. The changes are focused on a specific optimization
+          identified in the analysis phase.
+        initial_hint: |
+          Based on the performance analysis, implement the highest-impact optimization.
+          Modify files in the cufftdx_optimization/ directory.
+          Common optimizations for cuFFTDx kernels:
+            - Replace sinf/cosf with __sincosf for twiddle factors
+            - Precompute twiddle factors in shared memory
+            - Improve memory coalescing in pre/post processing steps
+            - Reduce register pressure by restructuring loops
+            - Use vectorized loads/stores (float2, float4) where possible
+        max_attempts: 3
+
+      - id: 3.2
+        name: "Rebuild and profile"
+        type: simple
+        completion_criteria: |
+          Project rebuilds successfully and ncu profiling shows the performance impact of the optimization.
+        initial_hint: |
+          Rebuild:
+            cd cufftdx_optimization/build
+            cmake --build . --config Release
+          Run ncu profiling:
+            cd Release
+            ncu --set full --target-processes all --csv ./main.exe > ../../../latest_profile.txt 2>&1
+          Compare key metrics with baseline_profile.txt to quantify improvement.
+        max_attempts: 3
+
+  - id: 4
+    name: "Correctness verification"
+    description: |
+      Run correctness tests to verify optimizations have not introduced numerical errors. Saves result to test_result.txt.
+    type: simple
+    completion_criteria: |
+      The executable runs successfully and outputs "Score: 100/100".
+      The result is saved to test_result.txt.
+    initial_hint: |
+      Run the test:
+        cd cufftdx_optimization/build/Release
+        main.exe > ../../../test_result.txt 2>&1
+        type ..\..\..\test_result.txt
+      The output must show "Score: 100/100". If the score is less than 100,
+      the optimization introduced a numerical regression that must be fixed.
+    max_attempts: 2
+
+  - id: 5
+    name: "Final optimization report"
+    description: |
+      Generate a final report summarizing baseline metrics, optimizations applied, and total improvement. Saves to final_report.txt.
+    type: simple
+    completion_criteria: |
+      final_report.txt is created with a complete optimization summary including
+      baseline metrics, optimizations applied, final metrics, and total improvement percentage.
+    initial_hint: |
+      Read baseline_profile.txt and the latest profiling results.
+      Compile all optimization rounds and their impacts into a structured report.
+      Save to final_report.txt in the project root directory.
+    max_attempts: 2
