@@ -131,7 +131,7 @@ tasks:
 > [!TIP]
 > **不想手写这么复杂的 YAML？让 AI 帮你写。**
 >
-> 你只需要用自然语言描述你想做的事情，然后把 [TASK_DESIGN_GUIDE.md](TASK_DESIGN_GUIDE.md) 喂给任意 AI（ChatGPT、Claude、CodeBuddy 等），让它按照这份指南帮你拆解成 `todos.yaml`。这份指南详细定义了任务类型、字段含义、最佳实践和常见陷阱，AI 读完就能生成高质量的任务配置。
+> 你只需要用自然语言描述你想做的事情，然后把 [TASK_DESIGN_GUIDE.md](task_design_guide/TASK_DESIGN_GUIDE.md) 喂给任意 AI（ChatGPT、Claude、CodeBuddy 等），让它按照这份指南帮你拆解成 `todos.yaml`。这份指南详细定义了任务类型、字段含义、最佳实践和常见陷阱，AI 读完就能生成高质量的任务配置。
 >
 > ```
 > 你：「我想让 AI 自动把项目的测试覆盖率从 60% 提到 90%」
@@ -165,11 +165,11 @@ AutoAgent 会自动按顺序执行任务。遇到 `looping` 任务时，AI 会�
 
 ### 💰 省 Token：按任务分配模型，简单活不烧钱
 
-AI 迭代优化动辄跑几十轮，Token 消耗是真实痛点。AutoAgent 支持**四级模型分配**，让你把贵的模型用在刀刃上：
+AI 迭代优化动辄跑几十轮，Token 消耗是真实痛点。AutoAgent 支持**五级模型分配**，让你把贵的模型用在刀刃上：
 
 ```bash
-# 全局：plan 用强模型拆任务，default 执行复杂任务，lite 跑简单活，evaluation 做失败分析和主任务评估
-python orchestrator.py --model "plan:claude-opus-4.6;default:claude-sonnet-4;lite:glm-4-flash;evaluation:claude-opus-4.6"
+# 全局：plan 用强模型拆任务，default 执行复杂任务，lite 跑简单活，evaluation 做失败分析和主任务评估，scheduler 做 AI 调度决策
+python orchestrator.py --model "plan:claude-opus-4.6;default:claude-sonnet-4;lite:glm-4-flash;evaluation:claude-opus-4.6;scheduler:claude-opus-4.6"
 ```
 
 还可以在 `todos.yaml` 中**逐任务指定模型**——跑命令、提交代码这类不需要推理的任务用 `lite`，分析瓶颈、设计方案用 `default`：
@@ -210,6 +210,35 @@ Agent 检测到 `ideas.md` 变化后会自动：
 
 > **你的工作流**：开着 agent → 想到什么写进 ideas.md → 去忙别的 → 回来看产出。AI 24 小时待命，你的想法随写随跑。
 
+### 🤖 AI 调度模式：让 AI 自己决定执行顺序
+
+线性模式按固定顺序执行任务，但有些场景需要**根据执行结果动态决策**——比如优化到目标就停止、失败后换方向重试、根据分析结果选择下一步。AI 调度模式让 AI 调度器根据当前状态自主决定下一个执行的任务：
+
+```yaml
+ai_orchestrator:
+  strategy: |
+    1. 先执行 Task 1 建立基准
+    2. 基准建立后，执行 Task 2 分析瓶颈
+    3. 分析完成后，执行 Task 3 实施优化
+    4. 优化后执行 Task 4 验证正确性
+       - 验证失败 → 再次执行 Task 3 修复
+       - 验证成功且提升 >= 20% → 停止
+       - 否则 → 回到 Task 2 重新分析
+  max_rounds: 20
+  stop_condition: |
+    性能提升 >= 20% 且正确性验证通过
+```
+
+你只需要定义调度策略和停止条件，AI 调度器会根据每轮执行结果自主决定下一步。适合**条件分支、动态优先级、提前终止、重复执行**等场景。
+
+```bash
+# 自动检测 ai_orchestrator 配置，启用 AI 调度模式
+python orchestrator.py --config todos.yaml
+
+# 在包含 ai_orchestrator 字段时，依然使用线性模式
+python orchestrator.py --config todos.yaml --mode linear
+```
+
 ### 🔌 多 AI Provider 一键切换
 
 内置支持 CodeBuddy、Claude Code、Gemini CLI、OpenCode、Codex，一个参数切换：
@@ -227,6 +256,7 @@ python orchestrator.py --provider gemini
 ```bash
 python orchestrator.py --continue          # 继续上次会话
 python orchestrator.py --resume abc12345   # 恢复指定会话
+python orchestrator.py --list-sessions     # 查看会话列表
 ```
 
 ---
@@ -240,7 +270,8 @@ python orchestrator.py --resume abc12345   # 恢复指定会话
 | **Preset 配置** | `config.yaml` 预设参数组合，避免每次输入大量参数 |
 | **完整日志系统** | 记录 AI 对话全过程，支持回溯和调试 |
 | **智能失败分析** | AI 自动分析失败根因，决定从哪个步骤重试 |
-| **模型分级调度** | 全局四角色（plan/default/lite/evaluation）+ 任务级 `model` 字段，Token 精细控制 |
+| **AI 调度模式** | AI 调度器根据执行结果动态决定下一个任务，支持条件分支、提前终止、重复执行 |
+| **模型分级调度** | 全局五角色（plan/default/lite/evaluation/scheduler）+ 任务级 `model` 字段，Token 精细控制 |
 
 ---
 
@@ -251,7 +282,8 @@ AutoAgent 适合任何需要 **AI 长时间自主工作** 的场景：
 | 场景 | 任务类型 | AI 做什么 |
 |------|---------|----------|
 | **模型训练迭代优化** | `looping` | 每轮自主提出假设 → 改代码 → 跑训练 → 评估指标 → 保留或回滚 |
-| **CUDA / 性能优化** | `looping` | 自动 profile → 找瓶颈 → 优化 → benchmark → 记录结果 |
+| **CUDA / 性能优化** | `looping` 或 AI 调度 | 自动 profile → 找瓶颈 → 优化 → benchmark → 记录结果 |
+| **目标驱动的优化** | AI 调度模式 | AI 调度器根据结果动态决定：分析 → 优化 → 验证，达标即停 |
 | **代码质量改进** | `nested` | 分析 lint 警告 → 逐个修复 → 验证通过 |
 | **数据处理管线** | `nested` + `long_running` | 下载 → 清洗 → 转换 → 验证，长时间步骤后台运行 |
 | **自动化测试修复** | `simple` | 跑测试 → 分析失败 → 修复代码 → 重跑直到全绿 |
@@ -272,11 +304,16 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --workspace ./projec
 python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 python orchestrator.py --config todos.yaml --workspace ./project
 
+# AI 调度模式（自动检测 todos.yaml 中的 ai_orchestrator 配置）
+python orchestrator.py --config todos.yaml --workspace ./project
+
+# 显式指定 AI 调度模式
+python orchestrator.py --config todos.yaml --mode ai
+
 # 只执行某个任务
 python orchestrator.py --task 2
 
-# 查看状态 / 重置
-python orchestrator.py --status
+# 重置
 python orchestrator.py --reset
 
 # 使用 Preset 配置
@@ -290,25 +327,30 @@ python orchestrator.py --preset default
 ## 🏗️ 架构概览
 
 ```
-┌───────────────────────────────────┐
-│         TodoOrchestrator          │
-│     任务解析 · 调度 · 状态管理      │
-└──────────────┬────────────────────┘
-               │
-       ┌───────┼───────┐
-       ▼       ▼       ▼
- ┌──────────┐ ┌──────────┐ ┌──────────┐
- │  Simple  │ │  Nested  │ │ Looping  │
- │ Executor │ │ Executor │ │ Executor │
- └──────────┘ └────┬─────┘ └────┬─────┘
-                   └──────┬─────┘
-                          ▼
-                  ┌─────────────────┐
-                  │   AI Provider   │
-                  │ CodeBuddy/Claude│
-                  │/Gemini/OpenCode │
-                  │     /Codex      │
-                  └─────────────────┘
+┌───────────────────────────────────────┐
+│           TodoOrchestrator            │
+│       任务解析 · 调度 · 状态管理       │
+└──────────────────┬────────────────────┘
+                   │
+       ┌───────┬───┼───────┐
+       ▼       ▼   ▼       ▼
+ ┌────────┐ ┌────────┐ ┌────────┐
+ │ Simple │ │ Nested │ │Looping │
+ │Executor│ │Executor│ │Executor│
+ └───┬────┘ └───┬────┘ └───┬────┘
+     │          │          │
+     └──────────┼──────────┘
+                ▼
+        ┌───────────────┐
+        │SubtaskExecutor│  子任务分发
+        └───────┬───────┘  (含 long_running)
+                ▼
+        ┌───────────────┐
+        │  AI Provider  │
+        │ CodeBuddy     │
+        │ Claude/Gemini │
+        │ OpenCode/Codex│
+        └───────────────┘
 ```
 
 更多架构细节见 [架构设计文档](doc/ARCHITECTURE.md)。
@@ -321,9 +363,9 @@ python orchestrator.py --preset default
 |------|------|
 | [架构设计](doc/ARCHITECTURE.md) | 系统架构和核心概念详解 |
 | [使用指南](doc/USAGE.md) | 完整使用指南和最佳实践 |
-| [API 参考](doc/API_REFERENCE.md) | 模块接口和配置项说明 |
 | [示例集合](doc/EXAMPLES.md) | 更多实际使用示例 |
 | [文件说明](doc/FILES.md) | 项目文件结构说明 |
+| [AI 调度器设计](doc/ai_orchestrator/DESIGN.md) | AI 调度模式的详细设计方案 |
 
 ---
 

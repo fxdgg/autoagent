@@ -123,7 +123,7 @@ bash_timeout: {bash_timeout}
 # waits this many seconds for the command to exit. If the command fails
 # within this window, the error is shown immediately so the AI can fix it.
 # If the command is still running after this timeout, it is detached to
-# the background. Default: 10
+# the background. Default: {fast_fail_timeout}
 fast_fail_timeout: {fast_fail_timeout}
 
 # Maximum backoff wait time (in seconds) when AI CLI calls fail repeatedly.

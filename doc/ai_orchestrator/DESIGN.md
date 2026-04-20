@@ -486,7 +486,7 @@ AI 调度模式下，`description@N` 始终使用**最新的** scoped descriptio
 |------|------|
 | `orchestrator/ai_orchestrator.py` | `AISchedulerMixin` — 调度循环、决策获取、任务执行 |
 | `prompts/scheduler.py` | 调度 prompt 构建、response 结果保存 |
-| `logger/conversation_logger.py` | `ScheduleAwareConvLogger` — 日志前缀包装 |
+| `logger/schedule_aware_conv_logger.py` | `ScheduleAwareConvLogger` — 日志前缀包装 |
 | `orchestrator/linear_orchestrator.py` | `TodoOrchestrator` — 混入 `AISchedulerMixin`，`${workspace}` 展开 |
 | `state_manager.py` | `get_orchestrator_state()` / `save_orchestrator_state()` |
 | `util/default_value.py` | 默认配置值 |
@@ -559,7 +559,6 @@ tasks:
       - id: 1.1
         name: "Build project"
         type: simple
-        run_once: true
         ...
       - id: 1.2
         name: "Run correctness test and ncu baseline profiling"

@@ -4,7 +4,8 @@ AI Providers - Abstracts differences between AI CLI tools.
 Supported providers:
 - codebuddy: CodeBuddy CLI (default)
 - claude: Claude Code CLI
-- gemini: Gemini Cli
+- gemini: Gemini CLI
+- codex: Codex CLI
 - opencode: OpenCode CLI
 - test: Test Provider (reads pre-defined responses from a rules file)
 
@@ -389,7 +390,7 @@ class TestProvider(AIProvider):
 
     ✅ completed
     ---RULE---
-    {"analysis": "Build failed", "retry_from": "1.1", "reasoning": "...", "suggested_fix": "...", "confidence": "high"}
+    {"analysis": "Build failed", "retry_from": "1.1", "suggested_fix": "Fix the CMake configuration"}
     ---RULE---
     ❌ not completed: build error in line 42
     ```

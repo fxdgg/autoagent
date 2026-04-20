@@ -173,7 +173,7 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 |------|------|------|------|
 | `subtasks` | list | 是 | 子任务列表 |
 | `repeat_count` | int | 是 | 循环次数 |
-| `max_attempts_per_loop` | int | 否 | 每轮最大重试次数 |
+| `max_attempts_per_loop` | int | 否 | 每轮最大重试次数（默认继承 `config.yaml` 的 `default_max_attempts`，即 5） |
 
 ### 4.5 AI 调度配置
 
@@ -181,6 +181,7 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 |------|------|------|------|
 | `strategy` | string | 是 | 调度策略（注入 AI prompt） |
 | `max_rounds` | int | 否 | 最大调度轮次（默认 50） |
+| `max_attempts` | int | 否 | AI 调度器返回无效决策时的最大重试次数（默认继承 `config.yaml` 的 `scheduler_decision_max_retries`） |
 | `stop_condition` | string | 否 | 停止条件 |
 | `last_result` | dict | 否 | 任务结果配置 |
 
@@ -214,6 +215,8 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 | `--executable` | 无 | 覆盖 Provider 可执行文件路径 |
 | `--extra-args` | 无 | 传递给 AI 工具的额外参数 |
 | `--use-cli` | false | 使用 CLI 子进程模式 |
+| `--list-providers` | false | 列出所有可用 Provider 并退出 |
+| `--include-directories` | 无 | 允许 AI 访问的额外目录（仅 Gemini），逗号分隔 |
 
 ### Ideas
 
@@ -248,6 +251,13 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 | `--log-dir` | `.autoagent` | 输出目录 |
 | `--verbose`, `-v` | false | 调试日志 |
 
+### 测试
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--test-schema` | 无 | 测试 schema JSON 文件路径（内部测试用） |
+| `--use-test` | 无 | 测试用例 ID（1-based，需配合 `--test-schema`） |
+
 ---
 
 ## 6. Preset 配置
@@ -259,20 +269,21 @@ Preset 是 `config.yaml` 中预定义的参数组合，避免每次输入大量�
 ```yaml
 # config.yaml
 preset:
-  default: {}
+  - name: default
 
-  general:
-    ideas: "${workspace}/../ideas.md"
-    config: "${workspace}/../todos.yaml"
+  - name: general
+    ideas: "${workspace}/ideas.md"
+    config: "${workspace}/todos.yaml"
     provider: codebuddy
     use_cli: false
-    model: "plan:claude-opus-4.6;default:claude-opus-4.6;lite:glm-4-flash;evaluation:claude-opus-4.6;scheduler:claude-opus-4.6"
+    model: 
+      plan: claude-opus-4.6
+      default: claude-opus-4.6
+      lite: glm-5.0
+      evaluation: claude-opus-4.6
+      scheduler: claude-opus-4.6
     human_review: true
     verbose: true
-
-  test:
-    provider: test
-    use_cli: true
 ```
 
 ### 使用 Preset
@@ -394,7 +405,7 @@ python orchestrator.py --list-sessions
 
 **Q: 任务失败后会阻塞后续任务吗？**
 
-A: 不会。线性模式下，失败的任务不阻塞后续任务执行。
+A: 不会。线性模式下，失败的任务不阻塞后续任务执行。AI 调度模式下，失败的任务同样不会阻塞——调度器会根据失败结果自主决定下一步操作（重试、换方向或停止）。
 
 **Q: 如何在不同任务间传递数据？**
 
@@ -402,7 +413,7 @@ A: 通过文件系统。在 `initial_hint` 中指示 AI 将结果写入特定文
 
 **Q: AI 调度模式和线性模式可以混用吗？**
 
-A: 不能同时使用。如果 `todos.yaml` 包含 `ai_orchestrator` 配置，系统自动使用 AI 调度模式。
+A: 默认情况下不混用。如果 `todos.yaml` 包含 `ai_orchestrator` 配置，系统自动使用 AI 调度模式。但你可以通过 `--mode linear` 强制使用线性模式，此时 `ai_orchestrator` 配置会被忽略。
 
 **Q: 如何查看 AI 的完整对话记录？**
 

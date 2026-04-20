@@ -4,7 +4,7 @@
 AutoAgent Orchestrator - Main entry point.
 
 AI-driven task execution system that supports multiple AI providers
-(CodeBuddy, Claude Code, Gemini CLI, OpenCode).
+(CodeBuddy, Claude Code, Gemini CLI, Codex, OpenCode).
 """
 
 import os
@@ -255,7 +255,7 @@ def main():
     default_max_attempts = config.get('default_max_attempts', DEFAULTS['default_max_attempts'])
 
     parser = argparse.ArgumentParser(
-        description="AI-driven task execution system (supports CodeBuddy, Claude Code, Gemini CLI)",
+        description="AI-driven task execution system (supports CodeBuddy, Claude Code, Gemini CLI, Codex, OpenCode)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -353,7 +353,7 @@ Examples:
     provider_group.add_argument(
         '--provider', '-P',
         default='codebuddy',
-        help='AI provider to use: codebuddy (default), claude, gemini, opencode, test. '
+        help='AI provider to use: codebuddy (default), claude, gemini, codex, opencode, test (for testing only). '
              'Use --list-providers to see all available options.',
     )
     provider_group.add_argument(

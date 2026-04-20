@@ -68,7 +68,6 @@ autoagent/
 │   ├── INDEX.md                     # 文档索引
 │   ├── ARCHITECTURE.md              # 系统架构
 │   ├── USAGE.md                     # 使用指南
-│   ├── API_REFERENCE.md             # API 参考
 │   ├── EXAMPLES.md                  # 使用示例
 │   ├── FILES.md                     # 文件结构（本文档）
 │   ├── PROMPT.md                    # Prompt 工程
@@ -168,10 +167,12 @@ autoagent/
 |------|------|
 | General | `system_prompt_prefix`、`default_model`、`truncation_limits` |
 | Timeout & Wait | `session_timeout`、`bash_timeout`、`fast_fail_timeout`、`backoff_max_wait`、`idle_interval` |
-| Max Rounds & Retries | `max_plan_retries`、`max_review_rounds`、`default_max_attempts`、`max_marker_nudges` |
+| Max Rounds & Retries | `max_plan_retries`、`max_review_rounds`、`max_validation_retries`、`default_max_attempts`、`max_marker_nudges` |
 | AI Scheduler | `scheduler_history_limit`、`scheduler_decision_max_retries`、`scheduler_max_session_retries` |
 | Debug | `autoagent_exec_show_console` |
 | Presets | 命名预设配置组合 |
+
+> **注意**：部分默认值（如 `backoff_base`、`signal_check_interval`、`signal_max_wait`、`signal_max_initial_wait`、`max_signal_retry` 等）仅在代码的 `DEFAULTS` 字典中定义，不暴露在 `config.yaml` 中。
 
 ### `todos.yaml`（用户创建）
 
@@ -192,10 +193,14 @@ autoagent/
     ├── todos_state.yaml                 # 任务状态持久化
     ├── plans_state.yaml                 # Ideas 处理状态
     ├── previous_subtask_summary.txt     # 子任务间上下文传递
+    ├── schedule_history.txt             # AI 调度模式的完整调度历史
     ├── task_results/                    # AI 调度模式的任务结果
     │   └── result_<task_id>.txt
     ├── conversations/                   # AI 对话日志
     │   ├── task_1.md
+    │   ├── ai_scheduler/               # AI 调度器决策日志
+    │   │   ├── schedule_1.md
+    │   │   └── schedule_2.md
     │   └── subtask_1/
     │       ├── task_1.1_round_1.md
     │       ├── failure_analysis_1.2_round_1.md

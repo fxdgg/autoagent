@@ -117,6 +117,10 @@ Mixin 类，为 `TodoOrchestrator` 提供 AI 驱动的任务调度能力。
 ❌ not completed → 重试（会话重置）
 ⏳ LONG_RUNNING_IN_PROGRESS → 委托 SubtaskExecutor
 无标记 → 标记提醒（同会话轻量跟进）
+
+异常处理：
+BashTimeoutError / StreamTimeoutError → 同会话续传（不重置）
+SessionTimeoutError → 会话重置后重试
 ```
 
 **标记提醒机制**：当 AI 完成工作但忘记输出状态标记时，发送轻量级跟进 prompt（同一会话），避免昂贵的会话重置。最多 `max_marker_nudges` 次（默认 3）。
@@ -218,10 +222,12 @@ orchestrator.run_ai_scheduled()
 
 ### 4.3 Idle 监听模式
 
+线性模式和 AI 调度模式均支持 Idle 监听。当 `--ideas` 参数被设置且未指定 `--no-idle` 时，`run_with_idle()` 根据当前执行模式自动选择线性执行或 AI 调度执行：
+
 ```
 orchestrator.run_with_idle()
     → 处理 ideas.md 中的新想法
-    → 执行所有待处理任务
+    → 执行所有待处理任务（线性模式调用 run()，AI 调度模式调用 run_ai_scheduled()）
     → 进入轮询循环（idle_interval 间隔）
     → 检测到新 idea → 拆解 → 追加 → 执行
     → 直到 Ctrl+C
@@ -367,7 +373,7 @@ ideas.md 变化检测（SHA-256 哈希比对）
     ↓
 AI 拆解（plan 模型）→ 生成结构化任务 YAML
     ↓
-AI 审查（review 模型）→ 质量评估
+AI 审查（plan 模型）→ 质量评估
     ↓
 可选人工审核（--human-review）
     ↓

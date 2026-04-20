@@ -85,6 +85,7 @@ See the [Complete Example](#complete-example) at the end of this document for a 
 | `name` | string | Yes | Concise, descriptive task name |
 | `type` | string | Yes | `simple`, `nested`, `looping`, `long_running`, `simple_once`, or `long_running_once` |
 | `completion_criteria` | string | Yes | Clear, specific, measurable success criteria |
+| `description` | string | No | Task-specific description. In AI scheduling mode, the scheduler uses this to understand the task — recommended to fill in. |
 | `model` | string | No | `"default"`, `"lite"`, or a direct model name. `"default"` will be used if not specified |
 | `system_prompt_prefix` | string | No | Custom AI persona/instructions for this task (see §5.3) |
 

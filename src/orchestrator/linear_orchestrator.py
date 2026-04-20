@@ -117,7 +117,7 @@ class TodoOrchestrator(AISchedulerMixin):
             use_cli: If True, use CLI subprocess instead of CodeBuddy Agent SDK
                      (only valid when provider is codebuddy)
             backoff_max_wait: Max wait time (seconds) for exponential backoff
-                     when AI CLI calls fail repeatedly (default: 300)
+                     when AI CLI calls fail repeatedly (default: 600)
             model_roles: Model role dict ({"plan": ..., "default": ..., "lite": ...}),
                      parsed by parse_model_spec(). None uses provider's default model.
             default_max_attempts: Global default for task/subtask max retry attempts.

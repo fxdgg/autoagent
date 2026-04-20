@@ -10,6 +10,9 @@ Modules:
     long_running_task   - Long-running task prompts (launch + analysis)
     failure_analysis    - Subtask failure analysis prompts (nested + looping)
     main_evaluation     - Main task completion evaluation prompts
+    scheduler           - AI scheduler prompts (scheduling decisions)
+    marker_nudge        - Marker nudge prompts (completion status reminders)
+    timeout_continuation - Timeout continuation prompts (in-session follow-ups)
     ideas_decompose     - Idea-to-task decomposition prompts
     ideas_review        - Task review and revision prompts
 """
