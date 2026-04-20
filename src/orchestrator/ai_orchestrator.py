@@ -19,6 +19,7 @@ It relies on attributes and helper methods defined on the host class
 """
 
 import copy
+import glob
 import json
 import os
 import re
@@ -300,7 +301,48 @@ class AISchedulerMixin:
                         )
                         last_entry['result'] = 'success' if success else 'failed'
                         last_entry['timestamp'] = time.strftime("%Y-%m-%d %H:%M:%S")
+                        task_execution_counts[last_task_id] = task_execution_counts.get(last_task_id, 0) + 1
+                        orch_state['task_execution_counts'] = task_execution_counts
                         self.state_manager.save_orchestrator_state(orch_state)
+
+        # ── Orphan recovery: detect running background tasks from a ──
+        # ── round that has no history entry (non-graceful kill)      ──
+        # If current_round is ahead of the last history entry's round,
+        # it means the process was killed after current_round was saved
+        # but before the history entry was created.  Check for orphaned
+        # signal files from that round.
+        last_history_round = schedule_history[-1]['round'] if schedule_history else 0
+        if current_round > last_history_round:
+            orphan_round = self._detect_orphan_signal_file(current_round, last_history_round)
+            if orphan_round is not None:
+                orphan_sched_round, orphan_task_id = orphan_round
+                orphan_task = next(
+                    (t for t in self.todos if str(t['id']) == orphan_task_id), None
+                )
+                if orphan_task:
+                    print(f"\n🔄 Detected running background task from schedule round {orphan_sched_round}, resuming...")
+                    # Create a synthetic history entry for the orphaned round
+                    history_entry = {
+                        'round': orphan_sched_round,
+                        'task_id': orphan_task_id,
+                        'task_name': orphan_task['name'],
+                        'session_id': '',
+                        'result': None,
+                        'reasoning': '(recovered from orphaned background task)',
+                        'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                    schedule_history.append(history_entry)
+                    orch_state['schedule_history'] = schedule_history
+                    self.state_manager.save_orchestrator_state(orch_state)
+
+                    success = self._execute_scheduled_task(
+                        orphan_task, orphan_sched_round, task_execution_counts
+                    )
+                    history_entry['result'] = 'success' if success else 'failed'
+                    history_entry['timestamp'] = time.strftime("%Y-%m-%d %H:%M:%S")
+                    task_execution_counts[orphan_task_id] = task_execution_counts.get(orphan_task_id, 0) + 1
+                    orch_state['task_execution_counts'] = task_execution_counts
+                    self.state_manager.save_orchestrator_state(orch_state)
 
         print(f"{'=' * 60}")
         print(f"  AutoAgent (AI Orchestrator Mode)")
@@ -317,8 +359,6 @@ class AISchedulerMixin:
 
         while current_round < max_rounds:
             current_round += 1
-            orch_state['current_round'] = current_round
-            self.state_manager.save_orchestrator_state(orch_state)
 
             print(f"\n{'─' * 60}")
             print(f"🤖 Schedule Round {current_round}/{max_rounds}")
@@ -356,6 +396,7 @@ class AISchedulerMixin:
             if decision is None:
                 # Failed to get a valid decision after retries
                 print(f"\n❌ Scheduler failed to produce a valid decision. Stopping.")
+                orch_state['current_round'] = current_round
                 orch_state['status'] = 'stopped'
                 self.state_manager.save_orchestrator_state(orch_state)
                 break
@@ -373,6 +414,7 @@ class AISchedulerMixin:
                     'reasoning': reasoning,
                     'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
                 })
+                orch_state['current_round'] = current_round
                 orch_state['status'] = 'stopped'
                 orch_state['schedule_history'] = schedule_history
                 self.state_manager.save_orchestrator_state(orch_state)
@@ -385,6 +427,7 @@ class AISchedulerMixin:
             )
             if not selected_task:
                 print(f"\n❌ Scheduler selected non-existent task {selected_task_id}. Stopping.")
+                orch_state['current_round'] = current_round
                 orch_state['status'] = 'stopped'
                 self.state_manager.save_orchestrator_state(orch_state)
                 break
@@ -393,6 +436,9 @@ class AISchedulerMixin:
             print(f"   Reasoning: {reasoning}")
 
             # Record the scheduling decision (result=None until task completes)
+            # Also persist current_round here (not earlier) so that if the
+            # process is killed during the scheduler AI call, current_round
+            # won't be ahead of the history — enabling correct resume.
             history_entry = {
                 'round': current_round,
                 'task_id': selected_task_id,
@@ -403,6 +449,7 @@ class AISchedulerMixin:
                 'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
             }
             schedule_history.append(history_entry)
+            orch_state['current_round'] = current_round
             orch_state['schedule_history'] = schedule_history
             self.state_manager.save_orchestrator_state(orch_state)
 
@@ -993,3 +1040,68 @@ class AISchedulerMixin:
                 session_dir=self.session_dir,
                 max_length=limits.get('previous_subtask_summary'),
             )
+
+    def _detect_orphan_signal_file(
+        self, current_round: int, last_history_round: int
+    ):
+        """Detect orphaned signal files from rounds without history entries.
+
+        When the process is killed non-gracefully after current_round is
+        saved but before the history entry is persisted, there may be
+        signal files from that round with status "starting" or "running"
+        indicating a background task is still alive.
+
+        Scans for signal files matching rounds between last_history_round+1
+        and current_round (inclusive).
+
+        Returns:
+            A tuple (schedule_round, task_id) if an orphan is found,
+            or None if no orphans detected.
+        """
+        lr_tasks_dir = os.path.join(self.session_dir, "lr_tasks")
+        if not os.path.isdir(lr_tasks_dir):
+            return None
+
+        signal_files = glob.glob(os.path.join(lr_tasks_dir, "lr_*_signal.json"))
+
+        for sf_path in signal_files:
+            try:
+                with open(sf_path, "r", encoding="utf-8") as f:
+                    sig = json.load(f)
+                sig_status = sig.get("status")
+                if sig_status not in ("starting", "running"):
+                    continue
+
+                # Extract the task_id from the signal file name
+                # Format: lr_{subtask_id}_signal.json
+                basename = os.path.basename(sf_path)
+                # Remove "lr_" prefix and "_signal.json" suffix
+                subtask_id = basename[3:-12]  # "lr_" = 3 chars, "_signal.json" = 12 chars
+
+                # Parse the schedule_round from the subtask_id
+                # Format: "{schedule_round}.{task_id}" or "{schedule_round}.{task_id}.{suffix}"
+                parts = subtask_id.split('.', 1)
+                if len(parts) < 2:
+                    continue
+                try:
+                    sched_round = int(parts[0])
+                except (ValueError, TypeError):
+                    continue
+
+                # Check if this round is in the orphan range
+                if last_history_round < sched_round <= current_round:
+                    # Extract the original task_id (second part)
+                    remaining = parts[1]
+                    # remaining could be "3" or "3.1" (task_id or task_id.suffix)
+                    task_id = remaining.split('.', 1)[0]
+                    logger.info(
+                        f"Orphan signal file detected: {basename} "
+                        f"(round={sched_round}, task_id={task_id}, status={sig_status})"
+                    )
+                    return (sched_round, task_id)
+
+            except Exception as e:
+                logger.warning(f"Error reading signal file {sf_path}: {e}")
+                continue
+
+        return None
