@@ -167,6 +167,14 @@ def build_scheduler_prompt(
             f"    </schedule_history>"
         )
 
+    # Full history file path hint
+    if session_dir:
+        history_file = os.path.join(session_dir, "schedule_history.txt")
+        ctx_inner.append(
+            f"    NOTE: Only the last {scheduler_history_limit} rounds are shown above. "
+            f"For the complete scheduling history, read: {history_file}"
+        )
+
     parts.append("<context>\n" + "\n\n".join(ctx_inner) + "\n</context>")
 
     return "\n\n".join(parts)

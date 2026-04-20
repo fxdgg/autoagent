@@ -304,6 +304,7 @@ class AISchedulerMixin:
                         task_execution_counts[last_task_id] = task_execution_counts.get(last_task_id, 0) + 1
                         orch_state['task_execution_counts'] = task_execution_counts
                         self.state_manager.save_orchestrator_state(orch_state)
+                        self._append_schedule_history_file(last_entry)
 
         # ── Orphan recovery: detect running background tasks from a ──
         # ── round that has no history entry (non-graceful kill)      ──
@@ -343,6 +344,7 @@ class AISchedulerMixin:
                     task_execution_counts[orphan_task_id] = task_execution_counts.get(orphan_task_id, 0) + 1
                     orch_state['task_execution_counts'] = task_execution_counts
                     self.state_manager.save_orchestrator_state(orch_state)
+                    self._append_schedule_history_file(history_entry)
 
         print(f"{'=' * 60}")
         print(f"  AutoAgent (AI Orchestrator Mode)")
@@ -406,18 +408,20 @@ class AISchedulerMixin:
 
             if action == 'stop':
                 print(f"\n🛑 Scheduler decided to stop: {reasoning}")
-                schedule_history.append({
+                stop_entry = {
                     'round': current_round,
                     'task_id': None,
                     'task_name': None,
                     'result': 'stopped',
                     'reasoning': reasoning,
                     'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
-                })
+                }
+                schedule_history.append(stop_entry)
                 orch_state['current_round'] = current_round
                 orch_state['status'] = 'stopped'
                 orch_state['schedule_history'] = schedule_history
                 self.state_manager.save_orchestrator_state(orch_state)
+                self._append_schedule_history_file(stop_entry)
                 break
 
             # action == 'execute'
@@ -473,6 +477,7 @@ class AISchedulerMixin:
             orch_state['task_execution_counts'] = task_execution_counts
             orch_state['schedule_history'] = schedule_history
             self.state_manager.save_orchestrator_state(orch_state)
+            self._append_schedule_history_file(history_entry)
 
             results[f"round_{current_round}"] = success
 
@@ -526,6 +531,42 @@ class AISchedulerMixin:
             "task_stats": task_stats,
             "duration": duration,
         }
+
+    def _append_schedule_history_file(self, entry: dict) -> None:
+        """Append a formatted schedule history entry to schedule_history.txt.
+
+        The file is located at the root of the session (log) directory,
+        providing a persistent, human-readable record of all scheduling
+        decisions across the entire run.
+        """
+        history_file = os.path.join(self.session_dir, "schedule_history.txt")
+        rnd = entry.get('round', '?')
+        task_id = entry.get('task_id', '-')
+        task_name = entry.get('task_name', '-')
+        result = entry.get('result', 'unknown')
+        reasoning = entry.get('reasoning', '')
+        timestamp = entry.get('timestamp', '')
+
+        if result == 'success':
+            marker = '✅'
+        elif result == 'failed':
+            marker = '❌'
+        elif result == 'stopped':
+            marker = '🛑'
+        else:
+            marker = '⏳'
+
+        if task_id is None:
+            # Stop decision
+            line = f"[{timestamp}] Round {rnd}: {marker} STOP | Reasoning: {reasoning}\n"
+        else:
+            line = f"[{timestamp}] Round {rnd}: {marker} Task {task_id} ({task_name}) | Reasoning: {reasoning}\n"
+
+        try:
+            with open(history_file, "a", encoding="utf-8") as f:
+                f.write(line)
+        except OSError as e:
+            logger.warning(f"Failed to write schedule_history.txt: {e}")
 
     def _get_scheduler_decision(
         self,
