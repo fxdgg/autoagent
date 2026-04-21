@@ -139,53 +139,22 @@ class SessionHelper:
         return f"{basename}_{rand_suffix}"
 
     @staticmethod
-    def read_marker(workspace: str) -> str:
-        """Read the session subdir name from ``.autoagent_log``.
-
-        .. deprecated:: Use ``find_latest_session_for_workspace`` instead.
-           Kept only for backward compatibility with tests.
-
-        Returns the name (e.g. ``cufftdx_optimization_4jvowsl3``)
-        or empty string if the marker doesn't exist or is empty.
-        """
-        marker = os.path.join(workspace, ".autoagent_log")
-        if os.path.exists(marker):
-            try:
-                with open(marker, "r", encoding="utf-8") as f:
-                    return f.read().strip()
-            except Exception:
-                pass
-        return ""
-
-    @staticmethod
-    def write_marker(workspace: str, subdir_name: str):
-        """Write *subdir_name* into ``<workspace>/.autoagent_log``.
-
-        .. deprecated:: No longer used by the main orchestrator.
-           Kept only for backward compatibility with tests.
-        """
-        marker = os.path.join(workspace, ".autoagent_log")
-        try:
-            with open(marker, "w", encoding="utf-8") as f:
-                f.write(subdir_name + "\n")
-        except Exception as e:
-            logger.warning(f"Failed to write {marker}: {e}")
-
-    @staticmethod
     def append_sessions_csv(log_dir: str, subdir_name: str, workspace: str):
         """Append a row to ``<log_dir>/sessions.csv``."""
         csv_path = os.path.join(log_dir, SessionHelper.SESSIONS_FILE)
         write_header = not os.path.exists(csv_path)
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
         try:
             os.makedirs(log_dir, exist_ok=True)
             with open(csv_path, "a", encoding="utf-8", newline="") as f:
                 writer = csv.writer(f, delimiter="\t")
                 if write_header:
-                    writer.writerow(["session_id", "workspace", "created_at"])
+                    writer.writerow(["session_id", "workspace", "created_at", "last_accessed_at"])
                 writer.writerow([
                     subdir_name,
                     workspace,
-                    time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    now,
+                    now,
                 ])
         except Exception as e:
             logger.warning(f"Failed to append to {csv_path}: {e}")
@@ -195,7 +164,10 @@ class SessionHelper:
         """Load all rows from ``sessions.csv``.
 
         Returns a list of dicts with keys ``session_id``, ``workspace``,
-        ``created_at``.
+        ``created_at``, and ``last_accessed_at``.
+
+        For backward compatibility, if ``last_accessed_at`` is missing
+        from a row, it falls back to ``created_at``.
         """
         csv_path = os.path.join(log_dir, SessionHelper.SESSIONS_FILE)
         if not os.path.isfile(csv_path):
@@ -212,18 +184,61 @@ class SessionHelper:
 
     @staticmethod
     def find_latest_session_for_workspace(log_dir: str, workspace: str) -> str:
-        """Find the most recent session for *workspace* from ``sessions.csv``.
+        """Find the most recently *accessed* session for *workspace*.
+
+        Looks up ``sessions.csv`` and returns the ``session_id`` with the
+        largest ``last_accessed_at`` value among rows matching *workspace*.
+        Falls back to ``created_at`` for rows that lack the column (backward
+        compatibility with older CSV files).
 
         Returns the ``session_id`` string, or empty string if none found.
         """
         rows = SessionHelper.load_sessions_csv(log_dir)
         norm_ws = os.path.normcase(os.path.normpath(workspace))
         best = ""
+        best_ts = ""
         for row in rows:
             row_ws = os.path.normcase(os.path.normpath(row.get("workspace", "")))
             if row_ws == norm_ws:
-                best = row.get("session_id", "")
+                ts = row.get("last_accessed_at") or row.get("created_at", "")
+                if ts >= best_ts:
+                    best_ts = ts
+                    best = row.get("session_id", "")
         return best
+
+    @staticmethod
+    def touch_session(log_dir: str, session_id: str):
+        """Update ``last_accessed_at`` for *session_id* in ``sessions.csv``.
+
+        If the CSV does not yet have a ``last_accessed_at`` column (old
+        format), the column is added transparently.
+        """
+        csv_path = os.path.join(log_dir, SessionHelper.SESSIONS_FILE)
+        if not os.path.isfile(csv_path):
+            return
+        rows = SessionHelper.load_sessions_csv(log_dir)
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        found = False
+        for row in rows:
+            if row.get("session_id") == session_id:
+                row["last_accessed_at"] = now
+                found = True
+                break
+        if not found:
+            return
+        try:
+            with open(csv_path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f, delimiter="\t")
+                writer.writerow(["session_id", "workspace", "created_at", "last_accessed_at"])
+                for row in rows:
+                    writer.writerow([
+                        row.get("session_id", ""),
+                        row.get("workspace", ""),
+                        row.get("created_at", ""),
+                        row.get("last_accessed_at", row.get("created_at", "")),
+                    ])
+        except Exception as e:
+            logger.warning(f"Failed to update {csv_path}: {e}")
 
     @staticmethod
     def update_workspace_in_csv(
@@ -248,12 +263,13 @@ class SessionHelper:
             try:
                 with open(csv_path, "w", encoding="utf-8", newline="") as f:
                     writer = csv.writer(f, delimiter="\t")
-                    writer.writerow(["session_id", "workspace", "created_at"])
+                    writer.writerow(["session_id", "workspace", "created_at", "last_accessed_at"])
                     for row in rows:
                         writer.writerow([
                             row.get("session_id", ""),
                             row.get("workspace", ""),
                             row.get("created_at", ""),
+                            row.get("last_accessed_at", row.get("created_at", "")),
                         ])
             except Exception as e:
                 logger.warning(f"Failed to update {csv_path}: {e}")
@@ -320,6 +336,7 @@ class SessionHelper:
                 print(f"❌ Session directory not found: {session_dir}")
                 print(f"   The session '{subdir}' may have been deleted.")
                 sys.exit(1)
+            sh.touch_session(log_dir, subdir)
             return session_dir
 
         if mode == "resume":
@@ -354,6 +371,7 @@ class SessionHelper:
             if not os.path.isdir(session_dir):
                 print(f"❌ Session directory not found: {session_dir}")
                 sys.exit(1)
+            sh.touch_session(log_dir, subdir)
             return session_dir
 
         # mode == "new"

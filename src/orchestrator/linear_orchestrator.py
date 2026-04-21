@@ -63,7 +63,7 @@ class TodoOrchestrator(AISchedulerMixin):
 
     # ── Backward-compatible session management class attributes ────
     # These delegate to SessionHelper so that external code using
-    # ``TodoOrchestrator._read_marker(...)`` etc. still works.
+    # ``TodoOrchestrator._load_sessions_csv(...)`` etc. still works.
 
     SESSIONS_FILE = SessionHelper.SESSIONS_FILE
 
@@ -71,12 +71,11 @@ class TodoOrchestrator(AISchedulerMixin):
     # ── Session management (delegated to SessionHelper) ─────────
 
     _generate_session_name = staticmethod(SessionHelper.generate_session_name)
-    _read_marker = staticmethod(SessionHelper.read_marker)       # deprecated
-    _write_marker = staticmethod(SessionHelper.write_marker)     # deprecated
     _append_sessions_csv = staticmethod(SessionHelper.append_sessions_csv)
     _load_sessions_csv = staticmethod(SessionHelper.load_sessions_csv)
     _find_latest_session_for_workspace = staticmethod(SessionHelper.find_latest_session_for_workspace)
     _update_workspace_in_csv = staticmethod(SessionHelper.update_workspace_in_csv)
+    _touch_session = staticmethod(SessionHelper.touch_session)
     resolve_session_dir = staticmethod(SessionHelper.resolve_session_dir)
     _get_session_status = staticmethod(SessionHelper.get_session_status)
 

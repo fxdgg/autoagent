@@ -215,17 +215,18 @@ def _list_sessions(log_dir: str, workspace: str):
         print(f"No sessions found in {log_dir}/")
         return
 
-    # Determine the latest session for this workspace (replaces .autoagent_log marker)
+    # Determine the most recently accessed session for this workspace
     active_subdir = SessionHelper.find_latest_session_for_workspace(log_dir, workspace)
 
     print(f"\nSessions in {log_dir}/\n")
-    print(f"{'Workspace':<50s} {'Session ID':<40s} {'Created':<22s} {'Status'}")
-    print(f"{'-' * 50} {'-' * 40} {'-' * 22} {'-' * 30}")
+    print(f"{'Workspace':<50s} {'Session ID':<40s} {'Created':<22s} {'Last Accessed':<22s} {'Status'}")
+    print(f"{'-' * 50} {'-' * 40} {'-' * 22} {'-' * 22} {'-' * 30}")
 
     for row in rows:
         sid = row.get("session_id", "?")
         ws = row.get("workspace", "?")
         created = row.get("created_at", "?")
+        accessed = row.get("last_accessed_at", "") or created
         # Truncate workspace for display
         ws_display = ws if len(ws) <= 48 else "..." + ws[-45:]
 
@@ -233,11 +234,11 @@ def _list_sessions(log_dir: str, workspace: str):
         session_path = os.path.join(log_dir, sid)
         status = TodoOrchestrator._get_session_status(session_path)
 
-        # Mark latest session for this workspace
+        # Mark most recently accessed session for this workspace
         if sid == active_subdir:
             status += " (latest)"
 
-        print(f"{ws_display:<50s} {sid:<40s} {created:<22s} {status}")
+        print(f"{ws_display:<50s} {sid:<40s} {created:<22s} {accessed:<22s} {status}")
 
     print()
 

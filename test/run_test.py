@@ -125,32 +125,6 @@ def reset_test(project_root, log_dir):
         except Exception:
             pass
 
-    # Also clean via .autoagent_log marker for backward compatibility
-    marker = os.path.join(project_root, ".autoagent_log")
-    if os.path.exists(marker):
-        try:
-            with open(marker, "r", encoding="utf-8") as f:
-                subdir_name = f.read().strip()
-        except Exception:
-            subdir_name = ""
-
-        if subdir_name:
-            session_dir = os.path.join(log_dir, subdir_name)
-            if os.path.exists(session_dir):
-                try:
-                    shutil.rmtree(session_dir)
-                except OSError as e:
-                    print(f"warning: failed to remove previous session dir {session_dir}: {e}")
-
-        try:
-            os.remove(marker)
-        except OSError:
-            try:
-                with open(marker, "w", encoding="utf-8") as f:
-                    f.write("")
-            except OSError as e:
-                print(f"warning: failed to clear marker {marker}: {e}")
-
     # Clean leftover dirs
     for d in ["monitors", "logs"]:
         target = os.path.join(project_root, d)
@@ -165,23 +139,26 @@ def reset_test(project_root, log_dir):
 def find_session_dir(project_root, log_dir):
     """Find the session directory created by the orchestrator.
 
-    Searches sessions.csv for the latest session matching this workspace.
-    Falls back to reading .autoagent_log marker for backward compatibility.
-    Returns the absolute path, or None if not found.
+    Searches sessions.csv for the most recently accessed session matching
+    this workspace.  Returns the absolute path, or None if not found.
     """
-    # Primary: look up sessions.csv
+    # Look up sessions.csv
     csv_path = os.path.join(log_dir, "sessions.csv")
     if os.path.exists(csv_path):
         import csv as csv_mod
         norm_ws = os.path.normcase(os.path.normpath(project_root))
         best_sid = None
+        best_ts = ""
         try:
             with open(csv_path, "r", encoding="utf-8", newline="") as f:
                 reader = csv_mod.DictReader(f, delimiter="\t")
                 for row in reader:
                     row_ws = os.path.normcase(os.path.normpath(row.get("workspace", "")))
                     if row_ws == norm_ws:
-                        best_sid = row.get("session_id", "")
+                        ts = row.get("last_accessed_at") or row.get("created_at", "")
+                        if ts >= best_ts:
+                            best_ts = ts
+                            best_sid = row.get("session_id", "")
         except Exception:
             pass
         if best_sid:
@@ -189,20 +166,6 @@ def find_session_dir(project_root, log_dir):
             if os.path.isdir(session_dir):
                 return session_dir
 
-    # Fallback: read .autoagent_log marker (backward compatibility)
-    marker = os.path.join(project_root, ".autoagent_log")
-    if not os.path.exists(marker):
-        return None
-    try:
-        with open(marker, "r", encoding="utf-8") as f:
-            subdir_name = f.read().strip()
-    except Exception:
-        return None
-    if not subdir_name:
-        return None
-    session_dir = os.path.join(log_dir, subdir_name)
-    if os.path.isdir(session_dir):
-        return session_dir
     return None
 
 
