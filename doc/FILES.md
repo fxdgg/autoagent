@@ -187,7 +187,7 @@ autoagent/
 
 ```
 .autoagent/
-├── sessions.csv                         # 会话注册表
+├── sessions.csv                         # 会话注册表（Tab 分隔：session_id, workspace, created_at, last_accessed_at）
 └── <session_name>/
     ├── orchestrator.log                 # 编排器日志
     ├── todos_state.yaml                 # 任务状态持久化

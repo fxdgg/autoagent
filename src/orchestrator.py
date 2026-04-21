@@ -261,19 +261,19 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python orchestrator.py                                  # Run all tasks (CodeBuddy default)
-  python orchestrator.py --provider claude                 # Use Claude Code
+  python orchestrator.py                                           # Run all tasks (CodeBuddy default)
+  python orchestrator.py --provider claude                         # Use Claude Code
   python orchestrator.py --provider gemini --model gemini-3-flash  # Use Gemini CLI
-  python orchestrator.py --config my_tasks.yaml            # Use custom config
-  python orchestrator.py --task 2                          # Run only task 2
-  python orchestrator.py --reset                           # Reset all state
-  python orchestrator.py --verbose                         # Enable debug logging
-  python orchestrator.py --ideas ideas.md                  # Watch ideas.md for new ideas
-  python orchestrator.py --ideas ideas.md --ideas-only     # Process ideas only (no task execution)
-  python orchestrator.py --ideas ideas.md --human-review   # Process ideas with human review
-  python orchestrator.py --mode ai                         # Force AI orchestrator mode
-  python orchestrator.py --mode linear                     # Force linear mode (default)
-  python orchestrator.py --list-providers                  # List available AI providers
+  python orchestrator.py --config my_tasks.yaml                    # Use custom config
+  python orchestrator.py --task 2                                  # Run only task 2
+  python orchestrator.py --reset                                   # Reset all state
+  python orchestrator.py --verbose                                 # Enable debug logging
+  python orchestrator.py --ideas ideas.md                          # Watch ideas.md for new ideas
+  python orchestrator.py --ideas ideas.md --ideas-only             # Process ideas only (no task execution)
+  python orchestrator.py --ideas ideas.md --human-review           # Process ideas with human review
+  python orchestrator.py --mode ai                                 # Force AI orchestrator mode
+  python orchestrator.py --mode linear                             # Force linear mode (default)
+  python orchestrator.py --list-providers                          # List available AI providers
         """,
     )
 
@@ -337,7 +337,7 @@ Examples:
     session.add_argument(
         '--continue', dest='continue_session',
         action='store_true',
-        help='Continue from the latest session for this workspace (from sessions.csv)',
+        help='Continue from the most recently accessed session for this workspace (by last_accessed_at in sessions.csv)',
     )
     session.add_argument(
         '--resume', dest='resume_session',

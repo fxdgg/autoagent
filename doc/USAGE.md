@@ -231,7 +231,7 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--continue` | false | 继续上次会话 |
+| `--continue` | false | 继续最近访问的会话（基于 `last_accessed_at`） |
 | `--resume` | 无 | 恢复指定会话 ID |
 | `--list-sessions` | false | 列出所有会话 |
 
@@ -342,7 +342,7 @@ python orchestrator.py --model "plan:claude-opus-4.6;default:claude-sonnet-4;lit
 ### 断点续传
 
 ```bash
-# 继续上次会话
+# 继续最近访问的会话（同一 workspace 下按 last_accessed_at 选取）
 python orchestrator.py --continue
 
 # 恢复指定会话

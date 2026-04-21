@@ -360,7 +360,7 @@ SubtaskExecutor 轮询信号文件
 ### 中断恢复
 
 - `Ctrl+C`：保存 session_id 和 interrupt_pending 标记
-- `--continue`：从上次会话继续
+- `--continue`：继续最近访问的会话（基于 `sessions.csv` 中的 `last_accessed_at` 时间戳）
 - `--resume <id>`：恢复指定会话
 - 孤儿信号文件检测：非正常退出后恢复后台任务
 
