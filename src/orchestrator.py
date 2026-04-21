@@ -523,6 +523,11 @@ Examples:
         _list_sessions(_log_dir_abs, _workspace_abs)
         return
 
+    # ── Clean up stale session entries ──
+    _stale = SessionHelper.cleanup_stale_sessions(_log_dir_abs)
+    if _stale:
+        print(f"🧹 Cleaned {_stale} stale session(s) from sessions.csv")
+
     # ── Validate mutually exclusive session flags ──
     if args.continue_session and args.resume_session:
         print("❌ Cannot use --continue and --resume together.")

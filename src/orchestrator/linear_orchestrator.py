@@ -77,6 +77,7 @@ class TodoOrchestrator(AISchedulerMixin):
     _update_workspace_in_csv = staticmethod(SessionHelper.update_workspace_in_csv)
     _touch_session = staticmethod(SessionHelper.touch_session)
     resolve_session_dir = staticmethod(SessionHelper.resolve_session_dir)
+    _cleanup_stale_sessions = staticmethod(SessionHelper.cleanup_stale_sessions)
     _get_session_status = staticmethod(SessionHelper.get_session_status)
 
     def __init__(

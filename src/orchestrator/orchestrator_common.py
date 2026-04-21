@@ -277,6 +277,47 @@ class SessionHelper:
         return count
 
     @staticmethod
+    def cleanup_stale_sessions(log_dir: str) -> int:
+        """Remove entries from ``sessions.csv`` whose session directory no longer exists.
+
+        Only removes rows from the CSV file; never deletes actual directories.
+
+        Returns the number of rows removed.
+        """
+        csv_path = os.path.join(log_dir, SessionHelper.SESSIONS_FILE)
+        if not os.path.isfile(csv_path):
+            return 0
+        rows = SessionHelper.load_sessions_csv(log_dir)
+        if not rows:
+            return 0
+        valid = []
+        removed = 0
+        for row in rows:
+            sid = row.get("session_id", "")
+            session_dir = os.path.join(log_dir, sid)
+            if sid and os.path.isdir(session_dir):
+                valid.append(row)
+            else:
+                removed += 1
+                logger.info(f"Removing stale session entry: {sid}")
+        if removed:
+            try:
+                with open(csv_path, "w", encoding="utf-8", newline="") as f:
+                    writer = csv.writer(f, delimiter="\t")
+                    writer.writerow(["session_id", "workspace", "created_at", "last_accessed_at"])
+                    for row in valid:
+                        writer.writerow([
+                            row.get("session_id", ""),
+                            row.get("workspace", ""),
+                            row.get("created_at", ""),
+                            row.get("last_accessed_at", row.get("created_at", "")),
+                        ])
+            except Exception as e:
+                logger.warning(f"Failed to clean up {csv_path}: {e}")
+                return 0
+        return removed
+
+    @staticmethod
     def resolve_session_dir(
         log_dir: str,
         workspace: str,
