@@ -26,7 +26,7 @@ In AI scheduling mode, an AI scheduler dynamically decides which task to run eac
 |----------|-----------------------------|
 | **Dynamic execution order** | The AI scheduler decides which task to run each round. **Tasks may run 0, 1, or many times**. |
 | **Task dependencies via `strategy`** | Don't assume task N-1 ran before task N; use `strategy` to encode dependencies explicitly. |
-| **Task description is critical** | The scheduler AI understands what each task does **only by** root-level `description` and task-specific `description` field. Keep descriptions informative. |
+| **Task description is critical — but keep it short** | The scheduler AI understands what each task does **only by** root-level `description` and task-specific `description` field. Keep descriptions informative but concise (1–3 sentences). The scheduler prompt includes **every** task's description simultaneously, so verbose descriptions accumulate and degrade scheduler performance. Move step-by-step details to `initial_hint`. |
 | **`last_result` feeds execution outcomes to the scheduler** | Configure `last_result` per task so the scheduler can observe what happened. Without it, the scheduler only sees success/failure — not *what* was produced. See §4.3 for full details. |
 | **Scheduler AI only decides top-level task** | The scheduler AI only decides **which top-level task** to run. It does NOT control subtask-level execution — subtasks within a selected task execute sequentially as defined. |
 
@@ -65,7 +65,7 @@ In AI scheduling mode, an AI scheduler dynamically decides which task to run eac
 | `ai_orchestrator` | object | **Yes** | AI scheduling configuration (see §4) |
 | `tasks` | list | Yes | List of top-level task definitions |
 
-> **Important:** Always include `description`. Without it, the AI has no overall project context. A good `description` may cover:
+> **Important:** Always include `description`. Without it, the AI has no overall project context. The root-level `description` is visible to **all AIs** — both the scheduler and every executor. This makes it the right place for project-wide context (goal, architecture, constraints, key paths) that every AI session needs. A good `description` may cover:
 
 | Component | Purpose | Example | When needed |
 |-----------|---------|---------|-------------|
@@ -90,6 +90,17 @@ In AI scheduling mode, an AI scheduler dynamically decides which task to run eac
 | **Data pipeline / ETL** | Goal, Architecture, Key file paths, Key commands, Hard constraints, Rules | Emphasize file paths (input/output dirs) and commands (run pipeline, validate) |
 | **Research / exploration** (read code, write analysis) | Goal, Architecture, Key file paths, Reference docs, Rules | No build commands; emphasize reference docs and where to write findings |
 
+Conversely, a good `description` should **NOT** cover:
+
+| Anti-pattern | Why | Where it belongs instead |
+|--------------|-----|--------------------------|
+| **Scheduling strategy** (e.g. "run task 2 before task 3", "this is a two-phase project") | Only the scheduler AI needs this; including it in `description` leaks scheduling concerns to executor AIs that cannot act on them | `ai_orchestrator.strategy` field (scheduler-only prompt) |
+| **Task execution order or phasing** (e.g. "Phase 1 is setup, Phase 2 is optimization") | Executors don't need to know the overall schedule — they only see their own task | `ai_orchestrator.strategy` or task-level `description` |
+| **Step-by-step implementation details** for a specific task | Overly detailed instructions in the project description distract other tasks' executors | Task-level `initial_hint` (executor-only) |
+| **Scheduler behavioral rules** (e.g. "never run the same task twice in a row") | These are scheduling constraints, not project context | `ai_orchestrator.strategy` |
+
+> **Rule of thumb:** If the information is only useful to the scheduler (scheduling order, phasing, task dependencies), put it in `ai_orchestrator.strategy`. If it's only useful to one task's executor (step-by-step details), put it in that task's `initial_hint`. The root `description` is for **shared project context** that every AI benefits from.
+
 See the [Complete Example](#11-complete-example) at the end of this document for a full `description` demonstration.
 
 ### 3.2 Common Fields (all types)
@@ -106,10 +117,12 @@ See the [Complete Example](#11-complete-example) at the end of this document for
 
 > **task-specific `description` is critical in AI scheduling mode.** It's the **only way** the scheduler AI understands what a task does — the scheduler sees `id`, `name`, `type`, `description`, execution count, and last result, nothing else.
 >
-> - State what the task does and what it produces (1-3 sentences)
+> ⚠️ **Keep each task's `description` short (1–3 sentences).** The scheduler prompt concatenates the descriptions of **all** tasks into a single context window. If individual descriptions are long, the combined prompt becomes bloated, wastes tokens, and degrades the scheduler's decision quality. This is especially problematic for projects with many tasks.
+>
+> - State what the task does and what it produces (1–3 sentences)
 > - Mention the key output artifact if relevant
-> - Don't include execution details (those belong in `initial_hint`)
-> - Don't write multi-paragraph essays — the scheduler prompt has token limits
+> - **Don't include execution steps or implementation details** — those belong in `initial_hint` (which only the executor sees)
+> - Don't write multi-paragraph essays — every extra sentence is multiplied by the number of tasks in the scheduler prompt
 >
 > ```yaml
 > 
