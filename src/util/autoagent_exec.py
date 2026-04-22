@@ -42,6 +42,8 @@ Output log:  <log-dir>/lr_tasks/lr_<task_id>_output.log
 import argparse
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import time
@@ -117,6 +119,22 @@ def parse_args():
         default=None,
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--stdout",
+        default=None,
+        help=(
+            "Copy captured stdout to this file path after the command finishes. "
+            "Use this instead of adding > redirection to the command."
+        ),
+    )
+    parser.add_argument(
+        "--stderr",
+        default=None,
+        help=(
+            "Copy captured stderr to this file path after the command finishes. "
+            "Use this instead of adding 2> redirection to the command."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.cmd:
@@ -124,6 +142,55 @@ def parse_args():
     args.command_str = args.cmd
 
     return args
+
+
+# ---------------------------------------------------------------------------
+# Defensive redirection detection
+# ---------------------------------------------------------------------------
+
+# Patterns that indicate the AI added shell output redirection to the command.
+# These are best-effort and won't catch every case, but cover the most common
+# trailing redirections that would steal output from autoagent-exec's log.
+_REDIRECT_PATTERNS = [
+    # &>> file, &> file  (bash: redirect both stdout+stderr)
+    r'&>>\s*\S+',
+    r'&>\s*\S+',
+    # 2>&1 > file  or  2>&1 >> file
+    r'2>&1\s*>>?\s*\S+',
+    # 2>> file, 2> file
+    r'2>>\s*\S+',
+    r'2>\s*\S+',
+    # >> file, > file  (but not inside quotes — best effort)
+    r'(?<![12&])>>\s*\S+',
+    r'(?<![12&])>\s*\S+',
+    # | tee ...
+    r'\|\s*tee\b',
+]
+_REDIRECT_RE = re.compile(
+    r'(?:' + '|'.join(_REDIRECT_PATTERNS) + r')\s*$',
+    re.IGNORECASE,
+)
+
+def _copy_output_to_requested_paths(
+    output_log: str,
+    stdout_path: str | None,
+    stderr_path: str | None,
+) -> None:
+    """Copy the captured output log to the paths requested via --stdout/--stderr.
+
+    Since autoagent-exec merges stdout and stderr into a single log file,
+    both --stdout and --stderr receive the same content (the merged log).
+    """
+    for dest in (stdout_path, stderr_path):
+        if not dest:
+            continue
+        try:
+            dest_dir = os.path.dirname(dest)
+            if dest_dir:
+                os.makedirs(dest_dir, exist_ok=True)
+            shutil.copy2(output_log, dest)
+        except Exception as e:
+            print(f"[WARNING] Failed to copy output to {dest}: {e}", file=sys.stderr)
 
 
 def write_signal_file(path: str, data: dict):
@@ -373,6 +440,7 @@ def main():
             # Command finished successfully (it was fast, not really long-running)
             print(f"\n[OK] Command finished quickly (exit code 0).")
             _print_output_smart(output_log)
+            _copy_output_to_requested_paths(output_log, args.stdout, args.stderr)
 
             signal_data = {
                 "task_id": task_id,
@@ -391,6 +459,7 @@ def main():
             # Command failed fast — print error for AI to see and retry
             print(f"\n[FAST-FAIL] Command failed within {fast_fail_timeout}s (exit code {exit_code}).")
             _print_output_smart(output_log)
+            _copy_output_to_requested_paths(output_log, args.stdout, args.stderr)
 
             # Write error signal so the concurrency guard allows retry
             signal_data = {
