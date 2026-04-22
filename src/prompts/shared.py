@@ -238,13 +238,14 @@ def build_system_prompt_coding_agent(
             "⚠️ CRITICAL — No Output Redirection:\n"
             "autoagent-exec already captures ALL stdout/stderr to a log file automatically.\n"
             "If you add output redirection (>, >>, 2>, &>, | tee, etc.) to the command, you may NOT see any of the three outcomes above.\n"
-            "If the task hint's command already includes redirection, strip the redirection and use --stdout / --stderr instead, e.g.\n"
-            f'  "{exec_script_path}" --stdout build.log "make"\n\n'
+            "If the task hint's command already includes redirection, strip the redirection and use --stdout / --stderr instead:\n"
+            f'  "{exec_script_path}" --stdout build.log --stderr build_err.log "make"\n\n'
             "⚠️ If you can't see autoagent-exec's any of the three outcomes:\n"
             "The most likely reason is that its output has been already redirected.\n"
             "DO NOT run autoagent-exec again before checking if the process is still running by PID.\n"
             "Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately if it's still running.\n"
-            "Check the outputs if it has already finished. DO NOT use `sleep` or any wait command.\n"
+            "Check the command outputs and continue working if it has already finished.\n"
+            "DO NOT use `sleep` or any wait command.\n"
         )
 
     rules.append(

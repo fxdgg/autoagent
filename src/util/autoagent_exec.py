@@ -43,7 +43,6 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -119,27 +118,19 @@ def parse_args():
         default=None,
         help=argparse.SUPPRESS,
     )
-    parser.add_argument(
-        "--stdout",
-        default=None,
-        help=(
-            "Copy captured stdout to this file path after the command finishes. "
-            "Use this instead of adding > redirection to the command."
-        ),
-    )
-    parser.add_argument(
-        "--stderr",
-        default=None,
-        help=(
-            "Copy captured stderr to this file path after the command finishes. "
-            "Use this instead of adding 2> redirection to the command."
-        ),
-    )
     args = parser.parse_args()
 
     if not args.cmd:
         parser.error("No command specified. Use --cmd '<command>'.")
     args.command_str = args.cmd
+
+    # The wrapper script forwards ALL user arguments via --cmd (e.g.
+    # `--cmd --stdout build.log "make"`).  We need to extract --stdout
+    # and --stderr from the command string so they become proper
+    # autoagent-exec parameters rather than part of the shell command.
+    args.stdout, args.stderr, args.command_str = _extract_redirect_args(
+        args.command_str
+    )
 
     return args
 
@@ -171,26 +162,59 @@ _REDIRECT_RE = re.compile(
     re.IGNORECASE,
 )
 
-def _copy_output_to_requested_paths(
-    output_log: str,
-    stdout_path: str | None,
-    stderr_path: str | None,
-) -> None:
-    """Copy the captured output log to the paths requested via --stdout/--stderr.
 
-    Since autoagent-exec merges stdout and stderr into a single log file,
-    both --stdout and --stderr receive the same content (the merged log).
+def _warn_if_redirected(command_str: str) -> bool:
+    """Detect if the command appears to contain output redirection.
+
+    This is a best-effort check — it scans for common trailing redirection
+    patterns.  Complex mid-command piping (e.g. ``cmd1 | cmd2 > file``)
+    may not be caught.
+
+    Returns ``True`` if a redirection pattern was detected.
+
+    Note: This function intentionally does NOT print any warning to
+    stdout/stderr, because such output would be noise for the AI.
+    The system prompt already instructs the AI not to use redirection.
     """
-    for dest in (stdout_path, stderr_path):
-        if not dest:
-            continue
-        try:
-            dest_dir = os.path.dirname(dest)
-            if dest_dir:
-                os.makedirs(dest_dir, exist_ok=True)
-            shutil.copy2(output_log, dest)
-        except Exception as e:
-            print(f"[WARNING] Failed to copy output to {dest}: {e}", file=sys.stderr)
+    return bool(_REDIRECT_RE.search(command_str))
+
+
+def _extract_redirect_args(command_str: str) -> tuple:
+    """Extract ``--stdout <path>`` and ``--stderr <path>`` from *command_str*.
+
+    The wrapper script forwards everything the AI types as a single
+    ``--cmd`` value.  When the AI writes::
+
+        autoagent-exec --stdout build.log "make -j8"
+
+    the wrapper produces ``--cmd --stdout build.log "make -j8"``.
+    This function strips ``--stdout`` / ``--stderr`` from the front of
+    the command string so they can be handled as proper parameters.
+
+    Returns:
+        ``(stdout_path, stderr_path, cleaned_command_str)``
+    """
+    stdout_path = None
+    stderr_path = None
+
+    # Repeatedly strip leading --stdout/--stderr tokens.
+    # Pattern: --stdout <path> or --stderr <path> at the start of the string.
+    while True:
+        m = re.match(
+            r'^\s*--(stdout|stderr)\s+("[^"]+"|\S+)\s*',
+            command_str,
+        )
+        if not m:
+            break
+        which = m.group(1)  # "stdout" or "stderr"
+        path = m.group(2).strip('"')
+        if which == "stdout":
+            stdout_path = path
+        else:
+            stderr_path = path
+        command_str = command_str[m.end():]
+
+    return stdout_path, stderr_path, command_str.strip()
 
 
 def write_signal_file(path: str, data: dict):
@@ -326,17 +350,44 @@ def main():
         }
         write_signal_file(signal_file, signal_data)
     finally:
-        # Release the lock — remove the .lock file so future
-        # invocations can proceed normally.
+        # Release the lock file so other invocations can proceed.
         try:
             os.remove(_lock_path)
         except OSError:
             pass
 
-    # Open output log file in binary mode so that the subprocess's raw
-    # bytes (which may be GBK on Chinese Windows) are preserved as-is.
-    # We will decode properly when reading the file back.
-    log_fh = open(output_log, "wb")
+    # ── Defensive check: detect if the command contains redirection ──
+    _warn_if_redirected(command_str)
+
+    # ── Resolve stdout / stderr targets ──
+    # When --stdout / --stderr are provided, the subprocess writes
+    # directly to those files via Popen's stdout/stderr parameters,
+    # giving natural separation.  When omitted, both streams are
+    # merged into the default output_log (backward-compatible).
+    stdout_path = args.stdout  # may be None
+    stderr_path = args.stderr  # may be None
+
+    if stdout_path:
+        _dir = os.path.dirname(stdout_path)
+        if _dir:
+            os.makedirs(_dir, exist_ok=True)
+        stdout_fh = open(stdout_path, "wb")
+    else:
+        stdout_fh = open(output_log, "wb")
+
+    if stderr_path:
+        _dir = os.path.dirname(stderr_path)
+        if _dir:
+            os.makedirs(_dir, exist_ok=True)
+        stderr_fh = open(stderr_path, "wb")
+    else:
+        # No explicit stderr target → merge into stdout's file
+        stderr_fh = subprocess.STDOUT
+
+    # Compute the effective paths stored in the signal file so the
+    # orchestrator knows where to find the output later.
+    effective_stdout = stdout_path or output_log
+    effective_stderr = stderr_path or effective_stdout  # merged when not split
 
     # Start the command in a new process group / session so that it
     # survives even if autoagent-exec is killed by the AI's Bash tool
@@ -366,8 +417,8 @@ def main():
         proc = subprocess.Popen(
             command_str,
             shell=True,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
+            stdout=stdout_fh,
+            stderr=stderr_fh,
             stdin=subprocess.DEVNULL,
             cwd=os.getcwd(),
             **kwargs,
@@ -375,13 +426,17 @@ def main():
     except Exception as e:
         print(f"[ERROR] Failed to start command: {e}", file=sys.stderr)
         print(f"   Command: {command_str}", file=sys.stderr)
-        log_fh.close()
+        stdout_fh.close()
+        if stderr_fh not in (subprocess.STDOUT, stdout_fh):
+            stderr_fh.close()
         # Clean up the signal file so a retry is not blocked.
         signal_data = {
             "task_id": task_id,
             "command": command_str,
             "pid": None,
             "output_log": output_log,
+            "stdout_log": effective_stdout,
+            "stderr_log": effective_stderr,
             "status": "error",
             "description": f"Failed to start command: {e}",
             "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -401,6 +456,8 @@ def main():
         "command": command_str,
         "pid": pid,
         "output_log": output_log,
+        "stdout_log": effective_stdout,
+        "stderr_log": effective_stderr,
         "status": "starting",
         "description": (
             f"Process started (PID {pid}). "
@@ -434,19 +491,22 @@ def main():
 
     if exit_code is not None:
         # Process exited within the timeout
-        log_fh.close()
+        stdout_fh.close()
+        if stderr_fh not in (subprocess.STDOUT, stdout_fh):
+            stderr_fh.close()
 
         if exit_code == 0:
             # Command finished successfully (it was fast, not really long-running)
             print(f"\n[OK] Command finished quickly (exit code 0).")
-            _print_output_smart(output_log)
-            _copy_output_to_requested_paths(output_log, args.stdout, args.stderr)
+            _print_output_smart(effective_stdout)
 
             signal_data = {
                 "task_id": task_id,
                 "command": command_str,
                 "pid": pid,
                 "output_log": output_log,
+                "stdout_log": effective_stdout,
+                "stderr_log": effective_stderr,
                 "status": "finished",
                 "description": "Command completed successfully.",
                 "exit_code": 0,
@@ -458,8 +518,7 @@ def main():
         else:
             # Command failed fast — print error for AI to see and retry
             print(f"\n[FAST-FAIL] Command failed within {fast_fail_timeout}s (exit code {exit_code}).")
-            _print_output_smart(output_log)
-            _copy_output_to_requested_paths(output_log, args.stdout, args.stderr)
+            _print_output_smart(effective_stdout)
 
             # Write error signal so the concurrency guard allows retry
             signal_data = {
@@ -467,6 +526,8 @@ def main():
                 "command": command_str,
                 "pid": pid,
                 "output_log": output_log,
+                "stdout_log": effective_stdout,
+                "stderr_log": effective_stderr,
                 "status": "error",
                 "description": f"Command failed quickly (exit code {exit_code}).",
                 "exit_code": exit_code,
@@ -477,9 +538,11 @@ def main():
             sys.exit(exit_code)
 
     # --- Command is still running after fast_fail_timeout seconds ---
-    # Close our file handle so the subprocess owns the only handle to
-    # the log file.  On Windows this avoids sharing-violation issues.
-    log_fh.close()
+    # Close our file handles so the subprocess owns the only handles to
+    # the log files.  On Windows this avoids sharing-violation issues.
+    stdout_fh.close()
+    if stderr_fh not in (subprocess.STDOUT, stdout_fh):
+        stderr_fh.close()
 
     print(f"\n[RUNNING] Command is still running after {fast_fail_timeout}s -- treating as long-running task.")
 
@@ -489,6 +552,8 @@ def main():
         "command": command_str,
         "pid": pid,
         "output_log": output_log,
+        "stdout_log": effective_stdout,
+        "stderr_log": effective_stderr,
         "status": "running",
         "description": f"Command still running after {fast_fail_timeout}s. Monitoring in background.",
         "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),

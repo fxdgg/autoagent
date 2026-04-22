@@ -890,6 +890,8 @@ class SubtaskExecutor:
             max_initial_wait=_load_fast_fail_timeout() * 2,
         )
         # Re-read signal file for possibly updated command
+        _stdout_log = ""
+        _stderr_log = ""
         if os.path.exists(signal_file):
             try:
                 with open(signal_file, 'r', encoding='utf-8') as _f:
@@ -897,11 +899,15 @@ class SubtaskExecutor:
                 _cmd = _sig.get('command', '')
                 if _cmd:
                     command_info = f"\nCommand: {_cmd}"
+                _stdout_log = _sig.get('stdout_log', '')
+                _stderr_log = _sig.get('stderr_log', '')
             except Exception:
                 pass
         reanalyze_prompt = _build_lr_analysis_prompt(
             output_log=output_log,
             command_info=command_info,
+            stdout_log=_stdout_log,
+            stderr_log=_stderr_log,
         )
         if conv_logger:
             conv_logger.log_prompt(
@@ -945,6 +951,8 @@ class SubtaskExecutor:
         # Read exit code and command from signal file if available
         exit_code_info = ""
         command_info = ""
+        stdout_log = ""
+        stderr_log = ""
         if signal_file and os.path.exists(signal_file):
             try:
                 with open(signal_file, 'r', encoding='utf-8') as f:
@@ -955,12 +963,16 @@ class SubtaskExecutor:
                 command = signal_data.get('command')
                 if command:
                     command_info = f"\nCommand: {command}"
+                stdout_log = signal_data.get('stdout_log', '')
+                stderr_log = signal_data.get('stderr_log', '')
             except Exception:
                 pass
         
         prompt = _build_lr_analysis_prompt(
             output_log=output_log,
             command_info=command_info,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
         )
         try:
             # No system_prompt or system_prompt_prefix needed here —
