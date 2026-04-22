@@ -22,6 +22,8 @@ from ai_client.ai_providers import (
     list_providers,
     parse_model_spec,
     PROVIDER_ALIASES,
+    CodeBuddyProvider,
+    MODEL_ROLES,
 )
 from task_executor import ConfigError
 from util.default_value import generate_default_config, DEFAULTS
@@ -190,6 +192,39 @@ def _merge_preset_with_args(args, preset):
                 logger.debug(f"Applied preset '{preset_key}': {preset_value}")
     
     return args
+
+
+def _warn_unsupported_model_roles(
+    provider_name: str,
+    executable: str | None,
+    model_roles: dict,
+):
+    """Warn if any model in *model_roles* is not supported by CodeBuddy.
+
+    Called right after ``parse_model_spec()`` in ``main()`` so that model
+    names coming from ``--model`` (CLI) or ``config.yaml`` (preset) are
+    validated before the provider is even created.
+
+    Only runs when the resolved provider is CodeBuddy.
+    """
+    resolved = PROVIDER_ALIASES.get(provider_name.lower(), provider_name.lower())
+    if resolved != "codebuddy":
+        return
+
+    supported = CodeBuddyProvider.get_supported_models(executable)
+    if supported is None:
+        return
+
+    for role, model in model_roles.items():
+        if not model:
+            continue
+        if model.strip().lower() not in supported:
+            print(
+                f"  ⚠️  WARNING: Model '{model}' (role: {role}) from CLI/config "
+                f"is not in CodeBuddy's supported model list.\n"
+                f"      Supported models: {', '.join(sorted(supported))}\n"
+                f"      If this is intentional, you can ignore this warning."
+            )
 
 
 def _list_sessions(log_dir: str, workspace: str):
@@ -637,7 +672,10 @@ Examples:
 
         # Use the 'default' role model for the provider
         provider_model = model_roles["default"] if model_roles["default"] else args.model
-        
+
+        # ── Validate model names from CLI / config.yaml against CodeBuddy ──
+        _warn_unsupported_model_roles(args.provider, args.executable, model_roles)
+
         # Parse --include-directories into a list
         include_dirs = None
         if args.include_directories:

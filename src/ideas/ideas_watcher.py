@@ -16,6 +16,11 @@ import tempfile
 import threading
 from typing import Optional, List
 
+logger = logging.getLogger(__name__)
+
+# Lazy-loaded cache for CodeBuddy supported models
+_codebuddy_supported_models_cache = None  # None = not loaded, set = loaded
+
 
 class _BlockStyleDumper(yaml.SafeDumper):
     """Custom YAML dumper that uses block scalar (|) style for multiline strings."""
@@ -632,6 +637,21 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
                 f"Task {task_id} has invalid model: '{model}'. "
                 f"Must be a string: 'default', 'lite', or a direct model name"
             )
+        elif model is not None and isinstance(model, str):
+            # Warn if model is not a known role and not in CodeBuddy's supported list
+            from ai_client.ai_providers import MODEL_ROLES, CodeBuddyProvider
+            model_lower = model.strip().lower()
+            if model_lower not in MODEL_ROLES:
+                global _codebuddy_supported_models_cache
+                if _codebuddy_supported_models_cache is None:
+                    result = CodeBuddyProvider.get_supported_models()
+                    _codebuddy_supported_models_cache = result if result is not None else set()
+                if _codebuddy_supported_models_cache and model_lower not in _codebuddy_supported_models_cache:
+                    logger.warning(
+                        "Task %s model '%s' is not in CodeBuddy's supported model list. "
+                        "If this is intentional, you can ignore this warning.",
+                        task_id, model,
+                    )
 
         return errors
 

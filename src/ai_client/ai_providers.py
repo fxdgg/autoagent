@@ -15,8 +15,10 @@ Each provider knows how to:
 """
 
 import os
+import re
 import logging
-from typing import Optional, List
+import subprocess
+from typing import Optional, List, Set
 
 import yaml
 
@@ -158,6 +160,62 @@ class CodeBuddyProvider(AIProvider):
         parts.extend(["-y", "-"])
 
         return " ".join(parts)
+
+    # ── Model validation via --help ──────────────────────────────
+
+    _supported_models_cache: dict = {}  # executable -> set[str] | None
+
+    @classmethod
+    def get_supported_models(cls, executable: str = None) -> Optional[Set[str]]:
+        """Extract supported model names from ``<executable> --help``.
+
+        Parses the ``--model <model>`` line in the help output to find the
+        parenthesized list of supported model IDs.
+
+        Results are cached per executable path so the subprocess is only
+        invoked once per session.
+
+        Returns:
+            A set of lowercase model name strings, or ``None`` if the
+            help text could not be parsed (e.g. executable not found).
+        """
+        exe = executable or cls.default_executable
+        if exe in cls._supported_models_cache:
+            return cls._supported_models_cache[exe]
+
+        try:
+            result = subprocess.run(
+                [exe, "--help"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            help_text = result.stdout or ""
+        except Exception:
+            cls._supported_models_cache[exe] = None
+            return None
+
+        # The --model line looks like:
+        #   --model <model>  Model for ... Currently supported: (model1, model2, ...)
+        # We want the content inside the parentheses after "Currently supported:"
+        match = re.search(
+            r"Currently supported:\s*\(([^)]+)\)",
+            help_text,
+            re.IGNORECASE,
+        )
+        if not match:
+            cls._supported_models_cache[exe] = None
+            return None
+
+        raw = match.group(1)
+        models = {m.strip().lower() for m in raw.split(",") if m.strip()}
+        if not models:
+            cls._supported_models_cache[exe] = None
+            return None
+
+        cls._supported_models_cache[exe] = models
+        logger.debug("CodeBuddy supported models (%s): %s", exe, models)
+        return models
 
 
 class ClaudeCodeProvider(AIProvider):

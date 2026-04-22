@@ -21,7 +21,7 @@ import yaml
 from typing import Optional, List
 
 from ai_client import AICallError
-from ai_client.ai_providers import AIProvider
+from ai_client.ai_providers import AIProvider, CodeBuddyProvider, MODEL_ROLES
 from task_executor import (
     SimpleTaskExecutor,
     NestedTaskExecutor,
@@ -277,7 +277,10 @@ class TodoOrchestrator(AISchedulerMixin):
 
         for task in tasks:
             self._validate_task(task)
-        
+
+        # ── Validate model names against CodeBuddy supported list ──
+        self._warn_unsupported_models(tasks)
+
         logger.info(f"Loaded {len(tasks)} tasks from {self.todos_file}")
         return tasks
 
@@ -493,6 +496,42 @@ class TodoOrchestrator(AISchedulerMixin):
                 f"Task {task['id']} has invalid model: '{model}'. "
                 f"Must be a string: 'default', 'lite', or a direct model name"
             )
+
+    def _warn_unsupported_models(self, tasks: list):
+        """Check model names against CodeBuddy's supported model list.
+
+        Only runs when the provider is CodeBuddy.  Produces warnings (not
+        errors) for model names that are not recognized role names and not
+        in the supported model list extracted from ``codebuddy --help``.
+        """
+        if not isinstance(self.provider, CodeBuddyProvider):
+            return
+
+        supported = CodeBuddyProvider.get_supported_models(self.provider.executable)
+        if supported is None:
+            # Could not parse help text — skip validation silently
+            return
+
+        def _check_task(task: dict):
+            model = task.get('model')
+            if model and isinstance(model, str):
+                model_lower = model.strip().lower()
+                # Skip role names — they are resolved later
+                if model_lower in MODEL_ROLES:
+                    return
+                if model_lower not in supported:
+                    print(
+                        f"  ⚠️  WARNING: Task {task.get('id', '?')} model "
+                        f"'{model}' is not in CodeBuddy's supported model list.\n"
+                        f"      Supported models: {', '.join(sorted(supported))}\n"
+                        f"      If this is intentional, you can ignore this warning."
+                    )
+            # Recurse into subtasks
+            for st in task.get('subtasks', []):
+                _check_task(st)
+
+        for task in tasks:
+            _check_task(task)
 
     def _validate_subtask_ids(self, subtasks: list, parent_id: str):
         """Validate that subtask IDs are linearly increasing under *parent_id*.
