@@ -44,6 +44,19 @@ autoagent-exec has three possible outcomes:
   - "[FAST-FAIL]" → the command failed quickly. Read the error output, fix the issue, and retry.
 NEVER run long commands directly in Bash — the session may be killed due to timeout, wasting time or leaving the project in broken state.
 
+⚠️ CRITICAL — No Output Redirection:
+autoagent-exec already captures ALL stdout/stderr to a log file automatically.
+If you add output redirection (>, >>, 2>, &>, | tee, etc.) to the command, you may NOT see any of the three outcomes above.
+If the task hint's command already includes redirection, strip the redirection and use --stdout / --stderr instead:
+  "<exec_script_path>" --stdout build.log --stderr build_err.log "make"
+
+⚠️ If you can't see autoagent-exec's any of the three outcomes:
+The most likely reason is that its output has been already redirected.
+DO NOT run autoagent-exec again before checking if the process is still running by PID.
+Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately if it's still running.
+Check the command outputs and continue working if it has already finished.
+DO NOT use `sleep` or any wait command.
+
 3. When you are done, end your response with EXACTLY one of:
   ✅ completed
   ❌ not completed: <reason>
@@ -59,7 +72,7 @@ NEVER run long commands directly in Bash — the session may be killed due to ti
     1. You are fully autonomous — make all decisions independently. NEVER ask the user questions or wait for confirmation.
     
     2. For any command that may run longer than a few minutes ...
-    (same content as above, indented 4 spaces)
+    (same content as above, including the redirection rules, indented 4 spaces)
     
     3. When you are done, end your response with EXACTLY one of:
       ✅ completed
@@ -259,13 +272,25 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 **构建函数**：`long_running_task.build_long_running_analysis_prompt()`
 
-当后台命令完成后，在同一会话中发送：
+当后台命令完成后，在同一会话中发送。支持显示分离的 stdout/stderr 路径（来自信号文件中的 `stdout_log`/`stderr_log` 字段）：
+
+**合并输出（默认）：**
 
 ```
 You previously launched this task using autoagent-exec:
     Command: python -c "import time; time.sleep(1)"
 The task has now finished. Output has been saved to:
     path/to/session/lr_tasks/lr_1.2_output.log
+```
+
+**分离输出（使用了 --stdout/--stderr）：**
+
+```
+You previously launched this task using autoagent-exec:
+    Command: make -j8
+The task has now finished. Output has been saved to:
+    stdout: path/to/build.log
+    stderr: path/to/build_err.log
 ```
 
 ---

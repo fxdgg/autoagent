@@ -114,7 +114,7 @@ tasks:
         completion_criteria: "基准测试完成，日志已保存"
         initial_hint: |
           cmake --build build --config Release
-          ./main.exe 2>&1 | tee logs/exp_<N>.log
+          运行 ./main.exe，使用 autoagent-exec 的 --stdout 参数将输出保存到 logs/exp_<N>.log
 
       - id: 2.4
         name: "评估结果"

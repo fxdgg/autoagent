@@ -215,16 +215,20 @@ def _warn_unsupported_model_roles(
     if supported is None:
         return
 
+    bad = []
     for role, model in model_roles.items():
         if not model:
             continue
         if model.strip().lower() not in supported:
-            print(
-                f"  ⚠️  WARNING: Model '{model}' (role: {role}) from CLI/config "
-                f"is not in CodeBuddy's supported model list.\n"
-                f"      Supported models: {', '.join(sorted(supported))}\n"
-                f"      If this is intentional, you can ignore this warning."
-            )
+            bad.append((role, model))
+
+    if bad:
+        print("\n❌  Unsupported model(s) detected in CLI/config:")
+        for role, model in bad:
+            print(f"      • role '{role}' → model '{model}'")
+        print(f"   Supported models: {', '.join(sorted(supported))}")
+        print("   Fix the model name(s) and try again.")
+        sys.exit(1)
 
 
 def _list_sessions(log_dir: str, workspace: str):

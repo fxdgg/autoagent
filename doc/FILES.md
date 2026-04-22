@@ -129,7 +129,7 @@ autoagent/
 
 | 文件 | 职责 |
 |------|------|
-| `ai_providers.py` | `AIProvider` 基类 + 5 个 Provider 实现 + `TestProvider` |
+| `ai_providers.py` | `AIProvider` 基类 + 5 个 Provider 实现 + `TestProvider` + model 名称校验 |
 | `ai_client.py` | `AIClient`：CLI 子进程模式，流式解析 AI 输出 |
 | `ai_client_sdk.py` | `AIClientSDK`：CodeBuddy SDK 直接调用模式 |
 | `ai_client_test.py` | `AIClientTest`：测试模式，读取预定义响应 |
@@ -153,7 +153,7 @@ autoagent/
 |------|------|
 | `default_value.py` | `DEFAULTS` 字典（所有默认值的唯一真相源）、配置模板生成 |
 | `truncation_limits.py` | Prompt 字段截断限制 |
-| `autoagent_exec.py` | 长时间任务启动脚本：快速失败检测、信号文件、后台分离 |
+| `autoagent_exec.py` | 长时间任务启动脚本：快速失败检测、信号文件、后台分离、stdout/stderr 分离、防御性重定向检测 |
 
 ---
 
@@ -206,8 +206,10 @@ autoagent/
     │       ├── failure_analysis_1.2_round_1.md
     │       └── main_task_evaluation_round_1.md
     ├── lr_tasks/                        # 长时间任务产物
-    │   ├── lr_<task_id>_signal.json     # 状态信号文件
-    │   └── lr_<task_id>_output.log      # 输出日志
+    │   ├── lr_<task_id>_signal.json     # 状态信号文件（含 stdout_log/stderr_log 路径）
+    │   ├── lr_<task_id>_output.log      # 默认输出日志（stdout+stderr 合并）
+    │   ├── <custom_stdout_path>         # --stdout 指定的 stdout 输出（可选）
+    │   └── <custom_stderr_path>         # --stderr 指定的 stderr 输出（可选）
     └── scripts/
         └── autoagent-exec.{bat,sh}      # 长时间任务启动脚本
 ```

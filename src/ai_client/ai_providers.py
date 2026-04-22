@@ -16,6 +16,7 @@ Each provider knows how to:
 
 import os
 import re
+import sys
 import logging
 import subprocess
 from typing import Optional, List, Set
@@ -184,11 +185,14 @@ class CodeBuddyProvider(AIProvider):
             return cls._supported_models_cache[exe]
 
         try:
+            # On Windows, npm-installed tools live as .cmd scripts;
+            # shell=True is needed so subprocess can resolve them via PATHEXT.
             result = subprocess.run(
                 [exe, "--help"],
                 capture_output=True,
                 text=True,
                 timeout=15,
+                shell=(sys.platform == "win32"),
             )
             help_text = result.stdout or ""
         except Exception:

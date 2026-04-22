@@ -647,10 +647,10 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
                     result = CodeBuddyProvider.get_supported_models()
                     _codebuddy_supported_models_cache = result if result is not None else set()
                 if _codebuddy_supported_models_cache and model_lower not in _codebuddy_supported_models_cache:
-                    logger.warning(
-                        "Task %s model '%s' is not in CodeBuddy's supported model list. "
-                        "If this is intentional, you can ignore this warning.",
-                        task_id, model,
+                    supported_str = ', '.join(sorted(_codebuddy_supported_models_cache))
+                    errors.append(
+                        f"Task {task_id} model '{model}' is not in CodeBuddy's "
+                        f"supported model list. Supported: {supported_str}"
                     )
 
         return errors

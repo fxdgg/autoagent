@@ -384,6 +384,7 @@ python orchestrator.py --list-sessions
 1. **超过 1 分钟的命令用 `long_running`**：避免 session timeout
 2. **completion_criteria 引用输出日志中的模式**
 3. **用 `long_running_once` 做一次性基准测试**
+4. **不要在命令中添加输出重定向**：autoagent-exec 已自动捕获所有输出；如需将输出保存到特定文件，使用 `--stdout`/`--stderr` 参数
 
 ---
 
@@ -398,6 +399,9 @@ python orchestrator.py --list-sessions
 | AI 调度器选错任务 | strategy 规则不清晰 | 用更明确的条件-动作规则 |
 | Rate limit 错误 | API 调用频率过高 | 系统自动退避，无需干预 |
 | 会话恢复失败 | 会话目录被删除 | 使用 `--reset` 重新开始 |
+| autoagent-exec 输出为空 | AI 在命令中添加了输出重定向 | 系统提示词已禁止重定向；如需重定向应使用 `--stdout`/`--stderr` 参数 |
+| AI 看不到 autoagent-exec 三种输出 | 输出被重定向或进程仍在运行 | AI 应检查 PID，若进程仍在运行则输出 `LONG_RUNNING_IN_PROGRESS` |
+| 启动时 model 名称 WARNING | model 名称不在 CodeBuddy 支持列表中 | 检查拼写；仅 warning 不阻止运行 |
 
 ---
 

@@ -68,6 +68,7 @@ AutoAgent 采用 **编排器-执行器** 模式，通过 Mixin 组合实现功�
 - 每个任务创建独立的 `AIClient` 实例，实现对话上下文隔离
 - 通过 `SessionHelper` 静态方法管理会话目录
 - 支持断点续传：保存 `session_id` 和 `interrupt_pending` 标记
+- 启动时校验 model 名称：当 Provider 为 CodeBuddy 时，通过 `codebuddy --help` 提取支持的模型列表，对 `todos.yaml`、CLI `--model` 和 `config.yaml` preset 中的 model 名称进行校验（仅 warning，不阻止运行）
 
 ### 2.2 AISchedulerMixin
 
@@ -172,6 +173,8 @@ AIProvider (基类)
 ```
 
 每个 Provider 实现 `build_command()` 和 `get_stdin_command()`，封装不同 AI 工具的 CLI 差异。
+
+`CodeBuddyProvider` 额外提供 `get_supported_models()` 类方法，通过解析 `codebuddy --help` 输出提取支持的模型列表，用于启动时校验 model 名称（结果按 executable 路径缓存，每个 session 只调用一次 subprocess）。
 
 ### 3.2 客户端实现
 
@@ -297,9 +300,9 @@ orchestrator:
 长时间任务通过 `autoagent-exec` 机制实现后台运行：
 
 ```
-AI 调用 autoagent-exec --task-id <id> --cmd <command>
+AI 调用 autoagent-exec [--stdout <path>] [--stderr <path>] --task-id <id> --cmd <command>
     ↓
-autoagent-exec 启动命令
+autoagent-exec 启动命令（通过 Popen stdout/stderr 参数实现输出分离）
     ↓
 快速失败检测（fast_fail_timeout 秒内）
     ├── 命令失败 → 立即报错
@@ -309,11 +312,21 @@ autoagent-exec 启动命令
     ↓
 SubtaskExecutor 轮询信号文件
     ↓
-命令完成 → AI 分析输出日志
+命令完成 → AI 分析输出日志（根据信号文件中的路径定位）
 ```
 
 **信号文件**：`<session_dir>/lr_tasks/lr_<task_id>_signal.json`
 **输出日志**：`<session_dir>/lr_tasks/lr_<task_id>_output.log`
+
+### stdout/stderr 分离
+
+AI 可以通过 `--stdout` 和 `--stderr` 参数指定输出文件路径，替代在命令中使用 shell 重定向。当指定这些参数时，Popen 的 `stdout` 和 `stderr` 参数分别指向对应文件，实现真正的流分离。未指定时，两个流合并写入默认的 `output_log`（向后兼容）。
+
+信号文件中包含 `stdout_log` 和 `stderr_log` 字段，记录实际的输出路径，供编排器在任务完成后构建分析 prompt 时使用。
+
+### 防御性重定向检测
+
+autoagent-exec 在启动子进程前会扫描命令末尾的常见重定向模式（`>`, `>>`, `2>`, `&>`, `| tee` 等）。这是尽力而为的检测——复杂的管道不一定能捕获。系统提示词中明确禁止 AI 在命令中添加重定向，并指导使用 `--stdout`/`--stderr` 替代。
 
 ---
 

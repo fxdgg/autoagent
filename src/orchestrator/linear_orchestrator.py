@@ -512,6 +512,8 @@ class TodoOrchestrator(AISchedulerMixin):
             # Could not parse help text — skip validation silently
             return
 
+        bad = []
+
         def _check_task(task: dict):
             model = task.get('model')
             if model and isinstance(model, str):
@@ -520,18 +522,21 @@ class TodoOrchestrator(AISchedulerMixin):
                 if model_lower in MODEL_ROLES:
                     return
                 if model_lower not in supported:
-                    print(
-                        f"  ⚠️  WARNING: Task {task.get('id', '?')} model "
-                        f"'{model}' is not in CodeBuddy's supported model list.\n"
-                        f"      Supported models: {', '.join(sorted(supported))}\n"
-                        f"      If this is intentional, you can ignore this warning."
-                    )
+                    bad.append((task.get('id', '?'), model))
             # Recurse into subtasks
             for st in task.get('subtasks', []):
                 _check_task(st)
 
         for task in tasks:
             _check_task(task)
+
+        if bad:
+            print("\n❌  Unsupported model(s) detected in todos.yaml:")
+            for task_id, model in bad:
+                print(f"      • Task {task_id} → model '{model}'")
+            print(f"   Supported models: {', '.join(sorted(supported))}")
+            print("   Fix the model name(s) and try again.")
+            sys.exit(1)
 
     def _validate_subtask_ids(self, subtasks: list, parent_id: str):
         """Validate that subtask IDs are linearly increasing under *parent_id*.
