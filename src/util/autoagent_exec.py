@@ -7,9 +7,10 @@ on Windows, autoagent-exec.sh on Linux/macOS).  The wrapper pre-fills all
 internal parameters (log directory, task ID, fast-fail timeout); the AI only
 needs to append the command to run (wrapped in double quotes).
 
-The command is passed as a single shell string via ``--cmd``, which means
-shell operators (&&, |, ;, etc.) are preserved and executed correctly.
-This makes autoagent-exec behave like a real terminal for the AI.
+The command is passed as a positional argument.  Shell operators (&&, |, ;,
+etc.) are preserved because the AI wraps the entire command in double quotes.
+Optional ``--stdout`` / ``--stderr`` flags can be placed before the command
+to redirect captured output to specific files (instead of the default log).
 
 It implements a fast-fail mechanism (default 10 seconds, configurable via
 config.yaml ``fast_fail_timeout``):
@@ -25,15 +26,16 @@ DETACHED_PROCESS on Windows) so that even if the AI's Bash tool kills
 autoagent-exec mid-wait, the subprocess and monitor survive.
 
 Usage (via wrapper script):
-    autoagent-exec.bat "<command...>"          (Windows)
-    bash autoagent-exec.sh "<command...>"      (Linux/macOS)
+    autoagent-exec "<command...>"
+    autoagent-exec --stdout build.log "<command...>"
+    autoagent-exec --stdout out.log --stderr err.log "<command...>"
 
 Examples:
-    autoagent-exec.bat "cd build && cmake .. && make -j8"
-    autoagent-exec.bat "python train.py --epochs 100 | tee log.txt"
+    autoagent-exec "cd build && cmake .. && make -j8"
+    autoagent-exec --stdout build.log "make -j8"
 
 Internal invocation (by the wrapper script, not by the AI directly):
-    python autoagent_exec.py --log-dir <dir> --task-id <id> [--fast-fail-timeout <s>] --cmd "<command>"
+    python autoagent_exec.py --log-dir <dir> --task-id <id> [--fast-fail-timeout <s>] [--stdout <path>] [--stderr <path>] "<command>"
 
 Signal file: <log-dir>/lr_tasks/lr_<task_id>_signal.json
 Output log:  <log-dir>/lr_tasks/lr_<task_id>_output.log
@@ -63,31 +65,44 @@ def _ensure_utf8_stdio():
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="AutoAgent long-running task launcher.\n\n"
+        description=(
+            "AutoAgent long-running task launcher.\n"
+            "\n"
             "This script is invoked through the autoagent-exec wrapper script\n"
             "(autoagent-exec.bat on Windows, autoagent-exec.sh on Linux/macOS).\n"
-            "All internal parameters (log directory, task ID, timeout, etc.) are\n"
-            "pre-configured in the wrapper script — you only need to append the\n"
-            "command you want to run.\n\n"
-            "The wrapper script forwards your entire command line as a single\n"
-            "shell string, so you can use shell features like cd, &&, |, ;, etc.\n"
-            "just as you would in a real terminal.\n\n"
-            "Usage (via wrapper script):\n"
-            "  <path>/autoagent-exec.bat <command...>     (Windows)\n"
-            "  bash <path>/autoagent-exec.sh <command...>  (Linux/macOS)\n\n"
-            "Examples:\n"
-            "  autoagent-exec.bat make -j8\n"
-            "  autoagent-exec.bat cd build && cmake .. && make -j8\n"
-            "  autoagent-exec.bat python train.py --epochs 100 | tee log.txt\n"
-            "  bash autoagent-exec.sh ncu --set full ./main.exe\n\n"
-            "Behavior:\n"
-            "  - If the command fails quickly, the error is shown immediately\n"
-            "    so you can fix and retry without restarting the session.\n"
-            "  - If the command is still running after the fast-run window,\n"
-            "    it is detached to the background. You should then end your\n"
-            "    session; AutoAgent will call you back when it completes.",
+            "All internal parameters are pre-configured in the wrapper script — \n"
+            "you only need to append the command you want to run.\n"
+            "\n"
+            "Usage:\n"
+            '  autoagent-exec "<your entire command>"\n'
+            '  autoagent-exec --stdout build.log "cmake .. && make -j8"\n'
+            '  autoagent-exec --stdout out.log --stderr err.log "cmake .. && make -j8"\n'
+            "\n"
+            "Always wrap the command in double quotes so that shell operators\n"
+            "(&&, |, ;, etc.) are passed correctly.\n"
+            "\n"
+            "Three possible outcomes:\n"
+            '  \"TASK SUBMITTED\" — the command is running in the background.\n'
+            "      Output LONG_RUNNING_IN_PROGRESS and end your session immediately.\n"
+            '  \"[OK]\" — the command finished quickly with exit code 0.\n'
+            "      Continue working — treat it as a normal completed command.\n"
+            '  \"[FAST-FAIL]\" — the command failed quickly.\n'
+            "      Read the error output, fix the issue, and retry.\n"
+            "\n"
+            "CRITICAL — No Output Redirection:\n"
+            "  autoagent-exec already captures ALL stdout/stderr automatically.\n"
+            "  Do NOT add >, >>, 2>, &>, | tee, etc. to the command.\n"
+            "  If the task hint's command includes redirection, strip it and\n"
+            "  use --stdout / --stderr instead.\n"
+            "\n"
+            "If you cannot see any of the three outcomes above:\n"
+            "  The most likely reason is that output has been redirected.\n"
+            "  Do NOT run autoagent-exec again before checking the PID.\n"
+            "  Output LONG_RUNNING_IN_PROGRESS if the process is still running.\n"
+            "  Do NOT use sleep or any wait command."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        usage="autoagent-exec.bat <command...>  OR  bash autoagent-exec.sh <command...>",
+        usage='autoagent-exec [--stdout <path>] [--stderr <path>] "<command>"',
     )
     # Internal parameters — hidden from --help because they are pre-filled
     # by the wrapper script. AI should never set these manually.
@@ -113,24 +128,49 @@ def parse_args():
         default=False,
         help=argparse.SUPPRESS,
     )
+    # --cmd is kept for backward compatibility (used by tests) but hidden.
+    # The primary interface is the positional 'command' argument.
     parser.add_argument(
         "--cmd",
         default=None,
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--stdout",
+        default=None,
+        help=(
+            "Copy captured stdout to this file path. "
+            "Use this instead of adding > redirection to the command."
+        ),
+    )
+    parser.add_argument(
+        "--stderr",
+        default=None,
+        help=(
+            "Copy captured stderr to this file path. "
+            "Use this instead of adding 2> redirection to the command."
+        ),
+    )
+    # Positional argument: the command string to execute.
+    # When invoked via the wrapper script (without --cmd), the command
+    # arrives as one or more positional arguments.
+    parser.add_argument(
+        "command",
+        nargs="*",
+        help='The command to run (wrap in double quotes).',
+    )
     args = parser.parse_args()
 
-    if not args.cmd:
-        parser.error("No command specified. Use --cmd '<command>'.")
-    args.command_str = args.cmd
-
-    # The wrapper script forwards ALL user arguments via --cmd (e.g.
-    # `--cmd --stdout build.log "make"`).  We need to extract --stdout
-    # and --stderr from the command string so they become proper
-    # autoagent-exec parameters rather than part of the shell command.
-    args.stdout, args.stderr, args.command_str = _extract_redirect_args(
-        args.command_str
-    )
+    # Resolve command: --cmd takes precedence (backward compat for tests),
+    # otherwise join positional arguments.
+    if args.cmd:
+        args.command_str = args.cmd
+    elif args.command:
+        args.command_str = " ".join(args.command)
+    else:
+        parser.error(
+            "No command specified. Usage: autoagent-exec \"<command>\""
+        )
 
     return args
 
@@ -139,23 +179,35 @@ def parse_args():
 # Defensive redirection detection
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
 # Patterns that indicate the AI added shell output redirection to the command.
 # These are best-effort and won't catch every case, but cover the most common
 # trailing redirections that would steal output from autoagent-exec's log.
+#
+# Each alternative uses uniquely-named groups so that the combined regex
+# compiles without "redefinition of group name" errors.  The naming
+# convention is:  <type>_op  for the operator,  <type>_path  for the
+# target file.
+#
+# Types:
+#   both1 / both2 : combined stdout+stderr  (&>, &>>, 2>&1 >)
+#   err           : stderr-only             (2>, 2>>)
+#   out           : stdout-only             (>, >>)
+#   tee           : pipe to tee             (| tee)
+# ---------------------------------------------------------------------------
 _REDIRECT_PATTERNS = [
     # &>> file, &> file  (bash: redirect both stdout+stderr)
-    r'&>>\s*\S+',
-    r'&>\s*\S+',
+    r'(?P<both1_op>&>>?)\s*(?P<both1_path>\S+)',
     # 2>&1 > file  or  2>&1 >> file
-    r'2>&1\s*>>?\s*\S+',
+    r'(?P<both2_op>2>&1\s*>>?)\s*(?P<both2_path>\S+)',
+    # 2>&1  (fd merge, no file path — just discard the operator)
+    r'(?P<merge_op>2>&1)',
     # 2>> file, 2> file
-    r'2>>\s*\S+',
-    r'2>\s*\S+',
-    # >> file, > file  (but not inside quotes — best effort)
-    r'(?<![12&])>>\s*\S+',
-    r'(?<![12&])>\s*\S+',
-    # | tee ...
-    r'\|\s*tee\b',
+    r'(?P<err_op>2>>?)\s*(?P<err_path>\S+)',
+    # >> file, > file  (but not 2> or &>)
+    r'(?<![12&])(?P<out_op>>>?)\s*(?P<out_path>\S+)',
+    # | tee [-a] file
+    r'(?P<tee_op>\|\s*tee)(?:\s+-a)?\s+(?P<tee_path>\S+)',
 ]
 _REDIRECT_RE = re.compile(
     r'(?:' + '|'.join(_REDIRECT_PATTERNS) + r')\s*$',
@@ -163,58 +215,98 @@ _REDIRECT_RE = re.compile(
 )
 
 
+class _RedirectInfo:
+    """Result of :func:`_strip_redirections`.
+
+    Attributes:
+        command:     The command string with trailing redirection removed.
+        stdout_path: Extracted stdout redirect target, or ``None``.
+        stderr_path: Extracted stderr redirect target, or ``None``.
+        stripped:    ``True`` if any redirection was actually removed.
+    """
+    __slots__ = ('command', 'stdout_path', 'stderr_path', 'stripped')
+
+    def __init__(self, command: str, stdout_path: 'str | None',
+                 stderr_path: 'str | None', stripped: bool):
+        self.command = command
+        self.stdout_path = stdout_path
+        self.stderr_path = stderr_path
+        self.stripped = stripped
+
+
+def _strip_redirections(command_str: str) -> _RedirectInfo:
+    """Detect and strip trailing output redirection from *command_str*.
+
+    This is a best-effort, **iterative** scan that repeatedly removes the
+    last trailing redirection operator until none remain.  Complex
+    mid-command piping (e.g. ``cmd1 > a.log | cmd2``) is intentionally
+    NOT touched — only redirections anchored at the end of the command
+    are handled.
+
+    Returns a :class:`_RedirectInfo` with the cleaned command and the
+    extracted file paths (if any).
+    """
+    stdout_path: 'str | None' = None
+    stderr_path: 'str | None' = None
+    ever_stripped = False
+    cleaned = command_str
+
+    # Iteratively strip trailing redirections from right to left.
+    # Each pass removes the last operator; paths discovered earlier
+    # (closer to the tail) take precedence and are not overwritten.
+    while True:
+        m = _REDIRECT_RE.search(cleaned)
+        if not m:
+            break
+        ever_stripped = True
+        cleaned = cleaned[:m.start()].rstrip()
+
+        # Classify which stream(s) were redirected.
+        # Only one branch of the alternation fires per match.
+        if m.group('both1_op') is not None:
+            # &> or &>>
+            target = m.group('both1_path')
+            if stdout_path is None:
+                stdout_path = target
+            if stderr_path is None:
+                stderr_path = target
+        elif m.group('both2_op') is not None:
+            # 2>&1 > or 2>&1 >>
+            target = m.group('both2_path')
+            if stdout_path is None:
+                stdout_path = target
+            if stderr_path is None:
+                stderr_path = target
+        elif m.group('merge_op') is not None:
+            # 2>&1 — fd merge, no file path to extract.
+            # Just strip the operator; no path to record.
+            pass
+        elif m.group('err_op') is not None:
+            # 2> or 2>>
+            if stderr_path is None:
+                stderr_path = m.group('err_path')
+        elif m.group('tee_op') is not None:
+            # | tee — copies stdout to file while still printing it.
+            # We treat it as a stdout redirect for auto-fill purposes.
+            if stdout_path is None:
+                stdout_path = m.group('tee_path')
+        else:
+            # out_op: > or >>
+            if stdout_path is None:
+                stdout_path = m.group('out_path')
+
+    if not ever_stripped:
+        return _RedirectInfo(command_str, None, None, stripped=False)
+    return _RedirectInfo(cleaned, stdout_path, stderr_path, stripped=True)
+
+
 def _warn_if_redirected(command_str: str) -> bool:
     """Detect if the command appears to contain output redirection.
 
-    This is a best-effort check — it scans for common trailing redirection
-    patterns.  Complex mid-command piping (e.g. ``cmd1 | cmd2 > file``)
-    may not be caught.
-
-    Returns ``True`` if a redirection pattern was detected.
-
-    Note: This function intentionally does NOT print any warning to
-    stdout/stderr, because such output would be noise for the AI.
-    The system prompt already instructs the AI not to use redirection.
+    Thin wrapper around :func:`_strip_redirections` for backward
+    compatibility.  Returns ``True`` if a redirection pattern was detected.
     """
-    return bool(_REDIRECT_RE.search(command_str))
-
-
-def _extract_redirect_args(command_str: str) -> tuple:
-    """Extract ``--stdout <path>`` and ``--stderr <path>`` from *command_str*.
-
-    The wrapper script forwards everything the AI types as a single
-    ``--cmd`` value.  When the AI writes::
-
-        autoagent-exec --stdout build.log "make -j8"
-
-    the wrapper produces ``--cmd --stdout build.log "make -j8"``.
-    This function strips ``--stdout`` / ``--stderr`` from the front of
-    the command string so they can be handled as proper parameters.
-
-    Returns:
-        ``(stdout_path, stderr_path, cleaned_command_str)``
-    """
-    stdout_path = None
-    stderr_path = None
-
-    # Repeatedly strip leading --stdout/--stderr tokens.
-    # Pattern: --stdout <path> or --stderr <path> at the start of the string.
-    while True:
-        m = re.match(
-            r'^\s*--(stdout|stderr)\s+("[^"]+"|\S+)\s*',
-            command_str,
-        )
-        if not m:
-            break
-        which = m.group(1)  # "stdout" or "stderr"
-        path = m.group(2).strip('"')
-        if which == "stdout":
-            stdout_path = path
-        else:
-            stderr_path = path
-        command_str = command_str[m.end():]
-
-    return stdout_path, stderr_path, command_str.strip()
+    return _strip_redirections(command_str).stripped
 
 
 def write_signal_file(path: str, data: dict):
@@ -356,14 +448,37 @@ def main():
         except OSError:
             pass
 
-    # ── Defensive check: detect if the command contains redirection ──
-    _warn_if_redirected(command_str)
+    # ── Defensive check: strip redirection and auto-fill --stdout/--stderr ──
+    redir = _strip_redirections(command_str)
+    if redir.stripped:
+        print(
+            f"[autoagent-exec] Detected output redirection in command — "
+            f"stripping it automatically."
+        )
+        print(f"   Original command: {command_str}")
+        print(f"   Cleaned command:  {redir.command}")
+        if redir.stdout_path:
+            print(f"   Extracted stdout target: {redir.stdout_path}")
+        if redir.stderr_path:
+            print(f"   Extracted stderr target: {redir.stderr_path}")
+        sys.stdout.flush()
+
+        # Use the cleaned command from now on.
+        command_str = redir.command
+
+        # Auto-fill --stdout / --stderr only when the user (AI) did not
+        # already specify them via CLI flags.
+        if redir.stdout_path and not args.stdout:
+            args.stdout = redir.stdout_path
+        if redir.stderr_path and not args.stderr:
+            args.stderr = redir.stderr_path
 
     # ── Resolve stdout / stderr targets ──
-    # When --stdout / --stderr are provided, the subprocess writes
-    # directly to those files via Popen's stdout/stderr parameters,
-    # giving natural separation.  When omitted, both streams are
-    # merged into the default output_log (backward-compatible).
+    # When --stdout / --stderr are provided (either by the AI or auto-filled
+    # from stripped redirection above), the subprocess writes directly to
+    # those files via Popen's stdout/stderr parameters, giving natural
+    # separation.  When omitted, both streams are merged into the default
+    # output_log (backward-compatible).
     stdout_path = args.stdout  # may be None
     stderr_path = args.stderr  # may be None
 

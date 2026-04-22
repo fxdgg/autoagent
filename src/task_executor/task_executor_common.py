@@ -9,6 +9,7 @@ This module provides:
 """
 
 import os
+import sys
 import json
 import time
 import subprocess
@@ -251,6 +252,7 @@ def _write_autoagent_exec_script(
         os.path.dirname(os.path.abspath(__file__)), "..", "util", "autoagent_exec.py"
     ).replace("\\", "/")
     log_dir = session_dir.replace("\\", "/")
+    python_exe = sys.executable.replace("\\", "/")
 
     scripts_dir = os.path.join(session_dir, "scripts")
     os.makedirs(scripts_dir, exist_ok=True)
@@ -261,24 +263,24 @@ def _write_autoagent_exec_script(
         script_name = "autoagent-exec.bat"
         # %* forwards all arguments.  The AI is instructed to wrap the
         # entire command in quotes so that shell operators (&&, |, ;)
-        # are preserved as a single argument.
+        # are preserved as a single argument.  Optional --stdout/--stderr
+        # flags are placed before the command and parsed by argparse.
         content = (
             "@echo off\r\n"
-            f'python "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
-            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} --cmd %*\r\n'
+            f'"{ python_exe}" "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
+            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} %*\r\n'
         )
     else:
         script_name = "autoagent-exec.sh"
-        # "$*" joins all positional parameters into a single string
-        # (separated by the first character of IFS, which is space by
-        # default).  This preserves the command as a single shell string
-        # when the AI wraps it in quotes.
+        # "$@" preserves each positional parameter as a separate quoted
+        # argument, so optional flags like --stdout/--stderr are forwarded
+        # correctly to argparse.  (Using "$*" would merge all parameters
+        # into a single string, breaking flag parsing.)
         content = (
             "#!/usr/bin/env bash\n"
-            f'python3 "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
-            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} --cmd "$*"\n'
+            f'"{ python_exe}" "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
+            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} "$@"\n'
         )
-
     script_path = os.path.join(scripts_dir, script_name)
     try:
         with open(script_path, "w", encoding="utf-8", newline="") as f:
