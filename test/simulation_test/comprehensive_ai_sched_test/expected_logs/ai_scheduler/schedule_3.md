@@ -34,12 +34,6 @@ You must choose exactly ONE task per round.
                 Comprehensive nested task testing all prompt-building paths.
             Last Result:
                 1. logs/<SESSION>/task_results/result_1.txt
-                Preview:
-                    git commit -m "perf: optimize pipeline - 43.75% throughput, 57.1% latency gain (median of 3 runs)"
-                    
-                    Results committed successfully.
-                    
-                    ✅ completed
         - Task 2: Looping comprehensive coverage | Type: looping | Executed: 1 time(s)
             Description:
                 Comprehensive looping task testing all prompt-building paths.

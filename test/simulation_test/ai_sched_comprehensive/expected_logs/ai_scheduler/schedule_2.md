@@ -16,8 +16,6 @@ You must choose exactly ONE task per round.
 
 ```
 <context>
-    Current Round: 2 / 10
-
     <project_description>
         Round-scoped description for task 5: validates that the AI scheduler correctly selects description@5 over the root-level description.
     </project_description>
@@ -35,7 +33,13 @@ You must choose exactly ONE task per round.
         - Task 1: Initialize environment | Type: simple | Executed: 1 time(s)
             Description:
                 Set up the project environment and install all dependencies.
-            Last Result: See logs/<SESSION>/task_results/result_1.txt
+            Last Result:
+                1. logs/<SESSION>/task_results/result_1.txt
+                Preview:
+                    Environment initialized successfully.
+                    All dependencies installed and verified.
+                    
+                    ✅ completed
         - Task 2: Run baseline benchmark | Type: simple | Executed: 0 time(s)
             Description:
                 Execute the baseline performance benchmark.
@@ -55,12 +59,9 @@ You must choose exactly ONE task per round.
         task or running a diagnostic task to investigate.
     </available_tasks>
 
-    <schedule_history> (last 10 rounds)
-        ✅ 1. (Initialize environment)
-            Reasoning: Start with environment setup as it is a prerequisite for all other tasks
+    <schedule_history> (last 10 rounds, most recent call last)
+        Task 1 | Initialize environment | COMPLETED
     </schedule_history>
-
-    NOTE: Only the last 10 rounds are shown above. For the complete scheduling history, read: logs/<SESSION>/schedule_history.txt
 </context>
 ```
 

@@ -16,8 +16,6 @@ You must choose exactly ONE task per round.
 
 ```
 <context>
-    Current Round: 1 / 10
-
     <project_description>
         Round-scoped description for task 5: validates that the AI scheduler correctly selects description@5 over the root-level description.
     </project_description>

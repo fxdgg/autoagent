@@ -93,6 +93,12 @@ def build_scheduler_prompt(
             f"    </stop_condition>"
         )
 
+    # Determine the task_id from the most recent scheduling round
+    # so that only that task gets a full preview in its Last Result.
+    last_scheduled_tid: str | None = None
+    if schedule_history:
+        last_scheduled_tid = str(schedule_history[-1].get('task_id', ''))
+
     # Available tasks
     task_lines = []
     for task in tasks:
@@ -118,8 +124,14 @@ def build_scheduler_prompt(
                 lines.append(f"                {dline}")
 
         # Last Result (only show if task has been executed at least once)
+        # Only the most recently scheduled task gets a full preview;
+        # other tasks show file paths only (no preview content).
         if exec_count > 0:
-            lr_lines = _build_last_result_lines(tid, last_result_config, session_dir)
+            show_preview = (tid == last_scheduled_tid)
+            lr_lines = _build_last_result_lines(
+                tid, last_result_config, session_dir,
+                show_preview=show_preview,
+            )
             if lr_lines:
                 for lr_line in lr_lines:
                     lines.append(f"            {lr_line}")
@@ -181,12 +193,17 @@ def _build_last_result_lines(
     last_result_config: dict,
     session_dir: str,
     preview_lines: int = 5,
+    show_preview: bool = True,
 ) -> list[str]:
     """Build the 'Last Result' display lines for a task.
 
-    Both ``type=response`` and ``type=file`` produce file path(s) with
-    a preview of the last *preview_lines* lines of each file.  For
-    ``type=response``, the response text is saved to a temporary file
+    Both ``type=response`` and ``type=file`` produce file path(s).  When
+    *show_preview* is ``True`` (the default), the last *preview_lines*
+    lines of each file are included as an inline preview.  When ``False``,
+    only the file path is shown (used for tasks that were NOT the most
+    recently scheduled one, to keep the prompt concise).
+
+    For ``type=response``, the response text is saved to a temporary file
     (via ``save_response_result``) and the path to that file is shown.
 
     Each file path is followed by ``(NOTFOUND)`` if the file does not
@@ -197,6 +214,7 @@ def _build_last_result_lines(
         last_result_config: Dict mapping task_id -> {type, path}.
         session_dir: Session directory for resolving response result files.
         preview_lines: Number of trailing lines to include as preview.
+        show_preview: Whether to include an inline content preview.
 
     Returns:
         A list of formatted lines for the Last Result block, or an
@@ -237,13 +255,16 @@ def _build_last_result_lines(
             continue
 
         lines.append(f"    {idx}. {display_path}")
-        preview = _read_tail(fpath, preview_lines)
-        lines.append(f"    Preview:")
-        if preview:
-            for pline in preview:
-                lines.append(f"        {pline}")
-        else:
-            lines.append(f"        (empty)")
+
+        # Only include inline preview for the most recently scheduled task
+        if show_preview:
+            preview = _read_tail(fpath, preview_lines)
+            lines.append(f"    Preview:")
+            if preview:
+                for pline in preview:
+                    lines.append(f"        {pline}")
+            else:
+                lines.append(f"        (empty)")
 
     return lines
 
