@@ -93,8 +93,8 @@ tasks:
 | type | 含义 | 调度 AI 看到的内容 |
 |------|------|--------------------|
 | `none` | 不需要结果 | prompt 中不显示 Last Result |
-| `response` | 系统把最近一次执行的 response 保存为结果文件 | 自动生成的结果文件路径 |
-| `file` | 用户指定结果文件路径 | `path` 指定的文件路径 |
+| `response` | 系统把最近一次执行的 response 保存为结果文件 | 自动生成的结果文件路径（上一轮调度的 task 额外显示最后 5 行预览） |
+| `file` | 用户指定结果文件路径 | `path` 指定的文件路径（上一轮调度的 task 额外显示最后 5 行预览） |
 
 **`type=response` 保存机制**：
 
@@ -179,12 +179,12 @@ graph TD
 
 每轮调度时，AI 收到以下信息（通过 `build_scheduler_prompt()` 构建）：
 
-1. **当前轮次**：`Current Round: N / max_rounds`
-2. **项目描述**（`<project_description>`，使用最新的 round-scoped description）
-3. **调度策略**（`<scheduling_strategy>`）
-4. **停止条件**（`<stop_condition>`）
-5. **可用任务列表**（`<available_tasks>`）：每个任务的 id、name、type、description、执行次数、Last Result 文件路径（仅运行过至少一次时显示）
-6. **调度历史**（`<schedule_history>`）：最近 `scheduler_history_limit` 轮的选择和结果
+1. **项目描述**（`<project_description>`，使用最新的 round-scoped description）
+2. **调度策略**（`<scheduling_strategy>`）
+3. **停止条件**（`<stop_condition>`）
+4. **可用任务列表**（`<available_tasks>`）：每个任务的 id、name、type、description、执行次数、Last Result 文件路径（仅运行过至少一次时显示）。其中只有上一轮调度的 task 会附带 Preview（最后 5 行内容预览），其他 task 只显示文件路径
+5. **调度历史**（`<schedule_history>`）：最近 `scheduler_history_limit` 轮的任务和状态（不含 reasoning）
+6. **超时警告**（可选）：当 `current_round > max_rounds` 时追加 WARNING，提示 AI 完成必要工作后停止
 
 ### 3.3 调度决策的输出
 

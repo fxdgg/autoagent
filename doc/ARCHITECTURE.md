@@ -273,7 +273,7 @@ orchestrator:
       task_id: "1"
       task_name: "Task 1"
       result: success | failed | stopped
-      reasoning: "..."
+      reasoning: "..."                    # stored in state, not shown in prompt
       timestamp: "2026-04-20 10:20:00"
   task_execution_counts:
     "1": 2

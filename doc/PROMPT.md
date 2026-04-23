@@ -315,8 +315,6 @@ You must choose exactly ONE task per round.
 
 ```
 <context>
-    Current Round: 1 / 10
-
     <project_description>
         Comprehensive test project exercising all prompt-building paths.
     </project_description>
@@ -350,10 +348,10 @@ You must choose exactly ONE task per round.
 
 ### 5.3 User Prompt（后续轮次，带历史和 Last Result）
 
+假设上一轮调度的是 Task 2，则只有 Task 2 会显示 Preview（最后 5 行），Task 1 只显示文件路径：
+
 ```
 <context>
-    Current Round: 3 / 10
-
     <project_description>
         Comprehensive test project exercising all prompt-building paths.
     </project_description>
@@ -370,11 +368,17 @@ You must choose exactly ONE task per round.
         - Task 1: Nested comprehensive coverage | Type: nested | Executed: 1 time(s)
             Description:
                 Comprehensive nested task testing all prompt-building paths.
-            Last Result: See path/to/session/task_results/result_1.txt
+            Last Result:
+                1. path/to/session/task_results/result_1.txt
         - Task 2: Looping comprehensive coverage | Type: looping | Executed: 1 time(s)
             Description:
                 Comprehensive looping task testing all prompt-building paths.
-            Last Result: See path/to/session/task_results/result_2.txt
+            Last Result:
+                1. path/to/session/task_results/result_2.txt
+                Preview:
+                    Final accuracy: 92.3%
+                    All tests passed.
+                    Optimization complete.
         - Task 3: Nested edge case coverage | Type: nested | Executed: 0 time(s)
             Description:
                 Nested task testing edge cases with long_running subtasks.
@@ -385,15 +389,19 @@ You must choose exactly ONE task per round.
         task or running a diagnostic task to investigate.
     </available_tasks>
 
-    <schedule_history> (last 10 rounds)
-        ✅ 1. (Nested comprehensive coverage)
-            Reasoning: Sequential execution order
-        ✅ 2. (Looping comprehensive coverage)
-            Reasoning: Sequential execution order
+    <schedule_history> (last 10 rounds, most recent call last)
+        Task 1 | Nested comprehensive coverage | COMPLETED
+        Task 2 | Looping comprehensive coverage | COMPLETED
     </schedule_history>
-
-    NOTE: Only the last 10 rounds are shown above. For the complete scheduling history, read: path/to/session/schedule_history.txt
 </context>
+```
+
+当超出 `max_rounds` 时，`</schedule_history>` 之后会追加一条 WARNING：
+
+```
+    WARNING: You have exceeded the planned number of scheduling rounds (12/10).
+    Please finish any essential remaining work (e.g. testing, validation) and
+    then stop. Do NOT start new feature tasks or optimizations.
 ```
 
 **条件出现的字段**：
@@ -401,14 +409,16 @@ You must choose exactly ONE task per round.
 - `<scheduling_strategy>` — 仅当有值时出现
 - `<stop_condition>` — 仅当有值时出现
 - `Last Result:` — 仅当任务已执行过至少一次时出现
+- `Preview:` — 仅对上一轮调度的 task 显示（最后 5 行内容预览）
 - `(NOTFOUND)` — 当结果文件不存在时附加
 - `<schedule_history>` — 仅当有历史记录时出现
+- `WARNING` — 仅当 `current_round > max_rounds` 时出现
 
-**历史记录格式**：
-- `✅` — 成功
-- `❌` — 失败
-- `🛑` — 停止
-- `⏳` — 进行中
+**历史记录状态**：
+- `COMPLETED` — 成功
+- `FAILED` — 失败
+- `STOPPED` — 停止
+- `IN_PROGRESS` — 进行中
 
 ---
 
