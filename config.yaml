@@ -114,6 +114,12 @@ scheduler_decision_max_retries: 3
 # prompt.  This is the level-2 retry limit.
 scheduler_max_session_retries: 2
 
+# Extra rounds allowed after max_rounds is reached (soft overtime).
+# Once max_rounds is exceeded, the scheduler prompt includes a warning
+# asking the AI to wrap up essential work. After this many extra rounds
+# the loop hard-stops.
+scheduler_overtime_rounds: 5
+
 # ------------------------------------------------------------
 # debug
 # ------------------------------------------------------------

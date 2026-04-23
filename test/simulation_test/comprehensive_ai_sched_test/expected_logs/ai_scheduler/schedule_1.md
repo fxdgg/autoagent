@@ -16,8 +16,6 @@ You must choose exactly ONE task per round.
 
 ```
 <context>
-    Current Round: 1 / 10
-
     <project_description>
         Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
     </project_description>

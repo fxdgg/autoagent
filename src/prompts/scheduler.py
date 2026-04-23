@@ -69,9 +69,6 @@ def build_scheduler_prompt(
     # ── Context wrapper ──────────────────────────────────────────────
     ctx_inner = []
 
-    # Current round
-    ctx_inner.append(f"    Current Round: {current_round} / {max_rounds}")
-
     # Project description
     if project_description:
         ctx_inner.append(
@@ -122,9 +119,10 @@ def build_scheduler_prompt(
 
         # Last Result (only show if task has been executed at least once)
         if exec_count > 0:
-            lr_line = _build_last_result_line(tid, last_result_config, session_dir)
-            if lr_line:
-                lines.append(f"            {lr_line}")
+            lr_lines = _build_last_result_lines(tid, last_result_config, session_dir)
+            if lr_lines:
+                for lr_line in lr_lines:
+                    lines.append(f"            {lr_line}")
 
         task_lines.append("\n".join(lines))
 
@@ -146,33 +144,31 @@ def build_scheduler_prompt(
             etid = entry.get('task_id', '?')
             ename = entry.get('task_name', '')
             result = entry.get('result', '')
-            reasoning = entry.get('reasoning', '')
 
             if result == 'success':
-                marker = '✅'
+                status = 'COMPLETED'
             elif result == 'failed':
-                marker = '❌'
+                status = 'FAILED'
             elif result == 'stopped':
-                marker = '🛑'
+                status = 'STOPPED'
             else:
-                marker = '⏳'
+                status = 'IN_PROGRESS'
 
-            hist_lines.append(f"        {marker} {etid}. ({ename})")
-            if reasoning:
-                hist_lines.append(f"            Reasoning: {reasoning}")
+            hist_lines.append(f"        Task {etid} | {ename} | {status}")
 
         ctx_inner.append(
-            f"    <schedule_history> (last {scheduler_history_limit} rounds)\n"
+            f"    <schedule_history> (last {scheduler_history_limit} rounds, most recent call last)\n"
             + "\n".join(hist_lines) + "\n"
             f"    </schedule_history>"
         )
 
-    # Full history file path hint (only when there is at least one record)
-    if session_dir and schedule_history:
-        history_file = os.path.join(session_dir, "schedule_history.txt")
+    # Overtime warning (soft constraint when current_round > max_rounds)
+    if current_round > max_rounds:
         ctx_inner.append(
-            f"    NOTE: Only the last {scheduler_history_limit} rounds are shown above. "
-            f"For the complete scheduling history, read: {history_file}"
+            f"    WARNING: You have exceeded the planned number of scheduling rounds "
+            f"({current_round}/{max_rounds}). Please finish any essential remaining "
+            f"work (e.g. testing, validation) and then stop. Do NOT start new "
+            f"feature tasks or optimizations."
         )
 
     parts.append("<context>\n" + "\n\n".join(ctx_inner) + "\n</context>")
@@ -180,66 +176,92 @@ def build_scheduler_prompt(
     return "\n\n".join(parts)
 
 
-def _build_last_result_line(
+def _build_last_result_lines(
     task_id: str,
     last_result_config: dict,
     session_dir: str,
-) -> str:
-    """Build the 'Last Result' display line for a task.
+    preview_lines: int = 5,
+) -> list[str]:
+    """Build the 'Last Result' display lines for a task.
 
-    Both ``type=response`` and ``type=file`` produce file path(s) only —
-    the scheduler AI never sees file contents directly.  For
+    Both ``type=response`` and ``type=file`` produce file path(s) with
+    a preview of the last *preview_lines* lines of each file.  For
     ``type=response``, the response text is saved to a temporary file
     (via ``save_response_result``) and the path to that file is shown.
 
     Each file path is followed by ``(NOTFOUND)`` if the file does not
-    exist at prompt-build time.  A task must have been scheduled at
-    least once for a result path to appear; if the path cannot be
-    determined, ``(NOTFOUND)`` is appended as well.
+    exist at prompt-build time.
 
     Args:
         task_id: The task ID string.
         last_result_config: Dict mapping task_id -> {type, path}.
         session_dir: Session directory for resolving response result files.
+        preview_lines: Number of trailing lines to include as preview.
 
     Returns:
-        A formatted string like
-        ``Last Result: ✅ success (See /path/to/file)`` or empty string
-        if type is 'none' or not configured.
+        A list of formatted lines for the Last Result block, or an
+        empty list if type is 'none' or not configured.
     """
     config = last_result_config.get(task_id, {})
     lr_type = config.get('type', 'none')
 
     if lr_type == 'none':
-        return ""
+        return []
+
+    # Collect file paths to display
+    file_paths: list[str] = []
 
     if lr_type == 'response':
-        # Auto-generated response file
         result_path = _get_response_result_path(task_id, session_dir)
         if result_path:
-            display_path = result_path.replace("\\", "/")
-            found_tag = "" if os.path.isfile(result_path) else " (NOTFOUND)"
-            return f"Last Result: See {display_path}{found_tag}"
+            file_paths.append(result_path)
         else:
-            return "Last Result: (NOTFOUND)"
+            return ["Last Result: (NOTFOUND)"]
 
-    if lr_type == 'file':
+    elif lr_type == 'file':
         paths = config.get('path', '')
         if isinstance(paths, list):
-            # Multiple files — each gets its own NOTFOUND tag
-            result_parts = []
-            for p in paths:
-                display_p = str(p).replace("\\", "/")
-                found_tag = "" if os.path.isfile(p) else " (NOTFOUND)"
-                result_parts.append(f"{display_p}{found_tag}")
-            return "Last Result: See " + "; ".join(result_parts)
+            file_paths.extend(str(p) for p in paths)
         else:
-            # Single file
-            display_path = str(paths).replace("\\", "/")
-            found_tag = "" if os.path.isfile(paths) else " (NOTFOUND)"
-            return f"Last Result: See {display_path}{found_tag}"
+            file_paths.append(str(paths))
 
-    return ""
+    if not file_paths:
+        return []
+
+    # Build output lines
+    lines: list[str] = ["Last Result:"]
+    for idx, fpath in enumerate(file_paths, 1):
+        display_path = fpath.replace("\\", "/")
+        if not os.path.isfile(fpath):
+            lines.append(f"    {idx}. {display_path} (NOTFOUND)")
+            continue
+
+        lines.append(f"    {idx}. {display_path}")
+        preview = _read_tail(fpath, preview_lines)
+        lines.append(f"    Preview:")
+        if preview:
+            for pline in preview:
+                lines.append(f"        {pline}")
+        else:
+            lines.append(f"        (empty)")
+
+    return lines
+
+
+def _read_tail(filepath: str, n: int = 5) -> list[str]:
+    """Return the last *n* non-empty lines of a text file.
+
+    Returns an empty list if the file is empty or unreadable.
+    """
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            all_lines = f.read().splitlines()
+        # Strip trailing blank lines
+        while all_lines and not all_lines[-1].strip():
+            all_lines.pop()
+        return all_lines[-n:] if all_lines else []
+    except Exception:
+        return []
 
 
 def _get_response_result_path(task_id: str, session_dir: str) -> str:

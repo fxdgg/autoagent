@@ -16,8 +16,6 @@ You must choose exactly ONE task per round.
 
 ```
 <context>
-    Current Round: 3 / 10
-
     <project_description>
         Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
     </project_description>
@@ -34,11 +32,25 @@ You must choose exactly ONE task per round.
         - Task 1: Nested comprehensive coverage | Type: nested | Executed: 1 time(s)
             Description:
                 Comprehensive nested task testing all prompt-building paths.
-            Last Result: See logs/<SESSION>/task_results/result_1.txt
+            Last Result:
+                1. logs/<SESSION>/task_results/result_1.txt
+                Preview:
+                    git commit -m "perf: optimize pipeline - 43.75% throughput, 57.1% latency gain (median of 3 runs)"
+                    
+                    Results committed successfully.
+                    
+                    ✅ completed
         - Task 2: Looping comprehensive coverage | Type: looping | Executed: 1 time(s)
             Description:
                 Comprehensive looping task testing all prompt-building paths.
-            Last Result: See logs/<SESSION>/task_results/result_2.txt
+            Last Result:
+                1. logs/<SESSION>/task_results/result_2.txt
+                Preview:
+                    - No duplicate records found
+                    
+                    Both iterations completed successfully.
+                    
+                    ✅ completed
         - Task 3: Nested edge case coverage | Type: nested | Executed: 0 time(s)
             Description:
                 Nested task testing edge cases with long_running subtasks.
@@ -61,14 +73,10 @@ You must choose exactly ONE task per round.
         task or running a diagnostic task to investigate.
     </available_tasks>
 
-    <schedule_history> (last 10 rounds)
-        ✅ 1. (Nested comprehensive coverage)
-            Reasoning: Sequential execution order
-        ✅ 2. (Looping comprehensive coverage)
-            Reasoning: Sequential execution order
+    <schedule_history> (last 10 rounds, most recent call last)
+        Task 1 | Nested comprehensive coverage | COMPLETED
+        Task 2 | Looping comprehensive coverage | COMPLETED
     </schedule_history>
-
-    NOTE: Only the last 10 rounds are shown above. For the complete scheduling history, read: logs/<SESSION>/schedule_history.txt
 </context>
 ```
 

@@ -214,6 +214,7 @@ class AISchedulerMixin:
         scheduler_history_limit = config.get('scheduler_history_limit', DEFAULTS['scheduler_history_limit'])
         scheduler_decision_max_retries = config.get('scheduler_decision_max_retries', DEFAULTS['scheduler_decision_max_retries'])
         scheduler_max_session_retries = config.get('scheduler_max_session_retries', DEFAULTS['scheduler_max_session_retries'])
+        scheduler_overtime_rounds = config.get('scheduler_overtime_rounds', DEFAULTS['scheduler_overtime_rounds'])
 
         strategy = ai_orch['strategy']
         max_rounds = ai_orch['max_rounds']
@@ -359,7 +360,7 @@ class AISchedulerMixin:
         # ── Main scheduling loop ──────────────────────────────────
         results = {}
 
-        while current_round < max_rounds:
+        while current_round < max_rounds + scheduler_overtime_rounds:
             current_round += 1
 
             print(f"\n{'─' * 60}")
@@ -487,8 +488,8 @@ class AISchedulerMixin:
                 print(f"\n❌ Task {selected_task_id} failed!")
 
         else:
-            # Reached max_rounds
-            print(f"\n⚠️  Reached maximum scheduling rounds ({max_rounds})")
+            # Reached hard limit (max_rounds + overtime)
+            print(f"\n⚠️  Reached maximum scheduling rounds ({max_rounds} + {scheduler_overtime_rounds} overtime)")
             orch_state['status'] = 'completed'
             self.state_manager.save_orchestrator_state(orch_state)
 

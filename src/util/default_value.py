@@ -58,6 +58,7 @@ DEFAULTS = {
     "scheduler_history_limit": 10,
     "scheduler_decision_max_retries": 3,
     "scheduler_max_session_retries": 2,
+    "scheduler_overtime_rounds": 5,
 
     # debug
     "autoagent_exec_show_console": False,
@@ -185,6 +186,12 @@ scheduler_decision_max_retries: {scheduler_decision_max_retries}
 # occurs, the scheduler creates a fresh AI session and resends the full
 # prompt.  This is the level-2 retry limit.
 scheduler_max_session_retries: {scheduler_max_session_retries}
+
+# Extra rounds allowed after max_rounds is reached (soft overtime).
+# Once max_rounds is exceeded, the scheduler prompt includes a warning
+# asking the AI to wrap up essential work. After this many extra rounds
+# the loop hard-stops.
+scheduler_overtime_rounds: {scheduler_overtime_rounds}
 
 # ------------------------------------------------------------
 # debug
