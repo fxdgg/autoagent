@@ -10,6 +10,7 @@ from prompts.shared import (
     load_task_design_guide,
     indent_block,
     ROLE_TASK_REVIEWER,
+    ROLE_ADVERSARIAL_REVIEWER,
 )
 
 # Indentation constants (same as other prompt builders)
@@ -193,3 +194,94 @@ Please read this file to see the current tasks.""")
 </instructions>""")
 
     return '\n\n'.join(parts) + '\n'
+
+
+def build_adversarial_review_prompt(
+    idea_content: str,
+    temp_tasks_path: str,
+    next_id: int = 1,
+    mode: str = "linear",
+) -> str:
+    """Build the prompt for an adversarial (red-team) review of generated tasks.
+
+    The adversarial reviewer looks for loopholes, ambiguities, and destructive
+    potential — things a careless or malicious agent could exploit without
+    technically violating any stated constraint.
+
+    Args:
+        idea_content: Raw idea text.
+        temp_tasks_path: File path where corrected YAML should be written.
+        next_id: Starting task ID for this batch.
+        mode: Execution mode — ``"linear"`` or ``"ai"``.
+    """
+    task_design_guide = load_task_design_guide(mode)
+
+    role_line = ROLE_ADVERSARIAL_REVIEWER
+
+    # Truncate idea content if necessary
+    if len(idea_content) > limits.get('max'):
+        idea_display = idea_content[:limits.get('max')] + '\n\n(idea text truncated)'
+    else:
+        idea_display = idea_content
+
+    return f"""{role_line} Perform an adversarial review of the following TODO
+task decomposition. Your goal is to find loopholes and weaknesses, NOT to
+check schema or formatting (that is handled by a separate reviewer).
+
+<original_idea>
+{indent_block(idea_display, I4)}
+</original_idea>
+
+The generated tasks have been saved to the following file:
+    {temp_tasks_path}
+
+Please read this file to review the tasks.
+
+The following guide is provided for context on task types and conventions.
+
+<task_design_guide>
+{indent_block(task_design_guide, I4)}
+</task_design_guide>
+
+<adversarial_checklist>
+    Think like a careless or adversarial AI agent that will execute these tasks.
+    For each task and subtask, ask yourself:
+
+    1. **Trivial satisfaction**: Can the `completion_criteria` be satisfied by a
+       trivial or degenerate action (e.g., creating an empty file, writing a
+       no-op implementation, deleting the test that was supposed to pass)?
+    2. **Destructive interpretation**: Could the `initial_hint` or task
+       description be interpreted in a way that deletes, overwrites, or corrupts
+       important files, data, or configurations?
+    3. **Missing negative constraints**: Are there important things the agent
+       should NOT do that are not explicitly forbidden? (e.g., "implement X"
+       without saying "do not modify Y")
+    4. **Scope escape**: Could the agent satisfy the task by making changes
+       far outside the intended scope (e.g., modifying global configs, disabling
+       security checks, hardcoding test expectations)?
+    5. **Ambiguous success criteria**: Are there completion criteria that are
+       subjective, unmeasurable, or that could be gamed by the agent?
+    6. **State pollution**: Could executing one task leave behind state (temp
+       files, environment variables, modified configs) that silently breaks
+       subsequent tasks?
+    7. **Resource abuse**: Could any task lead to unbounded resource consumption
+       (infinite loops, massive file generation, network abuse) without explicit
+       limits?
+</adversarial_checklist>
+
+<instructions>
+    If the tasks are robust against all adversarial concerns above, respond with EXACTLY:
+    ✅ completed
+
+    If you find loopholes or weaknesses:
+    DIRECTLY modify the YAML file at:
+        {temp_tasks_path}
+    to tighten constraints, add negative requirements, clarify ambiguous criteria,
+    or add safeguards. Do NOT change the task structure or schema — only refine
+    descriptions, completion_criteria, initial_hint, and system_prompt_prefix to
+    close loopholes.
+    Do NOT include markdown code fences or any extra text in the file.
+    After modifying the file, respond with EXACTLY:
+    ❌ not completed
+</instructions>
+"""

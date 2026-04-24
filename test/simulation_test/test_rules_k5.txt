@@ -18,13 +18,15 @@
 # Expected call sequence:
 #   Rule 1:  Idea 1 decomposition → YAML for task 3
 #   Rule 2:  Idea 1 review → ✅ approved
-#   Rule 3:  Idea 2 decomposition → YAML for task 4
-#   Rule 4:  Idea 2 review → ✅ approved
-#   Rule 5:  Scheduler decision → execute task 1
-#   Rule 6:  Task 1 execution → ✅ completed
-#   Rule 7:  Scheduler decision → execute task 3 (from idea)
-#   Rule 8:  Task 3 execution → ✅ completed
-#   Rule 9:  Scheduler decision → stop
+#   Rule 3:  Idea 1 adversarial review → ✅ approved
+#   Rule 4:  Idea 2 decomposition → YAML for task 4
+#   Rule 5:  Idea 2 review → ✅ approved
+#   Rule 6:  Idea 2 adversarial review → ✅ approved
+#   Rule 7:  Scheduler decision → execute task 1
+#   Rule 8:  Task 1 execution → ✅ completed
+#   Rule 9:  Scheduler decision → execute task 3 (from idea)
+#   Rule 10: Task 3 execution → ✅ completed
+#   Rule 11: Scheduler decision → stop
 # =============================================================================
 
 # --- Rule 1: Idea 1 decomposition ---
@@ -42,7 +44,12 @@ The task decomposition is correct and well-structured.
 
 ✅ completed
 ---RULE---
-# --- Rule 3: Idea 2 decomposition ---
+# --- Rule 3: Idea 1 adversarial review - APPROVED ---
+No adversarial concerns found. The task constraints are tight and unambiguous.
+
+✅ completed
+---RULE---
+# --- Rule 4: Idea 2 decomposition ---
 description@4: "Validation step for optimization results"
 tasks:
   - id: 4
@@ -52,27 +59,32 @@ tasks:
     completion_criteria: |
       Optimization results validated.
 ---RULE---
-# --- Rule 4: Idea 2 review - APPROVED ---
+# --- Rule 5: Idea 2 review - APPROVED ---
 The validation task is appropriate and well-defined.
 
 ✅ completed
 ---RULE---
-# --- Rule 5: Scheduler → execute task 1 ---
+# --- Rule 6: Idea 2 adversarial review - APPROVED ---
+No adversarial concerns found. The validation task is well-constrained.
+
+✅ completed
+---RULE---
+# --- Rule 7: Scheduler → execute task 1 ---
 {"action": "execute", "task_id": 1, "reasoning": "Start with initial setup"}
 ---RULE---
-# --- Rule 6: Task 1 execution ---
+# --- Rule 8: Task 1 execution ---
 Initial project environment set up successfully.
 
 ✅ completed
 ---RULE---
-# --- Rule 7: Scheduler → execute task 3 (from idea) ---
+# --- Rule 9: Scheduler → execute task 3 (from idea) ---
 {"action": "execute", "task_id": 3, "reasoning": "Execute the new optimization task from ideas"}
 ---RULE---
-# --- Rule 8: Task 3 execution ---
+# --- Rule 10: Task 3 execution ---
 Memory access patterns optimized successfully.
 Performance improved by 15%.
 
 ✅ completed
 ---RULE---
-# --- Rule 9: Scheduler → stop ---
+# --- Rule 11: Scheduler → stop ---
 {"action": "stop", "reasoning": "Key tasks completed. Remaining tasks can be done later."}

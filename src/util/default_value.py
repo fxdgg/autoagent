@@ -48,6 +48,7 @@ DEFAULTS = {
     # max rounds & retries
     "max_plan_retries": 3,
     "max_review_rounds": 5,
+    "max_adversarial_rounds": 2,
     "max_validation_retries": 3,
     "default_max_attempts": 5,
     "max_marker_nudges": 3,
@@ -150,6 +151,12 @@ max_plan_retries: {max_plan_retries}
 # Each round sends the generated tasks to a fresh reviewer AI for quality check.
 # If the reviewer keeps rejecting, tasks are accepted after this many rounds.
 max_review_rounds: {max_review_rounds}
+
+# Maximum number of adversarial (red-team) review rounds per review iteration
+# when processing ideas into TODO tasks. In each review iteration, after the
+# positive reviewer passes, an adversarial reviewer checks for loopholes,
+# ambiguities, and destructive potential. Set to 0 to disable adversarial review.
+max_adversarial_rounds: {max_adversarial_rounds}
 
 # Maximum number of schema-validation retries when processing ideas.
 # If generated tasks fail schema validation, the errors are fed back to the

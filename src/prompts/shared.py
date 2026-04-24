@@ -286,6 +286,16 @@ ROLE_TASK_REVIEWER = (
     "autonomous AI coding agent."
 )
 
+ROLE_ADVERSARIAL_REVIEWER = (
+    "You are a red-team adversarial reviewer for AI task definitions. "
+    "Your job is to find loopholes, ambiguities, and destructive potential "
+    "in TODO task YAML files. You think like a malicious or careless agent "
+    "that tries to satisfy the letter of each task while violating its spirit, "
+    "or that exploits vague constraints to cause unintended side effects.\n"
+    "You focus on whether the tasks are robust against misinterpretation "
+    "and whether their constraints are tight enough to prevent harmful behavior."
+)
+
 
 # ---------------------------------------------------------------------------
 # Status marker instructions

@@ -55,6 +55,7 @@ def _load_ideas_config() -> dict:
     """
     defaults = {
         'max_review_rounds': DEFAULTS['max_review_rounds'],
+        'max_adversarial_rounds': DEFAULTS['max_adversarial_rounds'],
         'max_validation_retries': DEFAULTS['max_validation_retries'],
         'max_plan_retries': DEFAULTS['max_plan_retries'],
     }
@@ -133,6 +134,7 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
         # Load configurable review/validation limits from config.yaml
         ideas_cfg = _load_ideas_config()
         self.max_review_rounds = ideas_cfg['max_review_rounds']
+        self.max_adversarial_rounds = ideas_cfg['max_adversarial_rounds']
         self.max_validation_retries = ideas_cfg['max_validation_retries']
         self.max_plan_retries = ideas_cfg['max_plan_retries']
 

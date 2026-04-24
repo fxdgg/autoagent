@@ -732,6 +732,59 @@ class ConversationLogger:
         except Exception as e:
             logger.error(f"Failed to write ideas review response log to {filepath}: {e}")
 
+    def log_ideas_adversarial_prompt(
+        self,
+        review_round: int,
+        prompt: str,
+    ):
+        """
+        Write the prompt section for an adversarial review call.
+
+        Appended to the same ``conversations/ideas.md`` file, under the
+        current idea section.
+
+        Args:
+            review_round: 1-based adversarial review round number
+            prompt: The adversarial review prompt sent to AI
+        """
+        filepath = os.path.join(self.session_dir, "ideas.md")
+
+        content_parts = []
+        content_parts.append(f"### Adversarial Review #{review_round} Prompt\n\n")
+        content_parts.append(f"```\n{_strip_task_design_guide(prompt)}\n```\n\n")
+
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write("".join(content_parts))
+            logger.debug(f"Logged ideas adversarial review prompt to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to write ideas adversarial review prompt log to {filepath}: {e}")
+
+    def log_ideas_adversarial_response(
+        self,
+        response: str,
+    ):
+        """
+        Append the response section for an adversarial review call.
+
+        Must be called after ``log_ideas_adversarial_prompt``.
+
+        Args:
+            response: The adversarial reviewer AI response
+        """
+        filepath = os.path.join(self.session_dir, "ideas.md")
+
+        content_parts = []
+        content_parts.append(f"### Adversarial Review Response\n\n")
+        content_parts.append(f"{response}\n\n")
+
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write("".join(content_parts))
+            logger.debug(f"Logged ideas adversarial review response to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to write ideas adversarial review response log to {filepath}: {e}")
+
     def log_ideas_revision_prompt(
         self,
         revision_round: int,

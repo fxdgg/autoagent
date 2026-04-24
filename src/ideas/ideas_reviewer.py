@@ -4,6 +4,7 @@ This mixin provides the review-related methods which are mixed into
 ``IdeasWatcher``:
 - ``_review_and_validate_loop``
 - ``_review_tasks``
+- ``_adversarial_review_tasks``
 - ``_check_review_passed``
 - ``_human_review_loop``
 
@@ -11,9 +12,11 @@ It relies on attributes and helper methods defined on the host class
 (IdeasWatcher), such as ``_get_temp_tasks_path``, ``_cleanup_temp_file``,
 ``_start_temp_file_watcher``, ``_stop_temp_file_watcher``,
 ``_read_tasks_from_temp_file``, ``_extract_yaml_tasks``,
-``_validate_tasks_schema``, ``max_review_rounds``, ``max_validation_retries``.
+``_validate_tasks_schema``, ``max_review_rounds``, ``max_validation_retries``,
+``max_adversarial_rounds``.
 """
 
+import hashlib
 import logging
 import re
 import yaml
@@ -23,6 +26,7 @@ from ai_client import AIClient, AICallError
 from logger import ConversationLogger
 from prompts.ideas_review import (
     build_ideas_review_prompt,
+    build_adversarial_review_prompt,
     build_revision_prompt,
 )
 
@@ -56,6 +60,7 @@ class IdeasReviewerMixin:
     - ``_extract_yaml_tasks(response: str) -> dict``
     - ``_validate_tasks_schema(parsed_data, next_id) -> tuple``
     - ``max_review_rounds: int``
+    - ``max_adversarial_rounds: int``
     - ``max_validation_retries: int``
     """
 
@@ -92,10 +97,11 @@ class IdeasReviewerMixin:
         result = raw_yaml_response
 
         for validation_attempt in range(1, self.max_validation_retries + 2):
-            # --- AI review loop ---
+            # --- Interleaved positive + adversarial review loop ---
             if review_client and parsed_data and parsed_data.get('tasks'):
                 last_feedback = ""
                 for review_round in range(1, self.max_review_rounds + 1):
+                    # -- Positive review --
                     review_passed, review_feedback, revised_data = self._review_tasks(
                         review_client, idea, parsed_data, result,
                         conv_logger=conv_logger,
@@ -106,16 +112,38 @@ class IdeasReviewerMixin:
                     )
                     if review_passed:
                         print(f"   ✅ Review passed (round {review_round})")
-                        break
                     else:
                         last_feedback = review_feedback
                         if revised_data:
                             print(f"   🔧 Reviewer directly revised tasks (round {review_round})")
                             parsed_data = revised_data
                         else:
-                            print(f"   🔄 Review rejected (round {review_round}), but reviewer did not provide revised tasks.")
-                            # Reviewer didn't write a corrected file — accept current tasks
-                            # (the reviewer's feedback is lost since we don't send it to planner anymore)
+                            print(f"   🔄 Review rejected (round {review_round}), reviewer did not modify the file.")
+
+                    # -- Adversarial review (only if enabled) --
+                    if self.max_adversarial_rounds > 0:
+                        adv_passed, adv_feedback, adv_revised = self._adversarial_review_tasks(
+                            review_client, idea, parsed_data, result,
+                            conv_logger=conv_logger,
+                            review_round=review_round,
+                            next_id=next_id,
+                        )
+                        if adv_passed:
+                            print(f"   ✅ Adversarial review passed (round {review_round})")
+                        else:
+                            if adv_revised:
+                                print(f"   🔧 Adversarial reviewer tightened constraints (round {review_round})")
+                                parsed_data = adv_revised
+                            else:
+                                print(f"   🔄 Adversarial review rejected (round {review_round}), reviewer did not modify the file.")
+
+                        # Only done when BOTH passed in the same round
+                        if review_passed and adv_passed:
+                            break
+                        # Otherwise continue to next round
+                    else:
+                        # Adversarial review disabled — if positive passed, we're done
+                        if review_passed:
                             break
                 else:
                     print(
@@ -225,6 +253,7 @@ class IdeasReviewerMixin:
         temp_tasks_path = self._get_temp_tasks_path()
         # Write current tasks to temp file so reviewer can modify it in-place
         self._cleanup_temp_file()
+        original_content_hash = hashlib.sha256(tasks_yaml.encode('utf-8')).hexdigest()
         try:
             with open(temp_tasks_path, 'w', encoding='utf-8') as f:
                 f.write(tasks_yaml)
@@ -254,9 +283,23 @@ class IdeasReviewerMixin:
             revised_data = None
             if not passed:
                 # Try to read reviewer's corrected tasks from temp file
-                revised_data = self._read_tasks_from_temp_file()
-                if revised_data and revised_data.get('tasks'):
-                    logger.info(f"Reviewer directly revised {len(revised_data['tasks'])} task(s) in temp file")
+                # First, check if the file content actually changed
+                try:
+                    with open(temp_tasks_path, 'r', encoding='utf-8') as f:
+                        current_content = f.read()
+                    current_hash = hashlib.sha256(current_content.encode('utf-8')).hexdigest()
+                except Exception:
+                    current_hash = None
+
+                if current_hash and current_hash != original_content_hash:
+                    revised_data = self._read_tasks_from_temp_file()
+                    if revised_data and revised_data.get('tasks'):
+                        logger.info(f"Reviewer directly revised {len(revised_data['tasks'])} task(s) in temp file")
+                    else:
+                        revised_data = None
+                else:
+                    logger.info("Reviewer rejected but did not modify the temp file — treating as no revision")
+                    self._stop_temp_file_watcher()
             self._cleanup_temp_file()
 
             return passed, review_result, revised_data
@@ -265,6 +308,106 @@ class IdeasReviewerMixin:
             logger.error(f"AI call failed for idea review: {e}")
             self._cleanup_temp_file()
             # On review failure, accept the tasks to avoid blocking
+            return True, "", None
+
+    def _adversarial_review_tasks(
+        self,
+        review_client: AIClient,
+        idea: dict,
+        parsed_data: dict,
+        raw_yaml_response: str,
+        conv_logger: ConversationLogger = None,
+        review_round: int = 1,
+        next_id: int = 1,
+    ) -> tuple:
+        """
+        Send generated tasks to a fresh-context adversarial (red-team) reviewer.
+
+        The adversarial reviewer looks for loopholes, ambiguities, and
+        destructive potential — things a careless or malicious agent could
+        exploit without technically violating any stated constraint.
+
+        If the reviewer finds issues, it directly modifies the temp YAML file
+        to tighten constraints (same protocol as positive review).
+
+        Args:
+            review_client: AIClient (session will be reset for fresh context)
+            idea: Original idea dict
+            parsed_data: Parsed data containing tasks and description
+            raw_yaml_response: Raw YAML response (unused, kept for API symmetry)
+            conv_logger: Optional ConversationLogger
+            review_round: 1-based review round number
+            next_id: Starting task ID for this batch
+
+        Returns:
+            tuple: (passed: bool, feedback: str, revised_data: Optional[dict])
+        """
+        # Reset session for fresh adversarial context
+        review_client.reset_session()
+
+        tasks_yaml = yaml.dump(
+            parsed_data, Dumper=_BlockStyleDumper,
+            default_flow_style=False, allow_unicode=True, sort_keys=False,
+        )
+
+        temp_tasks_path = self._get_temp_tasks_path()
+        self._cleanup_temp_file()
+        original_content_hash = hashlib.sha256(tasks_yaml.encode('utf-8')).hexdigest()
+        try:
+            with open(temp_tasks_path, 'w', encoding='utf-8') as f:
+                f.write(tasks_yaml)
+        except OSError as e:
+            logger.warning(f"Failed to write temp file for adversarial reviewer: {e}")
+
+        adversarial_prompt = build_adversarial_review_prompt(
+            idea_content=idea['content'],
+            temp_tasks_path=temp_tasks_path,
+            next_id=next_id,
+            mode=self._detect_mode(),
+        )
+
+        try:
+            if conv_logger:
+                conv_logger.log_ideas_adversarial_prompt(review_round, adversarial_prompt)
+
+            self._start_temp_file_watcher()
+            review_result = review_client.ask(adversarial_prompt)
+
+            if conv_logger:
+                conv_logger.log_ideas_adversarial_response(review_result)
+
+            passed = self._check_review_passed(review_result)
+
+            revised_data = None
+            if not passed:
+                # Check if the file content actually changed
+                try:
+                    with open(temp_tasks_path, 'r', encoding='utf-8') as f:
+                        current_content = f.read()
+                    current_hash = hashlib.sha256(current_content.encode('utf-8')).hexdigest()
+                except Exception:
+                    current_hash = None
+
+                if current_hash and current_hash != original_content_hash:
+                    revised_data = self._read_tasks_from_temp_file()
+                    if revised_data and revised_data.get('tasks'):
+                        logger.info(
+                            f"Adversarial reviewer revised {len(revised_data['tasks'])} "
+                            f"task(s) in temp file"
+                        )
+                    else:
+                        revised_data = None
+                else:
+                    logger.info("Adversarial reviewer rejected but did not modify the temp file — treating as no revision")
+                    self._stop_temp_file_watcher()
+            self._cleanup_temp_file()
+
+            return passed, review_result, revised_data
+
+        except AICallError as e:
+            logger.error(f"AI call failed for adversarial review: {e}")
+            self._cleanup_temp_file()
+            # On failure, accept the tasks to avoid blocking
             return True, "", None
 
     @staticmethod
