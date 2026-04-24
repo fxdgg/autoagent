@@ -8,6 +8,7 @@ inside ``IdeasWatcher._human_review_loop()`` in ideas_watcher.py.
 from util.truncation_limits import limits
 from prompts.shared import (
     load_task_design_guide,
+    load_adversarial_review_guide,
     indent_block,
     ROLE_TASK_REVIEWER,
     ROLE_ADVERSARIAL_REVIEWER,
@@ -51,16 +52,16 @@ def build_ideas_review_prompt(
 
     # Description criterion varies by batch
     if next_id == 1:
-        description_criterion = (
-            '    4. **Description field**: Root-level `description` must be present, meaningful,\n'
-            '       and cover goal/architecture/key paths/commands/constraints as applicable.\n'
-            '       Missing = review failure. See §3.1.'
+        description_extra = (
+            '    Additionally: Root-level `description` must be present, meaningful,\n'
+            '    and cover goal/architecture/key paths/commands/constraints as applicable.\n'
+            '    Missing = review failure. See §3.'
         )
     else:
-        description_criterion = (
-            f'    4. **Description field**: `description@{next_id}` is optional. If present, it must\n'
-            f'       be meaningful and cover goal/architecture/key paths/commands/constraints.\n'
-            f'       Root-level `description` must NOT be included (it belongs to the first batch). See §3.1.'
+        description_extra = (
+            f'    Additionally: `description@{next_id}` is optional. If present, it must\n'
+            f'    be meaningful and cover goal/architecture/key paths/commands/constraints.\n'
+            f'    Root-level `description` must NOT be included (it belongs to the first batch). See §3.'
         )
 
     # Build the existing-todos context block (only when there are existing tasks)
@@ -104,30 +105,11 @@ and best practices when reviewing the generated tasks.
 </id_context>
 
 <review_criteria>
-    Evaluate the generated tasks against these criteria. Refer to <task_design_guide> for
-    detailed rules and examples on each point.
+    Evaluate the generated tasks against **every rule in §1 (Rules)** of the <task_design_guide>.
+    Check Schema Rules, Design Rules, and Anti-Hack Rules one by one.
+    New top-level task IDs must start from {next_id}.
 
-    1. **YAML & schema**: Well-formed YAML; correct IDs starting from {next_id}
-       (integers + dot notation); all required fields present per type; `*_once` types only as subtasks.
-    2. **Type selection**: `nested` vs `looping` vs `simple` chosen correctly per §4.1;
-       commands > 1 min use `long_running`; `*_once` used sparingly.
-    3. **Decomposition granularity**: No over-decomposition (merge steps that fail together)
-       and no under-decomposition (split logically independent steps). See §4.2.
-{description_criterion}
-    5. **`completion_criteria`**: Specific, measurable, AI-verifiable. Top-level criteria
-       describe end state; subtask criteria describe step output. No unverifiable or
-       process-describing criteria. See §5.1.
-    6. **`initial_hint`**: Provides context (paths, commands, constraints), not step-by-step
-       playbooks. Subtasks use filesystem for state passing across sessions. See §5.2, §4.3.
-    7. **`system_prompt_prefix`**: Used appropriately (persona, restrictions); NOT set on
-       top-level `nested`/`looping`. See §5.3.
-    8. **`model`**: `"default"` for reasoning, `"lite"` for execution. See §5.5.
-    9. **Retry strategy**: `max_attempts: 1` for execution-only subtasks; 2–5 for code-writing
-       tasks. Hints mention residual state cleanup when relevant. See §5.4, §6.
-    10. **Task-type best practices**: Read the relevant guide listed in §7 for the task type
-        (build & ship, testing, iterative optimization, data pipelines, setup, or research) and
-        verify the generated tasks follow the recommended patterns and avoid the anti-patterns
-        described there.
+{description_extra}
 </review_criteria>
 
 <instructions>
@@ -200,7 +182,6 @@ def build_adversarial_review_prompt(
     idea_content: str,
     temp_tasks_path: str,
     next_id: int = 1,
-    mode: str = "linear",
 ) -> str:
     """Build the prompt for an adversarial (red-team) review of generated tasks.
 
@@ -208,13 +189,16 @@ def build_adversarial_review_prompt(
     potential — things a careless or malicious agent could exploit without
     technically violating any stated constraint.
 
+    Unlike the positive review prompt, this does NOT include the full task
+    design guide.  Instead it loads a dedicated adversarial review guide that
+    focuses on attack patterns and exploitability.
+
     Args:
         idea_content: Raw idea text.
         temp_tasks_path: File path where corrected YAML should be written.
         next_id: Starting task ID for this batch.
-        mode: Execution mode — ``"linear"`` or ``"ai"``.
     """
-    task_design_guide = load_task_design_guide(mode)
+    adversarial_guide = load_adversarial_review_guide()
 
     role_line = ROLE_ADVERSARIAL_REVIEWER
 
@@ -237,49 +221,19 @@ The generated tasks have been saved to the following file:
 
 Please read this file to review the tasks.
 
-The following guide is provided for context on task types and conventions.
-
-<task_design_guide>
-{indent_block(task_design_guide, I4)}
-</task_design_guide>
-
-<adversarial_checklist>
-    Think like a careless or adversarial AI agent that will execute these tasks.
-    For each task and subtask, ask yourself:
-
-    1. **Trivial satisfaction**: Can the `completion_criteria` be satisfied by a
-       trivial or degenerate action (e.g., creating an empty file, writing a
-       no-op implementation, deleting the test that was supposed to pass)?
-    2. **Destructive interpretation**: Could the `initial_hint` or task
-       description be interpreted in a way that deletes, overwrites, or corrupts
-       important files, data, or configurations?
-    3. **Missing negative constraints**: Are there important things the agent
-       should NOT do that are not explicitly forbidden? (e.g., "implement X"
-       without saying "do not modify Y")
-    4. **Scope escape**: Could the agent satisfy the task by making changes
-       far outside the intended scope (e.g., modifying global configs, disabling
-       security checks, hardcoding test expectations)?
-    5. **Ambiguous success criteria**: Are there completion criteria that are
-       subjective, unmeasurable, or that could be gamed by the agent?
-    6. **State pollution**: Could executing one task leave behind state (temp
-       files, environment variables, modified configs) that silently breaks
-       subsequent tasks?
-    7. **Resource abuse**: Could any task lead to unbounded resource consumption
-       (infinite loops, massive file generation, network abuse) without explicit
-       limits?
-</adversarial_checklist>
+<adversarial_review_guide>
+{indent_block(adversarial_guide, I4)}
+</adversarial_review_guide>
 
 <instructions>
-    If the tasks are robust against all adversarial concerns above, respond with EXACTLY:
+    If the tasks are robust against all adversarial concerns in the guide, respond with EXACTLY:
     ✅ completed
 
     If you find loopholes or weaknesses:
     DIRECTLY modify the YAML file at:
         {temp_tasks_path}
     to tighten constraints, add negative requirements, clarify ambiguous criteria,
-    or add safeguards. Do NOT change the task structure or schema — only refine
-    descriptions, completion_criteria, initial_hint, and system_prompt_prefix to
-    close loopholes.
+    or add safeguards. Follow the "What You Can Modify" section in the guide.
     Do NOT include markdown code fences or any extra text in the file.
     After modifying the file, respond with EXACTLY:
     ❌ not completed

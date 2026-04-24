@@ -4,7 +4,41 @@ Reference for AI agents that generate TODO tasks.
 
 ---
 
-## 1. Execution Model Overview
+## 1. Rules
+
+⚠️ **These rules are mandatory.** Verify every item before submitting your `todos.yaml`.
+
+### Schema Rules
+
+1. **Root `description`** exists and covers: Goal, Architecture, Key file paths, Hard constraints, Rules. See §3 for full guidance.
+2. **Every task** has `id`, `name`, `type`, `completion_criteria`.
+3. **ID assignment**: top-level IDs are sequential integers; subtask IDs use dot notation (e.g., 1.1, 1.2).
+4. **`*_once` types** (`simple_once`, `long_running_once`) can ONLY be subtasks, not top-level tasks.
+5. **`long_running`** is used for any command that may take > 1 minute.
+
+### Design Rules
+
+6. **`completion_criteria`** are specific, measurable, and verifiable by the AI — not vague like "code is good". See §4.2.
+7. **`initial_hint`** provides key file paths, commands, and constraints — not a rigid step-by-step script. See §4.3.
+8. **No over-decomposition**: subtasks are grouped by failure mode, not by individual commands (2–3 subtasks typical). See §4.1.
+9. **No under-decomposition**: expensive steps (training, build) are separate from cheap steps (evaluation, reporting). See §4.1.
+10. **`max_attempts: 1`** is set on execution-only subtasks (build, benchmark, test) that don't write code. See §6.2.
+11. **`model: "lite"`** is set on straightforward execution tasks; complex reasoning uses default. See §6.3.
+12. **State persistence**: inter-subtask data is written to files, not assumed in conversation context. See §4.6.
+13. **Retry resilience**: tasks that modify shared state mention cleanup in `initial_hint`. See §4.5.
+14. **Subtask boundaries** align with logical checkpoints and independent failure modes.
+15. **Type-specific patterns**: read the relevant guide in §7 for your task type (build, test, optimization, etc.).
+
+### Anti-Hack Rules
+
+16. **Negative constraints**: For every "implement X" task, explicitly state what must NOT be modified (test files, configs, unrelated modules).
+17. **Verification separation**: Separate "implement" from "verify" into different subtasks. Use `system_prompt_prefix` on verification subtasks to forbid code modification.
+18. **Measurable criteria only**: Every `completion_criteria` must be checkable by running a command or reading a file — never subjective ("code is clean", "well-optimized").
+19. **Scope boundaries**: When a task modifies code, specify which files/directories are in scope. Forbid changes outside that scope.
+
+---
+
+## 2. Execution Model Overview
 
 AutoAgent drives an AI coding agent (e.g. Codex, Gemini CLI, Claude Code) through a sequence of tasks defined in `todos.yaml`.
 The AI agent can do anything a developer can: edit code, run commands, read logs, install packages, use git, etc.
@@ -19,38 +53,11 @@ The AI agent can do anything a developer can: edit code, run commands, read logs
 
 ---
 
-## 2. Task Types
+## 3. Root Description Guide
 
-### Overview
+The root-level `description` field provides project-wide context visible to every AI session. **Always include it.** Without it, the AI has no overall project context.
 
-| Type | Description | Scope | When to use |
-|------|-------------|-------|-------------|
-| `simple` | AI works autonomously, then self-evaluates completion | Top-level or subtask | Code changes, running tests, file analysis, quick builds |
-| `nested` | Sequential subtasks + AI evaluation of overall completion; When fails consecutively, retries with guidance | Top-level or subtask | Multi-step workflows where overall success depends on combined result |
-| `looping` | Repeat all subtasks for fixed N iterations; NO AI evaluation for overall completion | Top-level or subtask | Iterative optimization cycles (profile → optimize → benchmark) |
-| `long_running` | AI launches a long-running background command (e.g. training) that runs without session timeout | Top-level or subtask | Any command that may take > 1 minute (builds, tests, benchmarks, training, profiling) |
-| `simple_once` | Like `simple`, but never re-executed once completed | Subtask only | One-time setup (env prep, dependency install, data download) |
-| `long_running_once` | Like `long_running`, but never re-executed once completed | Subtask only | Expensive one-time operations (Docker build, baseline profiling) |
-
-### Key Notes
-
-- **Prefer `long_running` over `simple`** for any command that may take > 1 minute. If a command runs too long inside `simple`, the AI session may hit a timeout, wasting all progress. `long_running` runs the command in the background with proper monitoring — minimal overhead, prevents session timeouts.
-- **`*_once` types**: Use sparingly. Most subtasks SHOULD be re-executable. Don't use `*_once` if a subtask's output might become stale after other subtasks run. Use `long_running_once` instead of `long_running` when the command is **idempotent setup** (e.g., Docker build, baseline profiling) that should survive retries of later subtasks.
-- **Looping iteration failure stops the loop**: If any single iteration fails after exhausting its retry attempts, the remaining iterations are NOT executed. Design subtask `completion_criteria` to be tolerant of partial or unexpected results if you want the loop to continue through difficult iterations.
-- **Nested subtasks**: `nested`/`looping` can be used as subtask types for multi-level nesting. Keep nesting shallow (2–3 levels max).
-
----
-
-## 3. Task Schema Reference
-
-### 3.1 Root-Level Fields
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `description` | string | **Yes** | Project-level description: goal, architecture, constraints, key paths |
-| `tasks` | list | Yes | Ordered list of top-level task definitions |
-
-> **Important:** Always include `description`. Without it, the AI has no overall project context. A good `description` may cover:
+### Components
 
 | Component | Purpose | Example | When needed |
 |-----------|---------|---------|-------------|
@@ -65,7 +72,9 @@ The AI agent can do anything a developer can: edit code, run commands, read logs
 | **Historical references** | Past work the AI should consult to avoid repeating failures | "doc/optimization_report_*.md — previous branch reports" | When the project runs across multiple branches/iterations |
 | **Reference docs** | Documentation the executor AI should read when it needs deeper understanding | "See docs/API.md for the REST interface spec" | When external/internal docs exist that the AI should consult on-demand |
 
-> **Not every project needs every component.** The table below shows which components are typical for different project types:
+### Which Components for Which Project Type
+
+Not every project needs every component:
 
 | Scenario | Typical components | Notes |
 |----------|-------------------|-------|
@@ -75,63 +84,17 @@ The AI agent can do anything a developer can: edit code, run commands, read logs
 | **Data pipeline / ETL** | Goal, Architecture, Key file paths, Key commands, Hard constraints, Rules | Emphasize file paths (input/output dirs) and commands (run pipeline, validate) |
 | **Research / exploration** (read code, write analysis) | Goal, Architecture, Key file paths, Reference docs, Rules | No build commands; emphasize reference docs and where to write findings |
 
-See the [Complete Example](#complete-example) at the end of this document for a full `description` demonstration.
-
-### 3.2 Common Fields (all types)
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | int/float | Yes | Unique ID. Integer for top-level, dot notation for subtasks (e.g., `1.1`) |
-| `name` | string | Yes | Concise, descriptive task name |
-| `type` | string | Yes | `simple`, `nested`, `looping`, `long_running`, `simple_once`, or `long_running_once` |
-| `completion_criteria` | string | Yes | Clear, specific, measurable success criteria |
-| `description` | string | No | Task-specific description. In AI scheduling mode, the scheduler uses this to understand the task — recommended to fill in. |
-| `model` | string | No | `"default"`, `"lite"`, or a direct model name. `"default"` will be used if not specified |
-| `system_prompt_prefix` | string | No | Custom AI persona/instructions for this task (see §5.3) |
-
-### 3.3 Type-Specific Fields
-
-**simple / simple_once / long_running / long_running_once:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `initial_hint` | string | No | Context and guidance for the executor AI (file paths, commands, troubleshooting) |
-| `max_attempts` | int | No | Max retry attempts (default: 5). When a task fails, it is retried up to this many times with feedback from previous attempts. |
-
-**nested:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `subtasks` | list | Yes | Ordered list of subtasks (any valid type, including nested/looping) |
-| `max_attempts` | int | No | Max retry rounds (default: 5) |
-
-**looping:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `subtasks` | list | Yes | Ordered list of subtasks |
-| `repeat_count` | int | Yes | Number of loop iterations (>= 1) |
-| `max_attempts_per_loop` | int | No | Max retries per iteration (default: 5) |
-
-### 3.4 Hierarchy Rules
-
-- **Top-level**: `simple`, `nested`, `looping`, `long_running`.
-- **Subtasks** (inside nested/looping): all six types allowed.
-- `simple_once` and `long_running_once` can ONLY be subtasks.
-- Nested subtasks have their own `max_attempts`/`repeat_count`, independent of the parent.
-
-### 3.5 ID Assignment Rules
-
-- **Top-level tasks**: Sequential integers starting from the next available ID.
-- **Subtasks**: Dot notation using parent ID as prefix (e.g., 6.1, 6.2, 6.3).
-- **Nested subtasks**: Continue the dot notation (e.g., 6.2.1, 6.2.2).
-- IDs must be unique across the entire `todos.yaml`. Subtask IDs determine execution order.
+See the [Complete Example](#8-complete-example) at the end of this document for a full `description` demonstration.
 
 ---
 
-## 4. Best Practice: Task Decomposition
+## 4. Design Principles
 
-### 4.1 Choosing the Right Structure
+💡 **These are best practices you should follow.** They represent lessons learned from real-world task execution.
+
+### 4.1 Task Decomposition
+
+#### Choosing the Right Structure
 
 | Scenario | Recommended structure |
 |----------|-----------------------|
@@ -144,7 +107,7 @@ See the [Complete Example](#complete-example) at the end of this document for a 
 - Use `nested` when the core goal is **reaching a specific end state** (e.g., "achieve 20% speedup", "all tests pass"). The AI evaluates the overall `completion_criteria` after each round and can stop early or retry intelligently.
 - Use `looping` when the core goal is **performing N rounds of work** (e.g., "do 5 rounds of optimization", "run 3 experiments with different configs"). There is no AI evaluation of overall completion — it simply repeats for `repeat_count` iterations.
 
-### 4.2 Anti-Patterns
+#### Anti-Patterns
 
 **Over-decomposition** — too many fine-grained subtasks:
 
@@ -200,17 +163,7 @@ If deployment fails, the AI retries the entire task including expensive training
 - **Context explosion** — the AI accumulates too much context across many steps, degrading output quality.
 - **AI laziness** — when faced with too many responsibilities in one task, the AI tends to take shortcuts (e.g., choosing the simplest optimization because there's so much else to do).
 
-### 4.3 State Persistence (Passing the Baton)
-
-Subtasks don't share conversation context. Use the filesystem:
-- **Producer subtask**: In `initial_hint`, instruct the AI to write results to a specific file (e.g., `step1_out.txt`).
-- **Consumer subtask**: In `initial_hint`, instruct the AI to read that file before proceeding.
-
----
-
-## 5. Best Practice: Common Fields
-
-### 5.1 `completion_criteria`
+### 4.2 Writing Good `completion_criteria`
 
 **How criteria are evaluated:**
 
@@ -270,7 +223,7 @@ completion_criteria: "Performance is improved"   # No baseline, no metric, no th
 | Describing process | "Run ncu, analyze the output, then identify the top bottleneck" is a to-do list, not criteria | "Key bottleneck identified and analysis saved to ncu_analysis.txt" — describe the outcome |
 | Unverifiable criteria | "Code is clean and well-documented" — the AI will always claim success | "All public functions have docstrings AND `pylint src/` scores >= 9.0" — use tool-checkable conditions |
 
-### 5.2 `initial_hint`
+### 4.3 Writing Good `initial_hint`
 
 Context and guidance provided to the executor AI for every attempt of this task.
 
@@ -305,7 +258,208 @@ initial_hint: |
   - If CUDA OOM: reduce batch_size in configs/model.yaml (16 → 8).
 ```
 
-### 5.3 `system_prompt_prefix`
+### 4.4 Anti-Hack Patterns
+
+When an AI agent executes tasks autonomously, it may "satisfy" completion criteria through unintended shortcuts — modifying tests, simplifying implementations, or hardcoding expected outputs. These patterns help prevent such reward hacking.
+
+#### Separate Implementation from Verification
+
+Use separate subtasks for "do the work" and "verify the work". The verification subtask should be **forbidden from modifying code**:
+
+```yaml
+subtasks:
+  - id: 1.1
+    name: "Fix the bug in parser module"
+    type: simple
+    completion_criteria: |
+      1. The bug described in issue #42 is fixed
+      2. cargo build succeeds
+      3. Do NOT modify any test files
+    initial_hint: |
+      Bug location: src/parser/tokenizer.rs
+      Scope: Only modify files under src/parser/
+
+  - id: 1.2
+    name: "Verify fix passes all tests"
+    type: simple
+    max_attempts: 1
+    model: lite
+    system_prompt_prefix: |
+      You are a test runner. Do NOT modify any source code or test files.
+    completion_criteria: |
+      1. cargo test --all passes (exit code 0)
+      2. git diff --name-only shows NO changes to files under tests/
+```
+
+#### Explicit Negative Constraints
+
+For every "implement X" task, think about what the AI should NOT do:
+
+```yaml
+# BAD: No negative constraints — AI could delete failing tests
+completion_criteria: |
+  All tests pass.
+
+# GOOD: Explicit protection
+completion_criteria: |
+  1. All tests in tests/ pass (cargo test --all, exit code 0)
+  2. No test files were modified (git diff --name-only shows no files under tests/)
+  3. No test cases were removed or weakened
+```
+
+#### Scope Boundaries
+
+Restrict which files/directories the AI may modify:
+
+```yaml
+initial_hint: |
+  Scope: Only modify files under src/handlers/auth/
+  Do NOT modify:
+  - Any files under tests/
+  - config/security.yaml
+  - src/middleware/
+```
+
+#### Use `git diff` as a Verification Tool
+
+Include `git diff` checks in verification subtasks to detect unexpected changes:
+
+```yaml
+completion_criteria: |
+  1. All tests pass
+  2. git diff --stat shows changes ONLY in src/parser/ directory
+  3. No new files created outside src/parser/
+```
+
+### 4.5 Retry and Failure Handling
+
+When a subtask is retried, previous attempts may have modified files. The AI has summaries of previous attempts but **filesystem changes persist**.
+
+**Guidelines:**
+- **Mention cleanup in `initial_hint`** when a task modifies shared state:
+  ```yaml
+  initial_hint: |
+    NOTE: If a previous attempt left partial changes, check the state of
+    build/ and src/generated/ before starting.
+  ```
+- **Prefer append/overwrite patterns** over incremental mutations — writing a complete output file is naturally idempotent.
+- **Use git as a safety net** in `initial_hint` when appropriate: "Run `git diff` first to check for unexpected changes."
+- **Don't over-engineer for idempotency** — it's enough to make the AI *aware* that residual state may exist.
+
+**Defensive task design** — when tasks depend on external tools or services:
+
+- **In `completion_criteria`** — handle partial success explicitly:
+  ```yaml
+  completion_criteria: |
+    1. At least 8 out of 10 test suites pass.
+    2. Any failing suites are documented in test_failures.txt.
+  ```
+- **In `initial_hint`** — include prerequisite checks:
+  ```yaml
+  initial_hint: |
+    Before starting: verify the project builds and correctness test passes.
+    If either fails, fix that FIRST.
+  ```
+
+**Subtask failure in nested/looping tasks:**
+- Design subtasks so failure can be diagnosed from output.
+- Align subtask boundaries with logical checkpoints — retrying from step 2 or 3 should be meaningful.
+- Avoid subtasks that silently fail — ensure errors are visible in output.
+
+### 4.6 State Persistence (Passing the Baton)
+
+Subtasks don't share conversation context. Use the filesystem:
+- **Producer subtask**: In `initial_hint`, instruct the AI to write results to a specific file (e.g., `step1_out.txt`).
+- **Consumer subtask**: In `initial_hint`, instruct the AI to read that file before proceeding.
+
+---
+
+## 5. Schema Reference
+
+📖 **Reference section — consult as needed.** You don't need to read this top-to-bottom; look up specific types and fields when designing tasks.
+
+### 5.1 Task Types
+
+| Type | Description | Scope | When to use |
+|------|-------------|-------|-------------|
+| `simple` | AI works autonomously, then self-evaluates completion | Top-level or subtask | Code changes, running tests, file analysis, quick builds |
+| `nested` | Sequential subtasks + AI evaluation of overall completion; When fails consecutively, retries with guidance | Top-level or subtask | Multi-step workflows where overall success depends on combined result |
+| `looping` | Repeat all subtasks for fixed N iterations; NO AI evaluation for overall completion | Top-level or subtask | Iterative optimization cycles (profile → optimize → benchmark) |
+| `long_running` | AI launches a long-running background command (e.g. training) that runs without session timeout | Top-level or subtask | Any command that may take > 1 minute (builds, tests, benchmarks, training, profiling) |
+| `simple_once` | Like `simple`, but never re-executed once completed | Subtask only | One-time setup (env prep, dependency install, data download) |
+| `long_running_once` | Like `long_running`, but never re-executed once completed | Subtask only | Expensive one-time operations (Docker build, baseline profiling) |
+
+**Key Notes:**
+
+- **Prefer `long_running` over `simple`** for any command that may take > 1 minute. If a command runs too long inside `simple`, the AI session may hit a timeout, wasting all progress. `long_running` runs the command in the background with proper monitoring — minimal overhead, prevents session timeouts.
+- **`*_once` types**: Use sparingly. Most subtasks SHOULD be re-executable. Don't use `*_once` if a subtask's output might become stale after other subtasks run. Use `long_running_once` instead of `long_running` when the command is **idempotent setup** (e.g., Docker build, baseline profiling) that should survive retries of later subtasks.
+- **Looping iteration failure stops the loop**: If any single iteration fails after exhausting its retry attempts, the remaining iterations are NOT executed. Design subtask `completion_criteria` to be tolerant of partial or unexpected results if you want the loop to continue through difficult iterations.
+- **Nested subtasks**: `nested`/`looping` can be used as subtask types for multi-level nesting. Keep nesting shallow (2–3 levels max).
+
+### 5.2 Root-Level Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `description` | string | **Yes** | Project-level description: goal, architecture, constraints, key paths. See §3. |
+| `tasks` | list | Yes | Ordered list of top-level task definitions |
+
+### 5.3 Common Fields (all types)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | int/float | Yes | Unique ID. Integer for top-level, dot notation for subtasks (e.g., `1.1`) |
+| `name` | string | Yes | Concise, descriptive task name |
+| `type` | string | Yes | `simple`, `nested`, `looping`, `long_running`, `simple_once`, or `long_running_once` |
+| `completion_criteria` | string | Yes | Clear, specific, measurable success criteria |
+| `description` | string | No | Task-specific description. In AI scheduling mode, the scheduler uses this to understand the task — recommended to fill in. |
+| `model` | string | No | `"default"`, `"lite"`, or a direct model name. `"default"` will be used if not specified |
+| `system_prompt_prefix` | string | No | Custom AI persona/instructions for this task (see §6.1) |
+
+### 5.4 Type-Specific Fields
+
+**simple / simple_once / long_running / long_running_once:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `initial_hint` | string | No | Context and guidance for the executor AI (file paths, commands, troubleshooting) |
+| `max_attempts` | int | No | Max retry attempts (default: 5). When a task fails, it is retried up to this many times with feedback from previous attempts. |
+
+**nested:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `subtasks` | list | Yes | Ordered list of subtasks (any valid type, including nested/looping) |
+| `max_attempts` | int | No | Max retry rounds (default: 5) |
+
+**looping:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `subtasks` | list | Yes | Ordered list of subtasks |
+| `repeat_count` | int | Yes | Number of loop iterations (>= 1) |
+| `max_attempts_per_loop` | int | No | Max retries per iteration (default: 5) |
+
+### 5.5 Hierarchy and ID Rules
+
+**Hierarchy:**
+- **Top-level**: `simple`, `nested`, `looping`, `long_running`.
+- **Subtasks** (inside nested/looping): all six types allowed.
+- `simple_once` and `long_running_once` can ONLY be subtasks.
+- Nested subtasks have their own `max_attempts`/`repeat_count`, independent of the parent.
+
+**ID Assignment:**
+- **Top-level tasks**: Sequential integers starting from the next available ID.
+- **Subtasks**: Dot notation using parent ID as prefix (e.g., 6.1, 6.2, 6.3).
+- **Nested subtasks**: Continue the dot notation (e.g., 6.2.1, 6.2.2).
+- IDs must be unique across the entire `todos.yaml`. Subtask IDs determine execution order.
+
+---
+
+## 6. Field Usage Guide
+
+📖 **Reference section** for `system_prompt_prefix`, `max_attempts`, and `model` fields.
+
+### 6.1 `system_prompt_prefix`
 
 Customizes the AI's persona, role, or task-specific instructions.
 
@@ -320,7 +474,7 @@ Using `system_prompt_prefix` to restrict behavior is especially useful for execu
 
 > **Note:** `system_prompt_prefix` on a top-level `nested` or `looping` task is not supported — set it on individual subtasks instead.
 
-### 5.4 `max_attempts`
+### 6.2 `max_attempts`
 
 **Scope of `max_attempts` differs by level:**
 
@@ -341,7 +495,7 @@ Using `system_prompt_prefix` to restrict behavior is especially useful for execu
 
 **Do NOT** set `max_attempts: 1` on subtasks where the AI actively writes code — those benefit from multiple attempts with different strategies.
 
-### 5.5 `model`
+### 6.3 `model`
 
 | Value | When to use |
 |-------|-------------|
@@ -351,52 +505,9 @@ Using `system_prompt_prefix` to restrict behavior is especially useful for execu
 
 ---
 
-## 6. Retry and Failure Handling
-
-### 6.1 Designing for Retry Resilience
-
-When a subtask is retried, previous attempts may have modified files. The AI has summaries of previous attempts but **filesystem changes persist**.
-
-**Guidelines:**
-- **Mention cleanup in `initial_hint`** when a task modifies shared state:
-  ```yaml
-  initial_hint: |
-    NOTE: If a previous attempt left partial changes, check the state of
-    build/ and src/generated/ before starting.
-  ```
-- **Prefer append/overwrite patterns** over incremental mutations — writing a complete output file is naturally idempotent.
-- **Use git as a safety net** in `initial_hint` when appropriate: "Run `git diff` first to check for unexpected changes."
-- **Don't over-engineer for idempotency** — it's enough to make the AI *aware* that residual state may exist.
-
-### 6.2 Defensive Task Design
-
-When tasks depend on external tools or services:
-
-- **In `completion_criteria`** — handle partial success explicitly:
-  ```yaml
-  # GOOD: acknowledges partial results
-  completion_criteria: |
-    1. At least 8 out of 10 test suites pass.
-    2. Any failing suites are documented in test_failures.txt.
-  ```
-- **In `initial_hint`** — include prerequisite checks:
-  ```yaml
-  initial_hint: |
-    Before starting: verify the project builds and correctness test passes.
-    If either fails, fix that FIRST.
-  ```
-
-### 6.3 Subtask Failure in Nested/Looping Tasks
-
-When a subtask fails, earlier subtasks may be retried with guidance.
-
-- Design subtasks so failure can be diagnosed from output.
-- Align subtask boundaries with logical checkpoints — retrying from step 2 or 3 should be meaningful.
-- Avoid subtasks that silently fail — ensure errors are visible in output.
-
 ## 7. Task-Type-Specific Best Practices
 
-The patterns above apply universally. For detailed patterns tailored to specific task types, read the relevant guide:
+📖 **Read only the guide relevant to your task** — you don't need to read all of them.
 
 | Task type | Guide | When to use |
 |-----------|-------|-------------|
@@ -407,34 +518,9 @@ The patterns above apply universally. For detailed patterns tailored to specific
 | **Setup & Deployment** | `setup_and_deployment.md` | Environment setup, dependency install, deployment |
 | **Research & Analysis** | `research_and_analysis.md` | Code analysis, architecture review, report writing |
 
-> **Note:** Read only the guide relevant to your task — you don't need to read all of them.
-
 ---
 
-## 8. Checklist
-Use this checklist to verify your `todos.yaml` before submission:
-
-- [ ] **Root `description`** exists and covers: Goal, Architecture, Key file paths, Hard constraints, Rules
-- [ ] **Every task** has `id`, `name`, `type`, `completion_criteria`
-- [ ] **`completion_criteria`** are specific, measurable, and verifiable by the AI (not vague like "code is good")
-- [ ] **`initial_hint`** provides key file paths, commands, and constraints — not a rigid step-by-step script
-- [ ] **No over-decomposition**: subtasks are grouped by failure mode, not by individual commands (2–3 subtasks typical)
-- [ ] **No under-decomposition**: expensive steps (training, build) are separate from cheap steps (evaluation, reporting)
-- [ ] **`long_running`** is used for any command that may take > 1 minute
-- [ ] **`max_attempts: 1`** is set on execution-only subtasks (build, benchmark, test) that don't write code
-- [ ] **`model: "lite"`** is set on straightforward execution tasks; complex reasoning uses default
-- [ ] **`*_once` types** are used only for true one-time setup that should survive retries
-- [ ] **State persistence**: inter-subtask data is written to files, not assumed in conversation context
-- [ ] **Retry resilience**: tasks that modify shared state mention cleanup in `initial_hint`
-- [ ] **ID assignment**: top-level IDs are sequential integers; subtask IDs use dot notation (e.g., 1.1, 1.2)
-- [ ] **Subtask boundaries** align with logical checkpoints and independent failure modes
-- [ ] **Type-specific patterns**: read the relevant guide in §7 for your task type (build, test, optimization, etc.)
-
----
-
----
-
-## 9. Complete Example
+## 8. Complete Example
 
 Below is a concise `todos.yaml` demonstrating key patterns: root `description`, task types (`simple`, `long_running`, `looping`), `completion_criteria`, `initial_hint`, `system_prompt_prefix`, `model` selection, and `max_attempts`.
 

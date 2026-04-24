@@ -118,6 +118,7 @@ def prepend_system_prompt_prefix(prompt: str, task: dict = None) -> str:
 # ---------------------------------------------------------------------------
 
 _task_design_guide_cache: dict[str, str] = {}
+_adversarial_guide_cache: str | None = None
 
 # Directory containing the task design guide and its sub-guides.
 _GUIDE_DIR = os.path.normpath(
@@ -129,6 +130,8 @@ _GUIDE_FILENAMES = {
     "linear": "TASK_DESIGN_GUIDE.md",
     "ai": "TASK_DESIGN_GUIDE_AI_SCHED.md",
 }
+
+_ADVERSARIAL_GUIDE_FILENAME = "ADVERSARIAL_REVIEW_GUIDE.md"
 
 
 def load_task_design_guide(mode: str = "linear") -> str:
@@ -153,6 +156,34 @@ def load_task_design_guide(mode: str = "linear") -> str:
     global _task_design_guide_cache
     if mode in _task_design_guide_cache:
         return _task_design_guide_cache[mode]
+
+
+def load_adversarial_review_guide() -> str:
+    """Load and cache the content of the adversarial review guide.
+
+    Loads ``autoagent/task_design_guide/ADVERSARIAL_REVIEW_GUIDE.md``.
+
+    Returns:
+        The full text of the guide, or a short fallback message if the file
+        cannot be read.
+    """
+    global _adversarial_guide_cache
+    if _adversarial_guide_cache is not None:
+        return _adversarial_guide_cache
+
+    guide_path = os.path.join(_GUIDE_DIR, _ADVERSARIAL_GUIDE_FILENAME)
+    try:
+        with open(guide_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        _adversarial_guide_cache = content
+    except OSError as e:
+        logger.warning(f"Failed to load {_ADVERSARIAL_GUIDE_FILENAME}: {e}")
+        _adversarial_guide_cache = (
+            "(Adversarial Review Guide not available — focus on finding "
+            "loopholes in completion_criteria, initial_hint, and missing "
+            "negative constraints.)"
+        )
+    return _adversarial_guide_cache
 
     guide_filename = _GUIDE_FILENAMES.get(mode, _GUIDE_FILENAMES["linear"])
     guide_path = os.path.join(_GUIDE_DIR, guide_filename)
