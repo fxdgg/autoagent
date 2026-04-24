@@ -290,10 +290,6 @@ def main():
 
     # Load config.yaml defaults
     config = _load_config()
-    default_session_timeout = config.get('session_timeout', DEFAULTS['session_timeout'])
-    default_bash_timeout = config.get('bash_timeout', DEFAULTS['bash_timeout'])
-    default_idle_interval = config.get('idle_interval', DEFAULTS['idle_interval'])
-    default_max_attempts = config.get('default_max_attempts', DEFAULTS['default_max_attempts'])
 
     parser = argparse.ArgumentParser(
         description="AI-driven task execution system (supports CodeBuddy, Claude Code, Gemini CLI, Codex, OpenCode)",
@@ -453,6 +449,13 @@ Examples:
              'Preset values can be overridden by command-line arguments.',
     )
     preset_group.add_argument(
+        '--settings',
+        default=None,
+        help='Path to a custom YAML settings file whose fields override the '
+             'built-in config.yaml values (shallow merge). '
+             'Example: --settings my_settings.yaml',
+    )
+    preset_group.add_argument(
         '--generate-default-config',
         action='store_true',
         help='Overwrite config.yaml with the built-in defaults and exit. '
@@ -510,6 +513,32 @@ Examples:
         written = generate_default_config(config_path)
         print(f"✅ Default config.yaml written to: {written}")
         return
+
+    # Apply --settings overlay (shallow merge over default config.yaml)
+    if args.settings:
+        settings_path = os.path.abspath(args.settings)
+        if not os.path.isfile(settings_path):
+            print(f"❌ Settings file not found: {settings_path}")
+            sys.exit(1)
+        try:
+            with open(settings_path, 'r', encoding='utf-8') as f:
+                settings = yaml.safe_load(f) or {}
+            config.update(settings)
+            print(f"✓ Applied settings from: {settings_path}")
+            logger.debug(f"Settings overlay: {settings}")
+        except Exception as e:
+            print(f"❌ Failed to load settings file: {e}")
+            sys.exit(1)
+
+    # Register merged config globally so all modules can access it
+    from util.config_registry import set_config
+    set_config(config)
+
+    # Extract config values (after --settings merge)
+    default_session_timeout = config.get('session_timeout', DEFAULTS['session_timeout'])
+    default_bash_timeout = config.get('bash_timeout', DEFAULTS['bash_timeout'])
+    default_idle_interval = config.get('idle_interval', DEFAULTS['idle_interval'])
+    default_max_attempts = config.get('default_max_attempts', DEFAULTS['default_max_attempts'])
 
     # Resolve workspace early for preset loading
     _workspace_abs = os.path.abspath(args.workspace)

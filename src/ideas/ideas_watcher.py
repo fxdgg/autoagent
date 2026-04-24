@@ -47,7 +47,7 @@ from util.default_value import DEFAULTS
 
 
 def _load_ideas_config() -> dict:
-    """Load ideas-related settings from config.yaml.
+    """Load ideas-related settings from config registry or config.yaml.
 
     Returns:
         dict with keys 'max_review_rounds', 'max_validation_retries',
@@ -58,6 +58,17 @@ def _load_ideas_config() -> dict:
         'max_validation_retries': DEFAULTS['max_validation_retries'],
         'max_plan_retries': DEFAULTS['max_plan_retries'],
     }
+
+    from util.config_registry import get_config, is_registered
+    if is_registered():
+        cfg = get_config()
+        for key in defaults:
+            val = cfg.get(key)
+            if val is not None:
+                defaults[key] = int(val)
+        return defaults
+
+    # Fallback: load from disk
     config_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml"
     )

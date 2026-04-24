@@ -31,7 +31,7 @@ _show_console_cache: bool | None = None
 
 
 def _load_fast_fail_timeout() -> int:
-    """Load fast_fail_timeout from config.yaml (cached after first call).
+    """Load fast_fail_timeout from config registry or config.yaml (cached after first call).
 
     Returns:
         The configured fast-fail timeout in seconds.
@@ -40,6 +40,13 @@ def _load_fast_fail_timeout() -> int:
     if _fast_fail_timeout_cache is not None:
         return _fast_fail_timeout_cache
 
+    from util.config_registry import get_config, is_registered
+    if is_registered():
+        value = get_config().get("fast_fail_timeout", DEFAULTS["fast_fail_timeout"])
+        _fast_fail_timeout_cache = int(value)
+        return _fast_fail_timeout_cache
+
+    # Fallback: load from disk
     config_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml"
     )
@@ -57,7 +64,7 @@ def _load_fast_fail_timeout() -> int:
 
 
 def _load_show_console() -> bool:
-    """Load autoagent_exec_show_console from config.yaml (cached).
+    """Load autoagent_exec_show_console from config registry or config.yaml (cached).
 
     Returns:
         True if the subprocess should get a visible console window (Windows).
@@ -66,6 +73,12 @@ def _load_show_console() -> bool:
     if _show_console_cache is not None:
         return _show_console_cache
 
+    from util.config_registry import get_config, is_registered
+    if is_registered():
+        _show_console_cache = bool(get_config().get("autoagent_exec_show_console", DEFAULTS["autoagent_exec_show_console"]))
+        return _show_console_cache
+
+    # Fallback: load from disk
     config_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml"
     )

@@ -52,7 +52,12 @@ class RateLimitError(AICallError):
     pass
 
 def _load_default_model():
-    """Load default model from config.yaml."""
+    """Load default model from config registry or config.yaml."""
+    from util.config_registry import get_config, is_registered
+    if is_registered():
+        return get_config().get("default_model", DEFAULTS["default_model"])
+
+    # Fallback: load from disk
     config_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml"
     )

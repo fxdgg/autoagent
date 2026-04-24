@@ -23,7 +23,7 @@ _system_prompt_prefix_cache: str | None = None
 
 
 def load_system_prompt_prefix() -> str:
-    """Load and cache the system_prompt_prefix from config.yaml.
+    """Load and cache the system_prompt_prefix from config registry or config.yaml.
 
     Returns:
         The prefix string, or empty string if not configured.
@@ -32,6 +32,13 @@ def load_system_prompt_prefix() -> str:
     if _system_prompt_prefix_cache is not None:
         return _system_prompt_prefix_cache
 
+    from util.config_registry import get_config, is_registered
+    if is_registered():
+        cfg = get_config()
+        _system_prompt_prefix_cache = cfg.get("system_prompt_prefix", DEFAULTS["system_prompt_prefix"]) or ""
+        return _system_prompt_prefix_cache
+
+    # Fallback: load from disk
     config_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml"
     )

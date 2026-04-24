@@ -32,11 +32,21 @@ __all__ = [
 # ── Config loading ──────────────────────────────────────────────────
 
 def load_orchestrator_config() -> dict:
-    """Load config.yaml from the project root (two levels up from this file).
+    """Return the merged configuration dict.
+
+    Prefers the globally registered config (set by ``orchestrator.py``
+    after merging default config.yaml with any ``--settings`` overlay).
+    Falls back to loading ``config.yaml`` from disk when the registry
+    has not been initialised (e.g. in unit tests).
 
     Returns:
         dict: Configuration values. Empty dict if file not found.
     """
+    from util.config_registry import get_config, is_registered
+    if is_registered():
+        return get_config()
+
+    # Fallback: load from disk (for standalone / test usage)
     config_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml"
     )

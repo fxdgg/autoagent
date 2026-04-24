@@ -19,6 +19,11 @@ _DEFAULTS = {
 
 
 def _load():
+    from util.config_registry import get_config, is_registered
+    if is_registered():
+        return get_config().get('truncation_limits', {})
+
+    # Fallback: load from disk
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.yaml")
     if os.path.isfile(config_path):
         try:

@@ -18,11 +18,19 @@ logger = logging.getLogger(__name__)
 
 
 def _load_max_marker_nudges() -> int:
-    """Load ``max_marker_nudges`` from config.yaml.
+    """Load ``max_marker_nudges`` from config registry or config.yaml.
 
     Falls back to ``DEFAULTS["max_marker_nudges"]`` if the key is missing
     or the file cannot be read.
     """
+    from util.config_registry import get_config, is_registered
+    if is_registered():
+        val = get_config().get("max_marker_nudges")
+        if val is not None:
+            return int(val)
+        return DEFAULTS["max_marker_nudges"]
+
+    # Fallback: load from disk
     config_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         "config.yaml",

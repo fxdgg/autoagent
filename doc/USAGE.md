@@ -240,6 +240,7 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--preset` | `default` | 使用的 Preset 名称 |
+| `--settings` | 无 | 自定义配置文件路径，字段覆盖默认 config.yaml（浅合并） |
 | `--generate-default-config` | false | 生成默认配置文件 |
 
 ### 工具
@@ -292,7 +293,7 @@ preset:
 python orchestrator.py --preset general --workspace ./my_project
 ```
 
-**优先级**：命令行参数 > Preset > config.yaml 全局设置 > 内置默认值
+**优先级**：命令行参数 > Preset > `--settings` 文件 > config.yaml 全局设置 > 内置默认值
 
 `${workspace}` 变量会在加载时自动展开为实际工作目录。
 
