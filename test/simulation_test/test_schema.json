@@ -46,9 +46,9 @@
     },
     {
         "name": "Ideas decomposition + execution",
-        "project_root": "cufftdx_optimization",
+        "project_root": "cufftdx_optimization_linear_idea",
         "test_rules": "test_rules_4.txt",
-        "extra_args": ["--ideas", "cufftdx_optimization/ideas.md", "--no-idle", "--mode", "linear"],
+        "extra_args": ["--ideas", "cufftdx_optimization_linear_idea/ideas.md", "--no-idle", "--mode", "linear"],
         "expected_exit_code": 0,
         "expected_tasks": {
             "1":   {"status": "completed"},

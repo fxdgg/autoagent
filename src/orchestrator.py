@@ -763,6 +763,7 @@ Examples:
             backoff_max_wait=backoff_max,
             model_roles=model_roles,
             default_max_attempts=default_max_attempts,
+            cli_mode=args.mode,
         )
         
         # Handle special commands
@@ -799,6 +800,12 @@ Examples:
         if requested_mode == 'ai' and not has_ai_orchestrator:
             print("❌ --mode ai requires 'ai_orchestrator' field in todos.yaml.")
             print("   Add an ai_orchestrator section to your config or use --mode linear.")
+            sys.exit(1)
+
+        if requested_mode == 'linear' and has_ai_orchestrator and orchestrator.ideas_watcher:
+            print("❌ --mode linear is not allowed when ideas mode is enabled and")
+            print("   todos.yaml contains an ai_orchestrator field.")
+            print("   Remove --mode linear or disable ideas mode (remove --ideas).")
             sys.exit(1)
 
         # Resolve effective mode: explicit > auto-detect

@@ -95,6 +95,7 @@ class TodoOrchestrator(AISchedulerMixin):
         backoff_max_wait: int = None,
         model_roles: dict = None,
         default_max_attempts: int = None,
+        cli_mode: str = None,
     ):
         """
         Initialize the TodoOrchestrator.
@@ -124,6 +125,8 @@ class TodoOrchestrator(AISchedulerMixin):
                      parsed by parse_model_spec(). None uses provider's default model.
             default_max_attempts: Global default for task/subtask max retry attempts.
                      Individual tasks can override via their own max_attempts field.
+            cli_mode: Execution mode from CLI --mode argument ("linear" or "ai").
+                     Passed to IdeasWatcher for fallback when todos.yaml is empty.
         """
         self.todos_file = todos_file
         self.workspace = os.path.abspath(workspace)
@@ -180,6 +183,7 @@ class TodoOrchestrator(AISchedulerMixin):
                 ideas_file=ideas_file,
                 todos_file=todos_file,
                 plans_state_file=resolved_plans_state,
+                cli_mode=cli_mode,
             )
         else:
             self.ideas_watcher = None

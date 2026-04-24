@@ -114,6 +114,7 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
         ideas_file: str = "ideas.md",
         todos_file: str = "todos.yaml",
         plans_state_file: str = None,
+        cli_mode: str = None,
     ):
         """
         Initialize IdeasWatcher.
@@ -123,10 +124,13 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
             todos_file: Path to the todos YAML configuration file
             plans_state_file: Path to the plans state YAML file
                 (default: plans_state.yaml in the same directory)
+            cli_mode: Execution mode from CLI --mode argument ("linear" or "ai").
+                Used as fallback when todos.yaml is empty.
         """
         self.ideas_file = ideas_file
         self.todos_file = todos_file
         self.plans_state_file = plans_state_file or self.PLANS_STATE_FILE
+        self._cli_mode = cli_mode
         self._lock = threading.Lock()
         self._plans_state = self._load_plans_state()
         self._last_mtime = 0.0
@@ -141,15 +145,24 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
     # ── Mode detection ──────────────────────────────────────────────────
 
     def _detect_mode(self) -> str:
-        """Detect execution mode from todos.yaml.
+        """Detect execution mode from todos.yaml, with CLI fallback.
 
-        Returns ``"ai"`` if the config contains an ``ai_orchestrator`` key,
-        otherwise ``"linear"``.
+        If todos.yaml has content (contains ``tasks`` or ``ai_orchestrator``),
+        the mode is determined by the presence of ``ai_orchestrator``.
+        If todos.yaml is empty (or only whitespace), the CLI ``--mode``
+        argument is used as a fallback (defaults to ``"linear"``).
+
+        Returns:
+            ``"ai"`` or ``"linear"``.
         """
         config = self._load_existing_config()
-        if config.get('ai_orchestrator'):
-            return "ai"
-        return "linear"
+        # If config has meaningful content, detect from it
+        if config and (config.get('tasks') or config.get('ai_orchestrator')):
+            if config.get('ai_orchestrator'):
+                return "ai"
+            return "linear"
+        # Empty todos.yaml: fall back to CLI --mode argument
+        return self._cli_mode or "linear"
 
     # ── Plans state management ──────────────────────────────────────────
 
