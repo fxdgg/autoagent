@@ -964,6 +964,8 @@ class AISchedulerMixin:
                     },
                 )
                 success = result.success
+                # Store response_text for _save_task_response_result
+                self._last_lr_response_text = getattr(result, 'response_text', '') or ''
             else:
                 raise ConfigError(f"Unknown task type: {task_type}")
 
@@ -1073,6 +1075,11 @@ class AISchedulerMixin:
                 simple_exec = getattr(subtask_exec, 'simple_executor', None)
                 if simple_exec:
                     response_text = getattr(simple_exec, 'last_response_text', '')
+        elif task_type == 'long_running':
+            # For long_running tasks, response_text is stored by
+            # _execute_scheduled_task after execution completes.
+            response_text = getattr(self, '_last_lr_response_text', '')
+            self._last_lr_response_text = ''  # Consume after use
 
         if response_text:
             from util.truncation_limits import limits
