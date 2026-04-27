@@ -1,6 +1,6 @@
 # Task Design Guide for AI Agents
 
-Reference for AI agents that generate TODO tasks.
+Reference for AI agents that generate `todos.yaml` tasks for AutoAgent.
 
 ---
 
@@ -10,7 +10,10 @@ Reference for AI agents that generate TODO tasks.
 
 ### Schema Rules
 
-1. **Root `description`** exists and covers: Goal, Architecture, Key file paths, Hard constraints, Rules. See §3 for full guidance.
+1. **Root `description`** exists and:
+(1) covers Goal, Architecture, Key file paths, Hard constraints, Rules;
+(2) does not cover step-by-step instructions which should belong to `initial_hint`.
+See §3 for full guidance.
 2. **Every task** has `id`, `name`, `type`, `completion_criteria`.
 3. **ID assignment**: top-level IDs are sequential integers; subtask IDs use dot notation (e.g., 1.1, 1.2).
 4. **`*_once` types** (`simple_once`, `long_running_once`) can ONLY be subtasks, not top-level tasks.
@@ -20,578 +23,403 @@ Reference for AI agents that generate TODO tasks.
 
 I. Task Decomposition
 
-6. **No over-decomposition**: (1) keep logically dependent work in one task (e.g. when implementing tightly coupled modules A and B). (2) Keep implement + build + test in one subtask so the AI can iterate without re-entering the same task. (3) Split tasks only at trust boundaries (e.g. anti-hack verification must be a separate subtask) or expensive/time-consuming checkpoints (See rule 8). 2–4 subtasks typical. See §4.1.
-7. **No under-decomposition**: separate expensive (e.g. idea composition, implementation) and time-consuming steps (e.g. training) into distinct subtasks. See §4.1.
-8. **State persistence**: inter-subtask data is written to files, not assumed in conversation context. See §4.7.
-9. **Failure resilience**: tasks may inherit broken state from (a) their own failed retries, or (b) a predecessor task that failed and left partial changes. In Linear mode there is no scheduler to skip tasks, so include prerequisite checks in `initial_hint` (e.g. "verify the project builds before starting"). See §4.5.
+6. **No over-decomposition**:
+(1) keep logically dependent work in one subtask (e.g. when implementing tightly coupled modules A and B).
+(2) Keep implement + build + test in one subtask so the AI can self-correct in the same session.
+(3) Split tasks only at trust boundaries (e.g. anti-hack verification must be a separate subtask) or expensive/time-consuming checkpoints (See rule 7).
+(4) 2-4 subtasks typical for one task. See §4.1.
+7. **No under-decomposition**: separate expensive (e.g. idea composition, implementation) and time-consuming steps (e.g. training, benchmark, verification, reporting) into distinct subtasks. See §4.1.
+8. **Search for fast-check build/test modes**: when merging implement + build + test in one subtask, search for fast-check/profile mode in build/test framework instead of running the full test/training. This will significantly speed up self-correction. Split long-running full test/training to subsequent benchmark task.
+9. **Choose `nested` vs `looping` by evaluation behavior**: use `nested` to reach a target end state with overall AI evaluation/retry; use `looping` to run a fixed number of iterations without overall completion evaluation. See §4.1 and §5.2.
+10. **State persistence**: write inter-task handoffs to named files; never assume the next task can see prior conversation context. See §4.7.
+11. **Failure resilience**: tasks may inherit broken state from (a) their own failed retries, or (b) a predecessor task that failed and left partial changes. Include prerequisite checks in `initial_hint` and reports in `completion_criteria` for preceding failures. See §4.6.
 
 II. Task Fields
 
-10. **`completion_criteria`** are specific, measurable, and verifiable by the AI — not vague like "code is good". See §4.2.
-11. **`initial_hint`** provides key file paths, commands, and constraints — not a rigid step-by-step script. See §4.3.
-12. **`max_attempts: 1`** is set on execution-only subtasks (build, benchmark, test) that don't write code. See §6.2.
-13. **`model: "lite"`** is set on straightforward execution tasks; use default for tasks that requires complex reasoning. See §6.3.
+12. **`completion_criteria`** are specific, measurable, and verifiable by the AI —— not vague or subjective like "code is good". See §4.2.
+13. **`initial_hint`** lists the exact paths, commands, prerequisites, scope boundaries, and handoff files needed for the task, but it must not duplicate `completion_criteria` or become a rigid click-by-click script. See §4.3.
+14. **`system_prompt_prefix`** defines the AI persona, role, expertise, style, and hard behavior constraints for any task, but not a substitute for `initial_hint`. See §4.4 and §6.1.
+15. **`max_attempts: 1`** is set on execution-only tasks (build, benchmark, test) that don't write code for fast failure propagation. Do not set `max_attempts: 1` on active coding tasks that benefit from retries. See §6.2.
+16. **`model: "lite"`** is set on deterministic execution tasks; use default for most reasoning-heavy tasks like debugging, design, optimization, implementation, anti-hack review and keep/discard decisions. See §6.3.
+17. **`git commit` is used** when each task or subtask completes.
 
 III. Type-specific Guide
 
-14. **Type-specific patterns**: read the relevant guide in §7 for your task type.
+18. **Type-specific patterns**: choose the single guide in §7 matching the task domain before designing task boundaries.
 
 ### Anti-Hack Rules
 
-15. **Negative constraints**: For every "implement X" task, explicitly state what must NOT be modified (test files, configs, unrelated modules).
-16. **Verification separation**: Separate "implement" from "verify" into different subtasks. Verify subtask should use `max_attempts: 1` for fast error propagation, use `system_prompt_prefix` to forbid code modification, and include anti-hack checks for complex implementations.
-17. **Scope boundaries**: When a task modifies code, specify which files/directories are in scope. Forbid changes outside that scope.
+19. **Negative constraints in `completion_criteria`**: For every "implement X" task, `completion_criteria` should explicitly state what must not happen (e.g. no weakened tests, no unrelated files, no API changes, no regressions, or no forbidden generated outputs).
+20. **Scope boundaries**: When a task modifies code, specify which files/directories are in scope. Forbid changes outside that scope.
+21. **Verification separation**: Separate "implement" from "verify" (e.g. verification, anti-hack check, static quality review) into different subtasks.
+Verification subtasks must (a) check for negative constraints in rule 18; (b) use `system_prompt_prefix` to forbid code modification and `max_attempts: 1` for fast error propagation.
+
+### ⚠️ Critical Pitfalls —— Must Double Check
+
+22. Are inter-task handoffs written to named files instead of relying on conversation context?
+23. Are completion criteria specific, measurable, and verifiable enough?
+24. Does `completion_criteria` include negative constraints, and is there a verify task after each implement task for complex implementations?
 
 ---
 
 ## 2. Execution Model Overview
 
-AutoAgent drives an AI coding agent (e.g. Codex, Gemini CLI, Claude Code) through a sequence of tasks defined in `todos.yaml`.
+AutoAgent drives an AI coding agent (e.g. Codex, Gemini CLI, Claude Code) through tasks defined in `todos.yaml`.
 
-| Property | Implication for task design |
-|----------|-----------------------------|
-| **Fully autonomous** | No human in the loop. `completion_criteria` and `initial_hint` must be specific enough for the AI to act without clarification. |
-| **No shared conversation context between tasks and subtasks** | Tasks and subtasks **share the filesystem only**. The AI session is reset between each subtask. Each subtask automatically receives a workflow overview and a summary of the previous step, but **detailed intermediate results must be persisted to files** — conversation context is NOT shared. |
-| **Sequential execution** | Top-level tasks run in ascending ID order. Task N+1 starts only after task N completes or exhausts retries. |
-| **Failed tasks don't block** | A failed task does NOT prevent subsequent tasks from running. Later tasks may depend on artifacts produced by earlier tasks. Design ordering carefully. |
+1. **Fully autonomous —— No human is in the loop**
+
+**Implication**: `completion_criteria` and `initial_hint` must be specific enough for the AI to act without clarification.
+
+2. **Context isolation between tasks and subtasks**
+
+Tasks and subtasks **share the filesystem, not conversation context**. AI sessions are reset between tasks and subtasks. No response is passed between top-level tasks; only a summary of the previous subtask may be passed between subtasks.
+**Implication**: design top-level tasks independently, and persist detailed intermediate results to files.
+
+3. **Tasks execute in ascending ID order**
+
+**Implication**: Assign IDs in the intended execution order, and make each task consume only files produced by earlier IDs.
+
+4. **Failed tasks do not automatically block later work**
+
+**Implication**: Add prerequisite checks in `initial_hint` and reports in `completion_criteria` for preceding failures.
+
+5. **`long_running` is used to avoid AI session timeout**
+
+**Implication**: Use `long_running` for builds, tests, benchmarks, training, profiling, or data jobs that can run >1 minute.
 
 ---
 
-## 3. Root Description Guide
+## 3. Root `description`
 
-The root-level `description` field provides project-wide context visible to every AI session. **Always include it.** Without it, the AI has no overall project context.
+The root `description` is injected into every executor prompt. It should contain only shared context that most tasks need; put task-specific steps in `initial_hint`.
 
-### Components
+Include:
+- **Goal**: final observable outcome and success threshold.
+- **Architecture**: key directories/modules and their responsibilities.
+- **Key file paths**: configs, inputs, outputs, reports, logs.
+- **Key commands**: build/test/run/validate commands with required working directory, environment variables, and expected output locations.
+- **Hard constraints**: files, APIs, tests, data, or behavior that must not change.
+- **Rules**: project-wide behavior such as experiment discipline, allowed change size, or reporting format.
+- **Reference Docs**: project documentation with reading priority. Keep paths and short reasons here; do not embed full document content.
+  - **P0 Must Read**: read before starting any task; use only for essential architecture, API contracts, or safety constraints.
+  - **P1 Read Before Related Work**: read before touching the related subsystem, file type, or feature area.
+  - **P2 On Demand**: read only when debugging, blocked, or needing deeper historical/troubleshooting context.
+- **Optional**:
+  - Architecture Coupling Notes: exact files/modules that must be updated together.
+  - Naming Conventions: required file, branch, metric, or artifact naming patterns.
+  - Historical Result Files: paths to prior attempt/iteration outputs that should be read to avoid repeated work.
 
-| Component | Purpose | Example | When needed |
-|-----------|---------|---------|-------------|
-| **Goal** | What the project is trying to accomplish | "Iteratively optimize GPU compute shaders for minimum latency" | Always |
-| **Architecture** | Directory structure and key modules, so the executor AI knows where to find things | "src/shaders — HLSL shaders, src/frame_processor.cpp — GPU dispatch logic" | Always |
-| **Key file paths** | Frequently referenced paths: configs, output files, data files | "Config: configs/base.yaml, Results: optimization_results.tsv" | Always (even if short) |
-| **Key commands** | Build, test, and validation commands the AI will run repeatedly | "Build: cmake --build build --config Release, Test: build/Release/Simulator.exe" | When the project has build/test/run commands |
-| **Architecture notes** | Key technical coupling points where changes in one place require syncing another | "Modifying shader thread group size requires syncing Dispatch() call" | When the codebase has non-obvious cross-file dependencies |
-| **Hard constraints** | Things the executor AI must NEVER do or change | "Must maintain correctness score 100/100; never modify resource/ data files" | Always |
-| **Rules** | Behavioral rules that apply to every task in this project | "One experiment per round; If you find a bug, fix ONLY the bug." | Always |
-| **Naming conventions** | File/branch naming rules so the AI can derive names programmatically | "Docs named by branch number N: optimization_results_N.tsv" | When the project generates numbered/templated files across iterations |
-| **Historical references** | Past work the AI should consult to avoid repeating failures | "doc/optimization_report_*.md — previous branch reports" | When the project runs across multiple branches/iterations |
-| **Reference docs** | Documentation the executor AI should read when it needs deeper understanding | "See docs/API.md for the REST interface spec" | When external/internal docs exist that the AI should consult on-demand |
-
-### Which Components for Which Project Type
-
-Not every project needs every component:
-
-| Scenario | Typical components | Notes |
-|----------|-------------------|-------|
-| **Iterative optimization** (perf tuning, ML training) | All of the above | Naming conventions + historical references are critical to avoid repeating failed experiments |
-| **Build & ship** (implement a feature, fix bugs) | Goal, Architecture, Key file paths, Key commands, Hard constraints, Rules | Usually no iteration history; naming conventions only if generating artifacts |
-| **One-shot generation** (scaffold a project, generate configs) | Goal, Architecture, Key file paths, Hard constraints, Rules | Minimal — focus on what to generate and what not to touch |
-| **Data pipeline / ETL** | Goal, Architecture, Key file paths, Key commands, Hard constraints, Rules | Emphasize file paths (input/output dirs) and commands (run pipeline, validate) |
-| **Research / exploration** (read code, write analysis) | Goal, Architecture, Key file paths, Reference docs, Rules | No build commands; emphasize reference docs and where to write findings |
-
-See the [Complete Example](#8-complete-example) at the end of this document for a full `description` demonstration.
+Do not put task-specific step-by-step instructions here; put those in the task's `initial_hint`.
 
 ---
 
 ## 4. Design Principles
 
-💡 **These are best practices you should follow.** They represent lessons learned from real-world task execution.
+These principles are not self-contained; they extend rules in §1. Take both principles and rules into account when designing todos.
 
 ### 4.1 Task Decomposition
 
-#### Choosing the Right Structure
+Choose task boundaries by failure mode, context needs, and cost:
 
-| Scenario | Recommended structure |
-|----------|-----------------------|
-| Single logical step (fix a bug, add validation, run tests) | Single `simple` task |
-| Multi-step workflow where the goal is **achieving a target** | `nested` task |
-| Iterative cycle where the goal is **running N rounds of experimentation** | `looping` task |
-| One step within a workflow is itself multi-step | Nested subtask (`nested`/`looping` as subtask type) |
+| Situation | Prefer |
+|-----------|--------|
+| Small targeted fix, format run, inspection, or quick test | One `simple` task |
+| Multi-step goal with final success evaluation | `nested` |
+| Fixed number of repeated experiments or trials | `looping` |
+| Command may run >1 minute | `long_running` or `long_running_once` |
 
-**`nested` vs `looping`:**
-- Use `nested` when the core goal is **reaching a specific end state** (e.g., "achieve 20% speedup", "all tests pass"). The AI evaluates the overall `completion_criteria` after each round and can stop early or retry intelligently.
-- Use `looping` when the core goal is **performing N rounds of work** (e.g., "do 5 rounds of optimization", "run 3 experiments with different configs"). There is no AI evaluation of overall completion — it simply repeats for `repeat_count` iterations.
+Difference between `nested` and `looping`:
+- **`nested`**: reach a target end state; parent evaluates overall `completion_criteria` and can retry.
+- **`looping`**: run exactly `repeat_count` iterations; do not rely on early overall-completion evaluation.
+
+Recommended splits:
+- **Analyze / compose idea**: separate when it produces a plan, hypothesis, or experiment design.
+- **Implement + build/test**: keep together so the AI can self-correct.
+- **Benchmark / validate / report**: group execution-focused evaluation together.
+- **Anti-hack verification**: separate this from implementation because it is a trust boundary and must forbid code changes.
 
 #### Anti-Patterns
 
-**Over-decomposition** — too many fine-grained subtasks:
+- **Over-decomposition**: splitting `edit -> build -> fix build -> test` into separate subtasks will lose local reasoning context. Keep one coding loop together unless:
+(1) The `test` command is long-running or verification must be isolated;
+(2) Code has substantial changes that are not suitable to implement in one single session. In this case, split code changes by modules.
 
-Each subtask runs in a separate AI session with context isolation. More subtasks = more session resets + token overhead. Only create a separate subtask when the step has a **genuinely different failure mode** that benefits from independent retry. If two steps always succeed or fail together, merge them.
+- **Under-decomposition**: putting everything (analysis, implementation, benchmark, anti-hack review, and reporting) into one task causes context explosion, degrading AI performance and wasting retries. Split when a phase has a separate artifact, high runtime cost, or different trust boundary.
 
-```yaml
-# BAD: 5 subtasks where 2–3 would do
-subtasks:
-  - id: 1.1
-    name: "Read and analyze the profiling report"    
-  - id: 1.2
-    name: "Identify the top bottleneck"  
-  - id: 1.3
-    name: "Implement the optimization" 
-  - id: 1.4
-    name: "Build the project"  
-  - id: 1.5
-    name: "Run benchmark and validate"
+### 4.2 `completion_criteria`
 
-# GOOD: 3 subtasks with clear boundaries
-subtasks:
-  - id: 1.1
-    name: "Analyze profiling report and compose an optimization idea"
-    # AI reads the report, identifies the bottleneck, and formulates
-    # a concrete optimization plan — but does NOT implement yet.
-    # Thinking and coding are both high-intensity; separating them
-    # lets the AI focus fully on analysis without rushing to code.
-  - id: 1.2
-    name: "Implement the optimization and build"
-    # AI takes the idea from 1.1 and implements it. If build fails,
-    # the AI can fix immediately without a costly failure_analysis
-    # round-trip. Keeping implement + build together is key.
-  - id: 1.3
-    name: "Benchmark, validate, make keep/discard decision, and write report"
-    max_attempts: 1    # fail fast → parent decides retry strategy
-```
-
-**Recommended pattern**: Group strongly dependent steps into one subtask, but **separate "thinking" from "doing"**:
-- **"analyze + compose idea" vs "implement + build"** — both are high-intensity tasks. When combined, the AI tends to rush the analysis to get to coding, or take shortcuts in implementation because it spent too much context on analysis. Give each its own session.
-- **"implement + build"** — if build fails, the AI can fix code immediately in the same session, saving a failure_analysis round-trip. These always belong together.
-- **"benchmark + validate + report"** — evaluation is a distinct phase. Separating it lets you fail fast and retry from the implementation step without re-running analysis.
-
-**Under-decomposition** — everything in one task when steps are logically independent:
-
-```yaml
-# BAD: Training + evaluation + deployment should be separate subtasks
-- id: 1
-  name: "Train, evaluate, and deploy the model"
-  type: simple
-```
-
-If deployment fails, the AI retries the entire task including expensive training. Use `nested` so deployment can be retried independently. Beyond wasted compute, under-decomposition also causes:
-- **Context explosion** — the AI accumulates too much context across many steps, degrading output quality.
-- **AI laziness** — when faced with too many responsibilities in one task, the AI tends to take shortcuts (e.g., choosing the simplest optimization because there's so much else to do).
-
-### 4.2 Writing Good `completion_criteria`
-
-**How criteria are evaluated:**
-
-| Task type | Evaluation method |
-|-----------|-------------------|
-| `simple` / `long_running` | AI self-evaluates. Criteria must be **objectively verifiable by the AI**. |
-| `nested` | Subtask criteria determine subtask-level pass/fail. The top-level `completion_criteria` is then evaluated to determine overall pass/fail and whether more rounds are needed. |
-| `looping` | Subtask criteria determine subtask-level pass/fail, but no top-level pass/fail evaluation. Done when all `repeat_count` iterations finish. |
-
-> **Note:** While `looping` tasks do not have overall AI evaluation, their top-level `completion_criteria` is still visible to subtask AI executors. This gives each subtask awareness of the overall goal of the parent task, so write meaningful criteria even for `looping` tasks.
-
-**Rules:**
-1. Be specific and measurable — the AI must be able to verify by reading files, checking output, or running tests.
-2. Reference concrete artifacts — file names, command outputs, specific values.
-3. Include positive AND negative conditions when relevant (e.g., "tests pass AND no regressions").
-4. Use numbered lists for multiple conditions — makes it clear ALL must be met.
-5. Focus on the "What", not the "How" of AutoAgent — criteria should describe the desired state, not AutoAgent internals.
-
-**Top-level vs subtask criteria — they serve different purposes:**
+Completion criteria define observable success. They must be specific, measurable, and checkable by running commands, reading files, inspecting artifacts, or comparing metrics.
 
 | Level | Role | Example |
 |-------|------|---------|
-| **Top-level** (`nested`) | The "final exam" — describes the **desired end state**. The AI evaluates this after all subtasks complete to decide if more rounds are needed. Should focus on overall outcome, not individual steps. | "Speedup >= 20% over baseline AND Score 100/100 on correctness test" |
-| **Subtask** | Step-level verification — describes **what this step must produce**. The AI self-evaluates after each attempt. Should be narrow and focused on this step's output. | "Code changes applied, project builds without errors, and changes committed to git" |
+| Top-level task | Final task success visible to the orchestrator | `doc/perf_result.tsv contains p95 latency and correctness status` |
+| Subtask | Step-level pass/fail and retry boundary | `cargo test --all passes with no source changes in tests/` |
+| Looping task | Overall goal context; iterations rely on subtask criteria | `Each iteration appends one row to results.tsv` |
 
-Don't repeat subtask criteria in the top-level criteria. The top-level criteria should describe what success looks like *after all steps are done*, not re-list each step.
-
-**Per-type guidance:**
-
-| Task type | Guidance |
-|-----------|----------|
-| Simple (code changes) | Reference specific files and verification steps ("compiles without errors", "tests pass") |
-| Simple (running commands) | Specify expected output pattern or exit code; mention where results should be saved |
-| Nested (overall evaluation) | Describe the desired end state, not the process; include quantitative thresholds |
-| Long-running | Reference patterns in the output log; include exit code expectations |
-
-**Examples:**
+Good:
 
 ```yaml
-# GOOD
 completion_criteria: |
   1. The project builds successfully: cmake --build build --config Release
-  2. The executable runs and outputs "Score: 100/100"
-  3. Elapsed time is printed in format "Elapsed: XXX.XX ms"
-  4. baseline_timing.txt exists and contains the timing value
-
-# BAD
-completion_criteria: "Code is optimized"        # Not measurable
-completion_criteria: "Performance is improved"   # No baseline, no metric, no threshold
+  2. The executable outputs "Score: 100/100"
+  3. doc/optimization_results.tsv contains p95 latency and correctness status
+  4. git diff --name-only shows changes only under src/
 ```
 
-**Anti-patterns:**
+Anti-patterns:
 
 | Anti-pattern | Problem | Better |
 |--------------|---------|--------|
-| Prescribing methods | "Use shared memory to achieve 20% speedup" locks the AI into one approach that may not be optimal | "Achieve 20% speedup while maintaining correctness" — describe the goal, let the AI choose the method |
-| Describing process | "Run ncu, analyze the output, then identify the top bottleneck" is a to-do list, not criteria | "Key bottleneck identified and analysis saved to ncu_analysis.txt" — describe the outcome |
-| Unverifiable criteria | "Code is clean and well-documented" — the AI will always claim success | "All public functions have docstrings AND `pylint src/` scores >= 9.0" — use tool-checkable conditions |
+| Prescribing methods | Locks the AI into one approach. | Describe the target outcome unless method is mandatory. |
+| Describing implementation steps or repeating a to-do list | A to-do list is not success evidence. | State the artifact or observable result. |
+| Unverifiable criteria | AI can claim success without proof. | Use command output, files, metrics, or diffs. |
+| Missing negative conditions | Allows weakened tests or unrelated edits. | State forbidden changes explicitly. |
 
-### 4.3 Writing Good `initial_hint`
+Bad: `"code is good"`, `"performance is improved"`, `"run tests and fix things"`.
 
-Context and guidance provided to the executor AI for every attempt of this task.
+### 4.3 `initial_hint`
 
-**`initial_hint` vs `system_prompt_prefix`:**
-- `initial_hint` → **"how to do the task"** (file paths, commands, troubleshooting)
-- `system_prompt_prefix` → **"who you are and global rules"** (persona, coding style, constraints)
+`initial_hint` is executor-facing task-local context.
 
-**Provide context, not playbooks.** The AI is a capable coding agent — give it the **information** it needs (key files, commands, constraints), not a rigid step-by-step script. Over-specified hints remove the AI's ability to adapt when conditions differ from what you anticipated.
+| Put in `initial_hint` | Do not put in `initial_hint` |
+|-----------------------|------------------------------|
+| Exact files/directories to inspect or modify | Project-wide context already in root `description` |
+| Commands, working directory, environment, and output files | `completion_criteria` copied from the separate field |
+| Step-specific constraints, scope boundaries, and forbidden changes | Obvious instructions such as "read carefully" |
+| Prerequisite checks and handoff artifacts | Persona, role, expertise, or global behavior framing |
+| Expected artifacts to read/write | Overly rigid click-by-click scripts or stale guesses |
+| Cleanup guidance for previous failed attempts | Unrelated background docs |
+| Likely failure modes and safe recovery hints | |
 
-| Include | Don't include |
-|---------|---------------|
-| Key file paths | Completion criteria (separate field) |
-| Specific commands (if non-obvious) | Obvious instructions |
-| Architecture context | Overly detailed step-by-step |
-| Step-specific constraints | Project-level constraints (put in `description` instead) |
-| Common failure modes + workarounds | Attempt-specific strategies |
+Use `initial_hint` to make retries safe: ask the executor to inspect `git diff`, generated files, partial outputs, and previous result files when relevant.
 
-**Example:**
+### 4.4 `system_prompt_prefix`
 
-```yaml
-initial_hint: |
-  Key files:
-    - CMakeLists.txt: Main build config
-    - cufftdx_dct3d.cuh: Kernel header
-    - main.cpp: Benchmark program (100 iterations)
+`system_prompt_prefix` defines the executor persona for the whole task session. It applies to analysis, implementation, verification, benchmarking, and reporting tasks.
 
-  Build: cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+Use it for:
+- **Persona / expertise**: `You are a careful ML engineer.`
+- **Role framing**: `You are a backend performance engineer.`
+- **Style constraints**: `Prefer minimal, well-tested changes.`
+- **Hard behavior constraints**: `Do NOT modify source code, tests, configs, or data.`
 
-  IMPORTANT: Do NOT modify the correctness test (Score calculation) logic.
+Keep task-specific files, commands, prerequisites, and handoff artifacts in `initial_hint`.
 
-  Troubleshooting:
-  - If CUDA OOM: reduce batch_size in configs/model.yaml (16 → 8).
-```
+### 4.5 Anti-Hack Patterns
 
-### 4.4 Anti-Hack Patterns
+AI agents may satisfy criteria through shortcuts. Prevent that with explicit constraints.
 
-When an AI agent executes tasks autonomously, it may "satisfy" completion criteria through unintended shortcuts — modifying tests, simplifying implementations, or hardcoding expected outputs. These patterns help prevent such reward hacking.
+Implementation tasks should specify:
+- allowed files/directories;
+- files/directories that must not change;
+- tests/configs/data that must not be weakened;
+- expected `git diff` shape when useful.
 
-#### Separate Implementation from Verification
+Verification subtasks should:
+- be separate from implementation when anti-hack risk matters;
+- use `system_prompt_prefix` to forbid code/test/config/data edits;
+- use `max_attempts: 1` for fast failure propagation;
+- use `model: default` when evidence review or reasoning is required;
+- use `model: lite` when only running deterministic checks;
+- verify both behavior and scope, e.g. tests pass and `git diff --name-only` stays within scope.
 
-Use separate subtasks for "do the work" and "verify the work". The verification subtask should be **forbidden from modifying code**:
+### 4.6 Failure Resilience
 
-```yaml
-subtasks:
-  - id: 1.1
-    name: "Fix the bug in parser module"
-    type: simple
-    completion_criteria: |
-      1. The bug described in issue #42 is fixed
-      2. cargo build succeeds
-      3. Do NOT modify any test files
-    initial_hint: |
-      Bug location: src/parser/tokenizer.rs
-      Scope: Only modify files under src/parser/
+Design for residual state: tasks may inherit broken filesystem state from their own retries or from earlier linear tasks.
 
-  - id: 1.2
-    name: "Verify fix passes all tests"
-    type: simple
-    max_attempts: 1
-    model: lite
-    system_prompt_prefix: |
-      You are a test runner. Do NOT modify any source code or test files.
-    completion_criteria: |
-      1. cargo test --all passes (exit code 0)
-      2. git diff --name-only shows NO changes to files under tests/
-```
+- **Same-task retry**: mention cleanup or residual-state checks in `initial_hint`; prefer overwriting or appending to known files over relying on implicit memory.
+- **Predecessor failure**: add prerequisite checks in `initial_hint` and require explicit failure reports in `completion_criteria` when prerequisites are missing.
+- **External tools/services**: allow partial success only when useful, and require failures to be documented.
+- **Nested/looping subtasks**: align failure boundaries with meaningful checkpoints and independent failure modes.
+- **Progress tracking**: store progress in clearly named files instead of relying on prior conversation context.
 
-#### Explicit Negative Constraints
+### 4.7 State Persistence
 
-For every "implement X" task, think about what the AI should NOT do:
+Tasks and subtasks share files, not conversation memory.
 
-```yaml
-# BAD: No negative constraints — AI could delete failing tests
-completion_criteria: |
-  All tests pass.
-
-# GOOD: Explicit protection
-completion_criteria: |
-  1. All tests in tests/ pass (cargo test --all, exit code 0)
-  2. No test files were modified (git diff --name-only shows no files under tests/)
-  3. No test cases were removed or weakened
-```
-
-#### Scope Boundaries
-
-Restrict which files/directories the AI may modify:
-
-```yaml
-initial_hint: |
-  Scope: Only modify files under src/handlers/auth/
-  Do NOT modify:
-  - Any files under tests/
-  - config/security.yaml
-  - src/middleware/
-```
-
-#### Use `git diff` as a Verification Tool
-
-Include `git diff` checks in verification subtasks to detect unexpected changes:
-
-```yaml
-completion_criteria: |
-  1. All tests pass
-  2. git diff --stat shows changes ONLY in src/parser/ directory
-  3. No new files created outside src/parser/
-```
-
-### 4.5 Failure Resilience
-
-Tasks may inherit broken state from two sources. Design defensively for both.
-
-#### Same-task retry
-
-When a subtask is retried, previous attempts may have modified files. The AI has summaries of previous attempts but **filesystem changes persist**.
-
-- **Mention cleanup in `initial_hint`** when a task modifies shared state:
-  ```yaml
-  initial_hint: |
-    NOTE: If a previous attempt left partial changes, check the state of
-    build/ and src/generated/ before starting.
-  ```
-- **Prefer append/overwrite patterns** over incremental mutations — writing a complete output file is naturally idempotent.
-- **Use git as a safety net** in `initial_hint` when appropriate: "Run `git diff` first to check for unexpected changes."
-- **Don't over-engineer for idempotency** — it's enough to make the AI *aware* that residual state may exist.
-
-#### Predecessor failure
-
-In Linear mode, tasks execute sequentially and **unconditionally** — if task N fails all its attempts, task N+1 still runs. There is no scheduler to skip dependent tasks. This means every task may inherit broken state from a failed predecessor.
-
-- **Add prerequisite checks in `initial_hint`** so the AI detects inherited failures early:
-  ```yaml
-  # Task 2 depends on Task 1's output
-  initial_hint: |
-    Before starting: verify the project builds and the correctness test passes.
-    If either fails, this likely means a previous task did not complete
-    successfully. Report the issue and stop — do NOT attempt to fix
-    problems outside your scope.
-  ```
-- **Design `completion_criteria` to detect inherited failures**:
-  ```yaml
-  completion_criteria: |
-    1. The project builds successfully.
-    2. All tests in test_suite_A pass.
-    If the project does not build at the start, mark as NOT COMPLETED
-    with a note that a prerequisite task failed.
-  ```
-- **Scope boundaries matter here** — a task that detects predecessor failure should report it, not silently try to fix unrelated breakage.
-
-#### Defensive task design
-
-When tasks depend on external tools or services:
-
-- **In `completion_criteria`** — handle partial success explicitly:
-  ```yaml
-  completion_criteria: |
-    1. At least 8 out of 10 test suites pass.
-    2. Any failing suites are documented in test_failures.txt.
-  ```
-- **In `initial_hint`** — include prerequisite checks:
-  ```yaml
-  initial_hint: |
-    Before starting: verify the project builds and correctness test passes.
-    If either fails, fix that FIRST.
-  ```
-
-#### Subtask failure in nested/looping tasks
-
-- Design subtasks so failure can be diagnosed from output.
-- Align subtask boundaries with logical checkpoints — retrying from step 2 or 3 should be meaningful.
-- Avoid subtasks that silently fail — ensure errors are visible in output.
-
-### 4.6 State Persistence (Passing the Baton)
-
-Subtasks don't share conversation context. Use the filesystem:
-- **Producer subtask**: In `initial_hint`, instruct the AI to write results to a specific file (e.g., `step1_out.txt`).
-- **Consumer subtask**: In `initial_hint`, instruct the AI to read that file before proceeding.
+- **Producer**: write findings/results to named files with enough detail for a fresh session.
+- **Consumer**: read those files via `initial_hint`; if missing or incomplete, report prerequisite failure.
 
 ---
 
 ## 5. Schema Reference
 
-📖 **Reference section — consult as needed.** You don't need to read this top-to-bottom; look up specific types and fields when designing tasks.
+### 5.1 Root Fields
 
-### 5.1 Task Types
+| Field | Required | Notes |
+|-------|----------|-------|
+| `description` | Required by task generation rules | Shared project context. Runtime accepts missing text, but generated tasks must include it. |
+| `description@N` | Optional | Scoped description used for tasks with top-level ID >= N. |
+| `tasks` | Yes | List of top-level tasks. |
 
-| Type | Description | Scope | When to use |
-|------|-------------|-------|-------------|
-| `simple` | AI works autonomously, then self-evaluates completion | Top-level or subtask | Code changes, running tests, file analysis, quick builds |
-| `nested` | Sequential subtasks + AI evaluation of overall completion; When fails consecutively, retries with guidance | Top-level or subtask | Multi-step workflows where overall success depends on combined result |
-| `looping` | Repeat all subtasks for fixed N iterations; NO AI evaluation for overall completion | Top-level or subtask | Iterative optimization cycles (profile → optimize → benchmark) |
-| `long_running` | AI launches a long-running background command (e.g. training) that runs without session timeout | Top-level or subtask | Any command that may take > 1 minute (builds, tests, benchmarks, training, profiling) |
-| `simple_once` | Like `simple`, but never re-executed once completed | Subtask only | One-time setup (env prep, dependency install, data download) |
-| `long_running_once` | Like `long_running`, but never re-executed once completed | Subtask only | Expensive one-time operations (Docker build, baseline profiling) |
+### 5.2 Task Types
 
-**Key Notes:**
+| Type | Top-level | Subtask | Use for |
+|------|-----------|---------|---------|
+| `simple` | Yes | Yes | AI work, quick commands, analysis, code changes. |
+| `nested` | Yes | Yes | Ordered subtasks with overall AI evaluation/retry. |
+| `looping` | Yes | Yes | Fixed `repeat_count` iterations. |
+| `long_running` | Yes | Yes | Background command that may run >1 minute. |
+| `simple_once` | No | Yes | One-time setup that should not re-run after completion. |
+| `long_running_once` | No | Yes | Expensive one-time setup/baseline command. |
 
-- **Prefer `long_running` over `simple`** for any command that may take > 1 minute. If a command runs too long inside `simple`, the AI session may hit a timeout, wasting all progress. `long_running` runs the command in the background with proper monitoring — minimal overhead, prevents session timeouts.
-- **`*_once` types**: Use sparingly. Most subtasks SHOULD be re-executable. Don't use `*_once` if a subtask's output might become stale after other subtasks run. Use `long_running_once` instead of `long_running` when the command is **idempotent setup** (e.g., Docker build, baseline profiling) that should survive retries of later subtasks.
-- **Looping iteration failure stops the loop**: If any single iteration fails after exhausting its retry attempts, the remaining iterations are NOT executed. Design subtask `completion_criteria` to be tolerant of partial or unexpected results if you want the loop to continue through difficult iterations.
-- **Nested subtasks**: `nested`/`looping` can be used as subtask types for multi-level nesting. Keep nesting shallow (2–3 levels max).
+### 5.3 Common Task Fields
 
-### 5.2 Root-Level Fields
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `description` | string | **Yes** | Project-level description: goal, architecture, constraints, key paths. See §3. |
-| `tasks` | list | Yes | Ordered list of top-level task definitions |
-
-### 5.3 Common Fields (all types)
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | int/float | Yes | Unique ID. Integer for top-level, dot notation for subtasks (e.g., `1.1`) |
-| `name` | string | Yes | Concise, descriptive task name |
-| `type` | string | Yes | `simple`, `nested`, `looping`, `long_running`, `simple_once`, or `long_running_once` |
-| `completion_criteria` | string | Yes | Clear, specific, measurable success criteria |
-| `description` | string | No | Task-specific description. In AI scheduling mode, the scheduler uses this to understand the task — recommended to fill in. |
-| `model` | string | No | `"default"`, `"lite"`, or a direct model name. `"default"` will be used if not specified |
-| `system_prompt_prefix` | string | No | Custom AI persona/instructions for this task (see §6.1) |
+| Field | Required | Notes |
+|-------|----------|-------|
+| `id` | Yes | Top-level positive integer; subtask dot notation matching parent. |
+| `name` | Yes | Concise human-readable label. |
+| `type` | Yes | One of the task types above. |
+| `completion_criteria` | Yes | Specific and verifiable. |
+| `description` | Optional in linear mode | Useful short summary; required/recommended in AI scheduling mode. |
+| `initial_hint` | Optional | Context for executor attempts. |
+| `model` | Optional | `default`, `lite`, role name, or direct model name. |
+| `system_prompt_prefix` | Optional | Persona, expertise, style, role, or hard behavior constraints. Set on subtasks, not top-level `nested`/`looping`. |
+| `max_attempts` | Optional | Default from config. Use `1` for execution-only subtasks. |
 
 ### 5.4 Type-Specific Fields
 
-**simple / simple_once / long_running / long_running_once:**
+| Type | Extra fields |
+|------|--------------|
+| `nested` | `subtasks` required; optional `max_attempts`. |
+| `looping` | `subtasks` and positive integer `repeat_count` required; optional `max_attempts_per_loop`. |
+| `simple` / `long_running` / `*_once` | Optional `initial_hint`, `max_attempts`, `model`, `system_prompt_prefix`. |
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `initial_hint` | string | No | Context and guidance for the executor AI (file paths, commands, troubleshooting) |
-| `max_attempts` | int | No | Max retry attempts (default: 5). When a task fails, it is retried up to this many times with feedback from previous attempts. |
-
-**nested:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `subtasks` | list | Yes | Ordered list of subtasks (any valid type, including nested/looping) |
-| `max_attempts` | int | No | Max retry rounds (default: 5) |
-
-**looping:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `subtasks` | list | Yes | Ordered list of subtasks |
-| `repeat_count` | int | Yes | Number of loop iterations (>= 1) |
-| `max_attempts_per_loop` | int | No | Max retries per iteration (default: 5) |
-
-### 5.5 Hierarchy and ID Rules
-
-**Hierarchy:**
-- **Top-level**: `simple`, `nested`, `looping`, `long_running`.
-- **Subtasks** (inside nested/looping): all six types allowed.
-- `simple_once` and `long_running_once` can ONLY be subtasks.
-- Nested subtasks have their own `max_attempts`/`repeat_count`, independent of the parent.
-
-**ID Assignment:**
-- **Top-level tasks**: Sequential integers starting from the next available ID.
-- **Subtasks**: Dot notation using parent ID as prefix (e.g., 6.1, 6.2, 6.3).
-- **Nested subtasks**: Continue the dot notation (e.g., 6.2.1, 6.2.2).
-- IDs must be unique across the entire `todos.yaml`. Subtask IDs determine execution order.
+ID rules:
+- Top-level IDs must be positive integers and, in linear mode, strictly increasing.
+- Subtask IDs must be unique, dot-notated, parent-prefixed, and increasing under the same parent.
 
 ---
 
-## 6. Field Usage Guide
-
-📖 **Reference section** for `system_prompt_prefix`, `max_attempts`, and `model` fields.
+## 6. Field Usage Cheatsheet
 
 ### 6.1 `system_prompt_prefix`
 
-Customizes the AI's persona, role, or task-specific instructions.
+Use for task-wide persona, expertise, role, style, and hard behavior constraints; keep task-specific files and commands in `initial_hint`.
 
-| Use case | Example |
-|----------|---------|
-| Domain expertise | `"You are a GPU performance engineer."` |
-| Task-specific constraints | `"Never modify files in vendor/."` |
-| Coding style | `"Follow Google C++ style guide."` |
-| **Restrict behavior** (execution-only subtasks) | `"You are a benchmark runner. Do NOT modify any source code."` |
-
-Using `system_prompt_prefix` to restrict behavior is especially useful for execution-only subtasks (build, benchmark, data export) where you want to prevent the AI from "helpfully" editing code when a command fails — the failure should propagate to the parent for proper failure analysis instead.
-
-> **Note:** `system_prompt_prefix` on a top-level `nested` or `looping` task is not supported — set it on individual subtasks instead.
+| Need | Example |
+|------|---------|
+| Analysis / implementation persona | `You are a careful ML engineer.` |
+| Domain/style | `You are a GPU performance engineer. Follow Google C++ style.` |
+| Scope restriction | `Never modify files under vendor/.` |
+| Execution-only | `You are a benchmark runner. Do NOT modify source code.` |
+| Verification | `You are a verifier. Do NOT modify source code, tests, configs, or data.` |
 
 ### 6.2 `max_attempts`
 
-**Scope of `max_attempts` differs by level:**
+| Value | Use |
+|-------|-----|
+| `1` | Execution-only subtasks: build, test, benchmark, lint, format-check, verify. |
+| `2-3` | Targeted uncertain work with constrained scope. |
+| Default / higher | Active coding, debugging, optimization, refactoring. |
 
-| Level | Field | What counts as one attempt |
-|-------|-------|---------------------------|
-| Top-level `simple` / `long_running` | `max_attempts` | One full execution of the task |
-| Top-level `nested` | `max_attempts` | One full round: all subtasks run → overall evaluation |
-| Top-level `looping` | `max_attempts_per_loop` | One retry round within a single iteration |
-| Subtask (any type) | `max_attempts` | One execution of that subtask within the parent's current round |
-
-**Choosing a value:**
-
-| Value | When to use |
-|-------|-------------|
-| `1` | **Execution-only subtasks** that just run code written by a sibling (build, benchmark, test). If the command fails, the cause is in sibling code — retrying won't help. `max_attempts: 1` propagates failure immediately to the parent's failure analysis. |
-| `2–3` | Moderately uncertain tasks with a constrained problem space. |
-| `5` (default) | Complex code-writing tasks — open-ended changes, multi-file refactoring, optimization. |
-
-**Do NOT** set `max_attempts: 1` on subtasks where the AI actively writes code — those benefit from multiple attempts with different strategies.
+Do not use `max_attempts: 1` for coding tasks that can self-correct after errors.
 
 ### 6.3 `model`
 
-| Value | When to use |
-|-------|-------------|
-| `"default"` (or omit) | Complex reasoning: "Analyze profiling results and optimize kernel", "Debug and fix root cause" |
-| `"lite"` | Straightforward execution: "Run `make test`", "Format code with black", "Run benchmark and save output" |
-| Direct model name (e.g., `"claude-sonnet-4-20250514"`) | When a specific model is needed |
+| Value | Use |
+|-------|-----|
+| Omit / `default` | Reasoning-heavy work: design, debug, implement, optimize, anti-hack review. |
+| `lite` | Deterministic execution: run commands, format, copy/summarize known outputs. |
+| Direct model/role | Only when explicitly required. |
+
+Use `default` when reviewing evidence or making keep/discard decisions.
+
+### 6.4 `long_running`
+
+Use for commands that may exceed 1 minute: full builds/tests, training, profiling, data jobs, benchmarks, deployments.
+
+| Command shape | Prefer |
+|---------------|--------|
+| Quick inspection or short unit test | `simple` |
+| Full command may exceed 1 minute | `long_running` |
+| Expensive setup/baseline should not rerun | `long_running_once` subtask |
 
 ---
 
-## 7. Task-Type-Specific Best Practices
+## 7. Task-Type-Specific Guides
 
-📖 **Read only the guide relevant to your task** — you don't need to read all of them.
+Read only the guide relevant to the task domain:
 
-| Task type | Guide | When to use |
-|-----------|-------|-------------|
-| **Build & Ship** | `build_and_ship.md` | Implement features, fix bugs, refactor code |
-| **Testing & Verification** | `testing_and_verification.md` | Run tests, fix failures, improve coverage |
-| **Iterative Optimization** | `iterative_optimization.md` | Profiling → optimize → benchmark → evaluate cycles |
-| **Data Pipelines / ETL** | `data_pipelines.md` | Extract, transform, load, and validate data |
-| **Setup & Deployment** | `setup_and_deployment.md` | Environment setup, dependency install, deployment |
-| **Research & Analysis** | `research_and_analysis.md` | Code analysis, architecture review, report writing |
-| **Academic Experiments** | `academic_experiments.md` | Multi-branch comparison experiments, controlled variables, ablation studies |
+| Domain | Guide |
+|--------|-------|
+| Build, ship, bug fix, refactor | `build_and_ship.md` |
+| Test running, verification, coverage | `testing_and_verification.md` |
+| Profiling and optimization loops | `iterative_optimization.md` |
+| Data pipelines / ETL | `data_pipelines.md` |
+| Setup and deployment | `setup_and_deployment.md` |
+| Research, analysis, reports | `research_and_analysis.md` |
+| Academic experiments | `academic_experiments.md` |
 
 ---
 
 ## 8. Complete Example
 
-Below is a concise `todos.yaml` demonstrating key patterns: root `description`, task types (`simple`, `long_running`, `looping`), `completion_criteria`, `initial_hint`, `system_prompt_prefix`, `model` selection, and `max_attempts`.
+Below is a complete linear-mode `todos.yaml` demonstrating key patterns: root `description`, reference docs, fixed-count `looping`, file-backed handoffs, anti-hack verification, failure resilience, `completion_criteria`, `initial_hint`, `system_prompt_prefix`, `model` selection, and retry boundaries.
 
 ```yaml
 description: |
-  ## Project: Web API Performance Optimization
+  # Project: Web API Performance Optimization
 
-  ### Goal
+  ## Goal
   Iteratively optimize the REST API server to reduce p95 latency below 50ms
-  while maintaining all integration tests passing.
+  while keeping all integration tests passing. Run a fixed number of focused
+  optimization iterations, preserve evidence in files, and finish with a report
+  that explains the best result and any remaining blocker.
 
-  ### Architecture
-  - src/handlers/ — HTTP route handlers
-  - src/db/ — Database query layer (PostgreSQL)
-  - src/cache/ — Redis caching layer
-  - tests/ — Integration test suite
-  - benchmarks/ — Load testing scripts (k6)
+  ## Architecture
+  - src/handlers/ —— HTTP route handlers
+  - src/db/ —— PostgreSQL query layer
+  - src/cache/ —— Redis caching layer
+  - tests/ —— integration test suite
+  - benchmarks/ —— k6 load testing scripts
 
-  ### Key File Paths
+  ## Key File Paths
   - Config: config/server.yaml
-  - Results: doc/optimization_results.tsv
+  - Cumulative results: doc/optimization_results.tsv
+  - Optimization log: doc/optimization_log.md
+  - Implementation status: doc/implementation_status.md
+  - Final report: doc/final_report.md
   - Benchmark script: benchmarks/load_test.js
+  - Benchmark JSON output: results.json
 
-  ### Key Commands
+  ## Key Commands
   - Build: cargo build --release
   - Test: cargo test --all
   - Benchmark: k6 run benchmarks/load_test.js --out json=results.json
 
-  ### Hard Constraints
-  - Do NOT modify the public API contract (request/response schemas)
-  - Do NOT remove or weaken any existing integration test
-  - One optimization per experiment, keep changes minimal
+  ## Hard Constraints
+  - Do NOT modify public request/response schemas.
+  - Do NOT remove, weaken, skip, or rewrite tests to hide failures.
+  - Do NOT edit generated benchmark results by hand except to summarize them in docs.
+  - Keep each optimization focused, reversible, and limited to its declared scope.
 
-  ### Rules
-  - Fully autonomous — never ask the user questions
-  - One optimization per experiment
-  - If you discover a bug, fix ONLY the bug (no optimization in the same commit)
+  ## Workflow State Conventions
+  - doc/optimization_results.tsv rows include: iteration_id, kind, p95_ms,
+    tests, decision, notes.
+  - doc/optimization_log.md recommendations include: iteration_id,
+    recommendation_id, status, allowed_paths, forbidden_paths, rationale,
+    expected_impact, risk.
+  - doc/implementation_status.md includes: iteration_id, recommendation_id,
+    decision, changed_paths, build_status, test_status, verification_status,
+    notes.
+  - Each loop iteration should reuse the same recommendation when retrying after
+    implementation or verification failure; do not create a new recommendation
+    just because the previous implementation attempt failed.
+
+  ## Reference Docs
+  - P0 Must Read: doc/architecture.md —— request flow and service boundaries
+  - P1 Read Before Related Work: doc/database.md —— read before changing src/db/
+  - P1 Read Before Related Work: doc/cache.md —— read before changing src/cache/
+  - P2 On Demand: doc/performance_history.md —— read when benchmark results are surprising or repeated work is suspected
+
+  ## Rules
+  - Fully autonomous: never ask the user questions.
+  - Persist inter-task handoffs in the files listed above.
+  - Implement at most one recommendation per loop iteration.
+  - If prerequisites are broken before a task starts, report that state in the
+    relevant output file instead of broadening scope.
+  - If a retry inherits partial changes, inspect git diff before editing.
 
 tasks:
   # ── Task 1: Establish Baseline ────────────────────────────────────────
@@ -600,80 +428,169 @@ tasks:
     type: nested
     max_attempts: 3
     completion_criteria: |
-      1. cargo test --all passes (exit code 0)
-      2. doc/optimization_results.tsv exists with a baseline row
-      3. Baseline p95 latency is recorded
+      1. cargo build --release exits 0.
+      2. cargo test --all exits 0.
+      3. k6 benchmark completes and writes results.json.
+      4. doc/optimization_results.tsv contains one baseline row with kind=baseline, p95_ms, tests=pass, and decision=baseline.
+      5. No source files, tests, configs, benchmark scripts, or generated benchmark results are modified except results.json from the benchmark command.
+      6. git diff --name-only shows only doc/optimization_results.tsv and results.json changed by this task.
     subtasks:
       - id: 1.1
-        name: "Build and run tests"
+        name: "Build and run tests without modifications"
         type: simple
         max_attempts: 1
         model: lite
         system_prompt_prefix: |
-          You are a build engineer. Do NOT modify any source code.
+          You are a build engineer. Do NOT modify source code, tests, configs, benchmark scripts, generated data, or documentation.
         completion_criteria: |
-          1. cargo build --release succeeds
-          2. cargo test --all passes
+          1. cargo build --release exits 0.
+          2. cargo test --all exits 0.
+          3. No files are modified.
         initial_hint: |
-          Run: cargo build --release && cargo test --all
+          Run:
+          - cargo build --release
+          - cargo test --all
+
+          This is a verification-only subtask. If either command fails, report
+          the failure and stop; do not edit files.
 
       - id: 1.2
         name: "Run baseline benchmark and record results"
         type: long_running
+        max_attempts: 1
         model: lite
         completion_criteria: |
-          1. k6 benchmark completed successfully
-          2. doc/optimization_results.tsv created with baseline row
+          1. k6 benchmark exits 0 and writes results.json.
+          2. doc/optimization_results.tsv exists and contains one baseline row with kind=baseline, p95_ms, tests=pass, and decision=baseline.
+          3. Existing optimization rows, if any, are preserved.
+          4. git diff --name-only shows only doc/optimization_results.tsv and results.json changed by this subtask.
         initial_hint: |
-          Run: k6 run benchmarks/load_test.js --out json=results.json
-          Parse results.json for p95 latency, create optimization_results.tsv.
+          Run:
+          - k6 run benchmarks/load_test.js --out json=results.json
 
-  # ── Task 2: Iterative Optimization Loop ───────────────────────────────
+          Parse results.json for p95 latency. If doc/optimization_results.tsv
+          already exists, preserve existing optimization rows and append or
+          refresh only the baseline row. Do not modify source code, tests,
+          configs, benchmark scripts, or unrelated docs.
+
+  # ── Task 2: Fixed Iterative Optimization Loop ─────────────────────────
   - id: 2
-    name: "Iterative API performance optimization"
+    name: "Run fixed optimization iterations"
     type: looping
     repeat_count: 5
     max_attempts_per_loop: 3
     completion_criteria: |
-      One complete cycle of: analyze → implement → benchmark → evaluate.
+      Each iteration completes this linear cycle: analyze current evidence,
+      implement or reject exactly one recommendation, verify behavior and scope,
+      then benchmark and evaluate the verified change.
     subtasks:
       - id: 2.1
-        name: "Analyze bottleneck and propose optimization"
+        name: "Analyze bottleneck and write one recommendation"
         type: simple
         system_prompt_prefix: |
           You are a backend performance engineer specializing in Rust async services.
         completion_criteria: |
-          1. Bottleneck identified and documented in doc/optimization_log.md
-          2. Proposed optimization does not violate hard constraints
+          1. doc/optimization_log.md contains exactly one new recommendation for the current iteration.
+          2. The recommendation includes iteration_id, recommendation_id, status=unused, allowed_paths, forbidden_paths, rationale, expected_impact, and risk.
+          3. The recommendation is not a repeat of an experiment already marked failed, reverted, rejected, or kept.
+          4. No source code, tests, configs, benchmark scripts, benchmark outputs, or result tables are modified.
         initial_hint: |
-          Read doc/optimization_results.tsv for current metrics.
-          Read doc/optimization_log.md for past experiments (avoid repeating failures).
-          Identify the current bottleneck, propose one focused optimization.
+          Read doc/optimization_results.tsv and doc/optimization_log.md. Inspect
+          only the relevant source files needed to understand the current
+          bottleneck. Write exactly one focused recommendation for this loop
+          iteration. Keep allowed_paths narrow enough for git diff --name-only
+          verification in Task 2.3.
+
+          If this loop iteration is being retried after Task 2.2 or Task 2.3
+          failed, do not create a new recommendation. Reuse the current
+          iteration's existing unused recommendation and make no changes unless
+          the log is missing required fields.
 
       - id: 2.2
-        name: "Implement optimization, build, and test"
+        name: "Implement or reject the latest recommendation"
         type: simple
         completion_criteria: |
-          1. Code changes implemented (minimal, focused)
-          2. cargo build --release succeeds
-          3. cargo test --all passes
-          4. Changes committed: git commit -m "opt: <description>"
+          1. Exactly one latest recommendation with status=unused is either implemented or rejected.
+          2. If implemented, cargo build --release exits 0 and cargo test --all exits 0.
+          3. If implemented, git diff --name-only contains only files listed under allowed_paths for the recommendation plus doc/implementation_status.md.
+          4. If rejected, no source/test/config changes remain and doc/implementation_status.md records the concrete safety or feasibility reason.
+          5. doc/implementation_status.md records iteration_id, recommendation_id, decision, changed_paths, build_status, test_status, and notes.
+          6. No tests, public schemas, benchmark scripts, generated benchmark outputs, or forbidden_paths are modified.
         initial_hint: |
-          Read doc/optimization_log.md for the latest proposed optimization.
-          Implement it, build, test. If tests fail, fix or revert.
+          Read the latest recommendation with status=unused in
+          doc/optimization_log.md. Respect its allowed_paths and forbidden_paths.
+          Before editing, inspect git diff in case a previous retry left partial
+          changes.
+
+          If the recommendation is unsafe or infeasible, do not edit source
+          code; write decision=rejected and the reason to
+          doc/implementation_status.md. If implemented, keep the change minimal,
+          then run cargo build --release and cargo test --all. Do not commit;
+          Task 2.4 decides whether the change is kept or reverted.
 
       - id: 2.3
-        name: "Benchmark and evaluate"
+        name: "Verify implementation behavior and scope"
         type: simple
         max_attempts: 1
         model: lite
+        system_prompt_prefix: |
+          You are a verifier. Do NOT modify source code, tests, configs, benchmark scripts, generated data, or documentation files other than doc/implementation_status.md.
         completion_criteria: |
-          1. Benchmark completed, new row appended to optimization_results.tsv
-          2. If regression > 5%: git revert HEAD, record as "reverted"
-          3. If improvement: record as "kept"
-          4. doc/optimization_log.md updated with results
+          1. doc/implementation_status.md exists and references the latest recommendation_id.
+          2. If decision=implemented, cargo test --all exits 0.
+          3. If decision=implemented, git diff --name-only contains only files listed under allowed_paths for the recommendation plus doc/implementation_status.md.
+          4. No tests, public API schemas, benchmark scripts, configs, generated benchmark outputs, or forbidden_paths were modified.
+          5. doc/implementation_status.md contains verification_status=pass, or the verifier records the exact failed check and stops with failure.
+          6. Only doc/implementation_status.md may be updated by this verifier subtask.
         initial_hint: |
-          Run: k6 run benchmarks/load_test.js --out json=results.json
-          Compare p95 with previous best in optimization_results.tsv.
-          Keep if improved, revert if regressed. Update docs either way.
+          Run verification only. Compare git diff --name-only against the latest
+          recommendation's allowed_paths and forbidden_paths. If checks fail,
+          record the exact failure in doc/implementation_status.md and stop;
+          do not fix code in this subtask. A failed verifier should propagate
+          failure so the loop retry re-enters the implementation step for the
+          same recommendation instead of adding a nested evaluation layer.
+
+      - id: 2.4
+        name: "Benchmark and evaluate the verified change"
+        type: long_running
+        max_attempts: 1
+        model: lite
+        completion_criteria: |
+          1. If the latest recommendation was rejected, doc/optimization_results.tsv has an iteration row with decision=rejected and no benchmark is required.
+          2. If implemented, cargo test --all exits 0 before benchmarking, or the latest result row records tests=fail and decision=reverted.
+          3. If implemented and tests pass, k6 benchmark exits 0 and results.json contains p95 latency.
+          4. doc/optimization_results.tsv has a new row with iteration_id, kind=optimization, p95_ms or n/a, tests, decision, and notes.
+          5. If tests fail or p95_ms regresses by more than 5% versus the previous best kept row, only the latest implementation is reverted and the row has decision=reverted.
+          6. If the change is kept, tests=pass and decision=kept, and no unrelated files are modified.
+          7. doc/optimization_log.md marks the evaluated recommendation as kept, reverted, or rejected with the same iteration_id.
+        initial_hint: |
+          Read doc/implementation_status.md and doc/optimization_log.md. If the
+          latest decision is rejected, append a rejected row to
+          doc/optimization_results.tsv and update the recommendation status.
+
+          If the latest decision is implemented, first run cargo test --all. If
+          tests fail, revert only the latest implementation and record
+          tests=fail, decision=reverted. If tests pass, run:
+          k6 run benchmarks/load_test.js --out json=results.json
+
+          Compare p95_ms to the previous best kept row in
+          doc/optimization_results.tsv. Revert only the latest optimization when
+          needed; do not modify unrelated files.
+
+  # ── Task 3: Final Report ──────────────────────────────────────────────
+  - id: 3
+    name: "Write final optimization report"
+    type: simple
+    max_attempts: 1
+    completion_criteria: |
+      1. doc/final_report.md exists.
+      2. The report includes baseline p95, best/final p95, test status, kept changes, reverted changes, rejected recommendations, and remaining blockers if any.
+      3. The report is consistent with doc/optimization_results.tsv, doc/optimization_log.md, and doc/implementation_status.md.
+      4. Only doc/final_report.md is modified by this task.
+      5. No source code, tests, configs, benchmark scripts, benchmark outputs, or result tables are modified.
+    initial_hint: |
+      Read doc/optimization_results.tsv, doc/optimization_log.md, and
+      doc/implementation_status.md. This is a reporting task only; do not modify
+      source code, tests, configs, benchmark scripts, benchmark outputs, or
+      result tables.
 ```
