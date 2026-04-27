@@ -18,36 +18,40 @@ Reference for AI agents that generate TODO tasks.
 
 ### Design Rules
 
-6. **`completion_criteria`** are specific, measurable, and verifiable by the AI — not vague like "code is good". See §4.2.
-7. **`initial_hint`** provides key file paths, commands, and constraints — not a rigid step-by-step script. See §4.3.
-8. **No over-decomposition**: subtasks are grouped by failure mode, not by individual commands (2–3 subtasks typical). See §4.1.
-9. **No under-decomposition**: expensive steps (training, build) are separate from cheap steps (evaluation, reporting). See §4.1.
-10. **`max_attempts: 1`** is set on execution-only subtasks (build, benchmark, test) that don't write code. See §6.2.
-11. **`model: "lite"`** is set on straightforward execution tasks; complex reasoning uses default. See §6.3.
-12. **State persistence**: inter-subtask data is written to files, not assumed in conversation context. See §4.6.
-13. **Retry resilience**: tasks that modify shared state mention cleanup in `initial_hint`. See §4.5.
-14. **Subtask boundaries** align with logical checkpoints and independent failure modes.
-15. **Type-specific patterns**: read the relevant guide in §7 for your task type (build, test, optimization, etc.).
+I. Task Decomposition
+
+6. **No over-decomposition**: (1) keep logically dependent work in one task (e.g. when implementing tightly coupled modules A and B). (2) Keep implement + build + test in one subtask so the AI can iterate without re-entering the same task. (3) Split tasks only at trust boundaries (e.g. anti-hack verification must be a separate subtask) or expensive/time-consuming checkpoints (See rule 8). 2–4 subtasks typical. See §4.1.
+7. **No under-decomposition**: separate expensive (e.g. idea composition, implementation) and time-consuming steps (e.g. training) into distinct subtasks. See §4.1.
+8. **State persistence**: inter-subtask data is written to files, not assumed in conversation context. See §4.7.
+9. **Failure resilience**: tasks may inherit broken state from (a) their own failed retries, or (b) a predecessor task that failed and left partial changes. In Linear mode there is no scheduler to skip tasks, so include prerequisite checks in `initial_hint` (e.g. "verify the project builds before starting"). See §4.5.
+
+II. Task Fields
+
+10. **`completion_criteria`** are specific, measurable, and verifiable by the AI — not vague like "code is good". See §4.2.
+11. **`initial_hint`** provides key file paths, commands, and constraints — not a rigid step-by-step script. See §4.3.
+12. **`max_attempts: 1`** is set on execution-only subtasks (build, benchmark, test) that don't write code. See §6.2.
+13. **`model: "lite"`** is set on straightforward execution tasks; use default for tasks that requires complex reasoning. See §6.3.
+
+III. Type-specific Guide
+
+14. **Type-specific patterns**: read the relevant guide in §7 for your task type.
 
 ### Anti-Hack Rules
 
-16. **Negative constraints**: For every "implement X" task, explicitly state what must NOT be modified (test files, configs, unrelated modules).
-17. **Verification separation**: Separate "implement" from "verify" into different subtasks. Use `system_prompt_prefix` on verification subtasks to forbid code modification.
-18. **Measurable criteria only**: Every `completion_criteria` must be checkable by running a command or reading a file — never subjective ("code is clean", "well-optimized").
-19. **Scope boundaries**: When a task modifies code, specify which files/directories are in scope. Forbid changes outside that scope.
+15. **Negative constraints**: For every "implement X" task, explicitly state what must NOT be modified (test files, configs, unrelated modules).
+16. **Verification separation**: Separate "implement" from "verify" into different subtasks. Verify subtask should use `max_attempts: 1` for fast error propagation, use `system_prompt_prefix` to forbid code modification, and include anti-hack checks for complex implementations.
+17. **Scope boundaries**: When a task modifies code, specify which files/directories are in scope. Forbid changes outside that scope.
 
 ---
 
 ## 2. Execution Model Overview
 
 AutoAgent drives an AI coding agent (e.g. Codex, Gemini CLI, Claude Code) through a sequence of tasks defined in `todos.yaml`.
-The AI agent can do anything a developer can: edit code, run commands, read logs, install packages, use git, etc.
 
 | Property | Implication for task design |
 |----------|-----------------------------|
 | **Fully autonomous** | No human in the loop. `completion_criteria` and `initial_hint` must be specific enough for the AI to act without clarification. |
-| **Context window limit** | Avoid tasks requiring extremely large files/outputs in a single step. |
-| **No shared conversation context between tasks and subtasks** | Tasks and subtasks **share the filesystem only**. Each subtask automatically receives a workflow overview and a summary of the previous step, but **detailed intermediate results must be persisted to files** — conversation context is NOT shared. |
+| **No shared conversation context between tasks and subtasks** | Tasks and subtasks **share the filesystem only**. The AI session is reset between each subtask. Each subtask automatically receives a workflow overview and a summary of the previous step, but **detailed intermediate results must be persisted to files** — conversation context is NOT shared. |
 | **Sequential execution** | Top-level tasks run in ascending ID order. Task N+1 starts only after task N completes or exhausts retries. |
 | **Failed tasks don't block** | A failed task does NOT prevent subsequent tasks from running. Later tasks may depend on artifacts produced by earlier tasks. Design ordering carefully. |
 
@@ -331,11 +335,14 @@ completion_criteria: |
   3. No new files created outside src/parser/
 ```
 
-### 4.5 Retry and Failure Handling
+### 4.5 Failure Resilience
+
+Tasks may inherit broken state from two sources. Design defensively for both.
+
+#### Same-task retry
 
 When a subtask is retried, previous attempts may have modified files. The AI has summaries of previous attempts but **filesystem changes persist**.
 
-**Guidelines:**
 - **Mention cleanup in `initial_hint`** when a task modifies shared state:
   ```yaml
   initial_hint: |
@@ -346,7 +353,32 @@ When a subtask is retried, previous attempts may have modified files. The AI has
 - **Use git as a safety net** in `initial_hint` when appropriate: "Run `git diff` first to check for unexpected changes."
 - **Don't over-engineer for idempotency** — it's enough to make the AI *aware* that residual state may exist.
 
-**Defensive task design** — when tasks depend on external tools or services:
+#### Predecessor failure
+
+In Linear mode, tasks execute sequentially and **unconditionally** — if task N fails all its attempts, task N+1 still runs. There is no scheduler to skip dependent tasks. This means every task may inherit broken state from a failed predecessor.
+
+- **Add prerequisite checks in `initial_hint`** so the AI detects inherited failures early:
+  ```yaml
+  # Task 2 depends on Task 1's output
+  initial_hint: |
+    Before starting: verify the project builds and the correctness test passes.
+    If either fails, this likely means a previous task did not complete
+    successfully. Report the issue and stop — do NOT attempt to fix
+    problems outside your scope.
+  ```
+- **Design `completion_criteria` to detect inherited failures**:
+  ```yaml
+  completion_criteria: |
+    1. The project builds successfully.
+    2. All tests in test_suite_A pass.
+    If the project does not build at the start, mark as NOT COMPLETED
+    with a note that a prerequisite task failed.
+  ```
+- **Scope boundaries matter here** — a task that detects predecessor failure should report it, not silently try to fix unrelated breakage.
+
+#### Defensive task design
+
+When tasks depend on external tools or services:
 
 - **In `completion_criteria`** — handle partial success explicitly:
   ```yaml
@@ -361,7 +393,8 @@ When a subtask is retried, previous attempts may have modified files. The AI has
     If either fails, fix that FIRST.
   ```
 
-**Subtask failure in nested/looping tasks:**
+#### Subtask failure in nested/looping tasks
+
 - Design subtasks so failure can be diagnosed from output.
 - Align subtask boundaries with logical checkpoints — retrying from step 2 or 3 should be meaningful.
 - Avoid subtasks that silently fail — ensure errors are visible in output.
@@ -517,6 +550,7 @@ Using `system_prompt_prefix` to restrict behavior is especially useful for execu
 | **Data Pipelines / ETL** | `data_pipelines.md` | Extract, transform, load, and validate data |
 | **Setup & Deployment** | `setup_and_deployment.md` | Environment setup, dependency install, deployment |
 | **Research & Analysis** | `research_and_analysis.md` | Code analysis, architecture review, report writing |
+| **Academic Experiments** | `academic_experiments.md` | Multi-branch comparison experiments, controlled variables, ablation studies |
 
 ---
 

@@ -10,72 +10,110 @@ Reference for AI agents that generate TODO tasks for AI-scheduled execution.
 
 ### Schema Rules
 
+I. General Schema Rules
+
 1. **Root `description`** exists and covers: Goal, Architecture, Key file paths, Hard constraints, Rules. See §3 for full guidance.
-2. **`ai_orchestrator`** is configured with `strategy`, `stop_condition`, `last_result` (and optionally `max_rounds`). See §5.（我已经修改了，可以让代码optional但不能让AI optional）
-3. **Every task** has `id`, `name`, `type`, `description`, `completion_criteria`.
-4. **ID assignment**: top-level IDs are sequential integers; subtask IDs use dot notation (e.g., 1.1, 1.2).
-5. **`*_once` types** (`simple_once`, `long_running_once`) can ONLY be subtasks, not top-level tasks.
-6. **`long_running`** is used for any command that may take > 1 minute.
+2. **Every task** has `id`, `name`, `type`, `description`, `completion_criteria`.
+3. **ID assignment**: top-level IDs are sequential integers; subtask IDs use dot notation (e.g., 1.1, 1.2).
+4. **`*_once` types** (`simple_once`, `long_running_once`) can ONLY be subtasks, not top-level tasks.
+5. **`long_running`** is used for any command that may take > 1 minute.
+
+II. AI Scheduling Schema Rules
+
+6. **`ai_orchestrator`** is configured with `strategy`, `stop_condition`, `last_result` (and optionally `max_rounds`). See §5.
 
 ### Design Rules
 
-7. **Task-specific `description`** is scheduler-facing, with 1-3 sentences explaining what the task does and produces. See §5.3.
-8. **`completion_criteria`** are specific, measurable, and verifiable by the AI — not vague like "code is good". See §4.2.
-9. **`initial_hint`** provides key file paths, commands, and constraints — not a rigid step-by-step script. See §4.3.
-10. **No over-decomposition**: subtasks are grouped by failure mode, not by individual commands (2-4 subtasks typical). See §4.1.
-11. **No under-decomposition**: separate expensive steps (e.g. idea composition, implementation) and time-consuming steps (e.g. training). See §4.1.
-12. **`max_attempts: 1`** is set on execution-only subtasks (build, benchmark, test) that don't write code. See §6.2.
-13. **`model: "lite"`** is set on straightforward execution tasks; complex reasoning uses default. See §6.3.
-14. **State persistence**: inter-subtask data is written to files, not assumed in conversation context. See §4.7.
-15. **Retry resilience**: tasks that modify shared state mention cleanup in `initial_hint`. See §4.5.
-16. **Subtask boundaries** align with logical checkpoints and independent failure modes.
-17. **Type-specific patterns**: read the relevant guide in §8 for your task type (build, test, optimization, etc.).
+I. General Rules for Task Decomposition
+
+7. **Default flat**: prefer single `simple` / `long_running` top-level tasks; let the scheduler handle ordering and re-execution. Use subtasks only when: (a) enforced sequential ordering is required and the scheduler cannot guarantee it (e.g. anti-hack verification must run after implementation, report must run after tests pass), or (b) bundling several lightweight steps into one top-level task to reduce scheduling overhead. See §4.1.
+8. **No over-decomposition**: keep logically dependent work in one task (e.g. when implementing tightly coupled modules A and B). See §4.1.
+9. **No under-decomposition**: separate logically independent work into distinct top-level tasks so the scheduler can re-execute them individually. If a single task does too much, the scheduler loses granularity. See §4.1.
+10. **State persistence**: inter-subtask data is written to files, not assumed in conversation context. See §4.7.
+11. **Failure resilience**: tasks may inherit broken state from (a) their own failed retries, or (b) a predecessor task that failed. The scheduler can handle predecessor failures at the scheduling level via `strategy` and `last_result`, but tasks should still include basic prerequisite checks in `initial_hint` as a safety net. See §4.5.
+
+II. Task Fields
+
+12. **Task-specific `description`** is scheduler-facing, with 1-3 sentences explaining what the task does and produces. See §5.3.
+13. **`completion_criteria`** are specific, measurable, and verifiable by the AI — not vague like "code is good". See §4.2.
+14. **`initial_hint`** provides key file paths, commands, and constraints — not a rigid step-by-step script. See §4.3.
+15. **`max_attempts: 1`** is set on execution-only subtasks (build, benchmark, test) that don't write code. See §6.2.
+16. **`model: "lite"`** is set on straightforward execution tasks; use default for tasks that requires complex reasoning. See §6.3.
+
+III. Type-specific Guide
+
+17. **Type-specific patterns**: Read the relevant guide in §8 for your task type.
 
 ### AI Scheduling Rules
 
-18. **`strategy`** references task IDs by name, encodes dependencies, and includes failure recovery rules. See §5.2.
-19. **`last_result`** is configured for every task whose output the scheduler needs to make decisions. See §5.3.
-20. **`stop_condition`** is specific, measurable, and includes a fallback. See §5.4.
-21. **Task independence**: each top-level task is self-contained; ordering is encoded in `strategy`, not assumed.
+I. Fields under ai_orchestrator
+
+18. **`strategy`** encodes task dependencies and includes failure recovery rules. See §5.2.
+19. **`last_result`** is configured for every task whose output is needed by scheduler. Use `${workspace}` to reference relative paths. See §5.3.
+20. **`stop_condition`** is specific, measurable, and includes a fallback (e.g. after N consecutive failures). See §5.4.
+
+II. AI Scheduling Rules for Task Decomposition
+
+21. **Task independence**: each top-level task is self-contained; ordering is encoded in `strategy`.
 22. **Max ~5–8 top-level tasks** — more bloats the scheduler prompt.
 23. **Design for re-execution**: tasks may run 0, 1, or many times.
 24. **Scheduler observables**: design around what the scheduler can see (description, execution count, last result, history).
-25. **Use `${workspace}` in file paths** within `last_result` (auto-expanded at runtime).
 
 ### Anti-Hack Rules
 
-26. **Negative constraints**: For every "implement X" task, explicitly state what must NOT be modified (test files, configs, unrelated modules).
-27. **Verification separation**: Separate "implement" from "verify" into different subtasks. Use `system_prompt_prefix` on verification subtasks to forbid code modification.
-28. **Measurable criteria only**: Every `completion_criteria` must be checkable by running a command or reading a file — never subjective ("code is clean", "well-optimized").
-29. **Scope boundaries**: When a task modifies code, specify which files/directories are in scope. Forbid changes outside that scope.
+25. **Negative constraints**: For every "implement X" task, explicitly state what must NOT be modified (test files, configs, unrelated modules).
+26. **Verification separation**: Separate "implement" from "verify" into different subtasks. Verify subtask should use `max_attempts: 1` for fast error propagation, use `system_prompt_prefix` to forbid code modification, and include anti-hack checks for complex implementations.
+27. **Scope boundaries**: When a task modifies code, specify which files/directories are in scope. Forbid changes outside that scope.
 
 ---
 
 ## 2. Execution Model Overview
 
 AutoAgent drives an AI coding agent (e.g. Codex, Gemini CLI, Claude Code) through a sequence of tasks defined in `todos.yaml`.
-The AI agent can do anything a developer can: edit code, run commands, read logs, install packages, use git, etc.
 
 ### 2.1 General Properties
 
-| Property | Implication for task design |
-|----------|-----------------------------|
-| **Fully autonomous** | No human in the loop. `completion_criteria` and `initial_hint` must be specific enough for the AI to act without clarification. |
-| **Context window limit** | Avoid tasks requiring extremely large files/outputs in a single step. |
-| **No shared conversation context between tasks and subtasks** | Tasks and subtasks **share the filesystem only**. Each subtask automatically receives a workflow overview and a summary of the previous step, but **detailed intermediate results must be persisted to files** — conversation context is NOT shared. |
-| **Failed tasks don't block** | A failed task does NOT prevent subsequent tasks from running. Later tasks may depend on artifacts produced by earlier tasks. Design ordering carefully. |
+1. **Fully autonomous**
+
+No human in the loop. 
+Implication: `completion_criteria` and `initial_hint` must be specific enough for the AI to act without clarification.
+
+2. **Context isolation between tasks and subtasks**
+
+Tasks and subtasks **share the filesystem, not conversation or context**. **AI sessions are reset** between tasks and subtasks. No response is passed between top-level tasks; only a summary of the previous subtask is passed between subtasks.
+Implication: (1) Design top-level tasks independently; (2) **Detailed intermediate results must be persisted to files** — conversation context is NOT shared.
+
+3. **Failed tasks don't block**
+
+A failed task or subtask does NOT prevent subsequent tasks or subtasks from running.
+Implication: (1) Design tasks that are aware of previous failures; (2) AI scheduler's `strategy` should include failure recovery rules.
 
 ### 2.2 AI Scheduling Properties
 
 In AI scheduling mode, an AI scheduler dynamically decides which task to run each round, rather than executing tasks in fixed order.
 
-| Property | Implication for task design |
-|----------|-----------------------------|
-| **Dynamic execution order** | The AI scheduler decides which task to run each round. **Tasks may run 0, 1, or many times**. |
-| **Task dependencies via `strategy`** | Don't assume task N-1 ran before task N; use `strategy` to encode dependencies explicitly. |
-| **Task description is critical — but keep it short** | The scheduler AI understands what each task does **only by** root-level `description` and task-specific `description` field. Keep descriptions informative but concise (1–3 sentences). The scheduler prompt includes **every** task's description simultaneously, so verbose descriptions accumulate and degrade scheduler performance. Move step-by-step details to `initial_hint`. |
-| **`last_result` feeds execution outcomes to the scheduler** | Configure `last_result` per task so the scheduler can observe what happened. Without it, the scheduler only sees success/failure — not *what* was produced. See §5.3 for full details. |
-| **Scheduler AI only decides top-level task** | The scheduler AI only decides **which top-level task** to run. It does NOT control subtask-level execution — subtasks within a selected task execute sequentially as defined. |
+1. **Dynamic execution order**
+
+The AI scheduler decides which task to run each round.
+Implication: Design **tasks that can be run 0, 1, or many times**.
+
+2. **Task dependencies via `strategy`**
+
+Implication: Use AI scheduler's `strategy` to encode dependencies explicitly; Don't assume task N-1 ran before task N.
+
+3. **Task description is critical — but keep it short**
+
+The scheduler AI understands what each task does **only by root-level `description` and task-specific `description` field**.
+Implication: Keep task-specific `description` informative, but concise (1-3 sentences) to prevent prompt bloat. DO NOT include task details in task-specific `description`.
+
+4. **`last_result` feeds execution outcomes to the scheduler**
+
+Implication: Configure `last_result` so the scheduler knows where to find task execution results.
+
+5. **Scheduler AI only decides top-level task**
+
+The scheduler AI only decides **which top-level task** to run. It does NOT control subtask-level execution — subtasks within a task execute sequentially as defined.
+Implication: scheduler's `strategy` should only contain top-level task dependencies.
 
 ---
 
@@ -87,36 +125,25 @@ The root-level `description` field provides project-wide context visible to **al
 
 | Component | Purpose | Example | When needed |
 |-----------|---------|---------|-------------|
-| **Goal** | What the project is trying to accomplish | "Iteratively optimize GPU compute shaders for minimum latency" | Always |
-| **Architecture** | Directory structure and key modules, so the executor AI knows where to find things | "src/shaders — HLSL shaders, src/frame_processor.cpp — GPU dispatch logic" | Always |
-| **Key file paths** | Frequently referenced paths: configs, output files, data files | "Config: configs/base.yaml, Results: optimization_results.tsv" | Always (even if short) |
-| **Key commands** | Build, test, and validation commands the AI will run repeatedly | "Build: cmake --build build --config Release, Test: build/Release/Simulator.exe" | When the project has build/test/run commands |
+| **Goal** | What the project is trying to accomplish | "Iteratively optimize GPU compute shaders for minimum latency" | **Always** |
+| **Architecture** | Directory structure and key modules, so AI knows where to find things | "src/shaders — HLSL shaders, src/frame_processor.cpp — GPU dispatch logic" | **Always** |
+| **Key file paths** | Frequently referenced paths: configs, output files, data files | "Config: configs/base.yaml, Results: optimization_results.tsv" | **Always** |
+| **Hard constraints** | Things the AI must NEVER do or change | "Must maintain correctness; never modify resource/ data files" | **Always** |
+| **Rules** | Behavioral rules that apply to every task in this project | "One experiment per round; Keep changes minimal; If you find a bug, fix ONLY the bug." | **Always** |
+| **Key commands** | Build, test, run and validation commands the AI will run repeatedly, with environments if specified | "cmake --build build --config Release / conda run -n py312 python test.py" | When the project has build/test/run/validation commands |
 | **Architecture notes** | Key technical coupling points where changes in one place require syncing another | "Modifying shader thread group size requires syncing Dispatch() call" | When the codebase has non-obvious cross-file dependencies |
-| **Hard constraints** | Things the executor AI must NEVER do or change | "Must maintain correctness score 100/100; never modify resource/ data files" | Always |
-| **Rules** | Behavioral rules that apply to every task in this project | "One experiment per round; If you find a bug, fix ONLY the bug." | Always |
 | **Naming conventions** | File/branch naming rules so the AI can derive names programmatically | "Docs named by branch number N: optimization_results_N.tsv" | When the project generates numbered/templated files across iterations |
 | **Historical references** | Past work the AI should consult to avoid repeating failures | "doc/optimization_report_*.md — previous branch reports" | When the project runs across multiple branches/iterations |
-| **Reference docs** | Documentation the executor AI should read when it needs deeper understanding | "See docs/API.md for the REST interface spec" | When external/internal docs exist that the AI should consult on-demand |
+| **Reference docs** | Documentation the executor AI should read when it needs deeper understanding | "See docs/method.md for complete method understanding when you feel the task difficult to complete" | When external/internal docs exist that the AI should consult on-demand |
 
-### Which Components for Which Project Type
+Not every project needs every optional component. See subguides in §8 for full details.
 
-Not every project needs every component:
-
-| Scenario | Typical components | Notes |
-|----------|-------------------|-------|
-| **Iterative optimization** (perf tuning, ML training) | All of the above | Naming conventions + historical references are critical to avoid repeating failed experiments |
-| **Build & ship** (implement a feature, fix bugs) | Goal, Architecture, Key file paths, Key commands, Hard constraints, Rules | Usually no iteration history; naming conventions only if generating artifacts |
-| **One-shot generation** (scaffold a project, generate configs) | Goal, Architecture, Key file paths, Hard constraints, Rules | Minimal — focus on what to generate and what not to touch |
-| **Data pipeline / ETL** | Goal, Architecture, Key file paths, Key commands, Hard constraints, Rules | Emphasize file paths (input/output dirs) and commands (run pipeline, validate) |
-| **Research / exploration** (read code, write analysis) | Goal, Architecture, Key file paths, Reference docs, Rules | No build commands; emphasize reference docs and where to write findings |
-
-### What NOT to Put in `description` (AI Scheduling Mode)
+### What NOT to Put in `description`
 
 | Anti-pattern | Why | Where it belongs instead |
 |--------------|-----|--------------------------|
-| **Scheduling strategy** (e.g. "run task 2 before task 3", "this is a two-phase project") | Only the scheduler AI needs this; including it in `description` leaks scheduling concerns to executor AIs that cannot act on them | `ai_orchestrator.strategy` field (scheduler-only prompt) |
-| **Task execution order or phasing** (e.g. "Phase 1 is setup, Phase 2 is optimization") | Executors don't need to know the overall schedule — they only see their own task | `ai_orchestrator.strategy` or task-level `description` |
-| **Step-by-step implementation details** for a specific task | Overly detailed instructions in the project description distract other tasks' executors | Task-level `initial_hint` (executor-only) |
+| **Scheduling strategy** / **Task execution order or phasing** (e.g. "run task 2 before task 3", "this is a two-phase project") | Only the scheduler AI needs this, not executor AI. | `ai_orchestrator.strategy` field (scheduler-only prompt) |
+| **Step-by-step implementation details** | Overly detailed instructions in the project description distract other tasks' executors | Task-level `initial_hint` (executor-only) |
 | **Scheduler behavioral rules** (e.g. "never run the same task twice in a row") | These are scheduling constraints, not project context | `ai_orchestrator.strategy` |
 
 > **Rule of thumb:** If the information is only useful to the scheduler (scheduling order, phasing, task dependencies), put it in `ai_orchestrator.strategy`. If it's only useful to one task's executor (step-by-step details), put it in that task's `initial_hint`. The root `description` is for **shared project context** that every AI benefits from.
@@ -131,93 +158,144 @@ See the [Complete Example](#10-complete-example) at the end of this document for
 
 ### 4.1 Task Decomposition
 
-#### Choosing the Right Structure
+#### Core Principle: Default Flat
 
-| Scenario | Recommended structure |
-|----------|-----------------------|
-| Single logical step (fix a bug, add validation, run tests) | Single `simple` task |
-| Multi-step workflow where the goal is **achieving a target** | `nested` task |
-| Iterative cycle where the goal is **running N rounds of experimentation** | `looping` task |
-| One step within a workflow is itself multi-step | Nested subtask (`nested`/`looping` as subtask type) |
+In AI scheduling mode, **prefer flat `simple` / `long_running` top-level tasks**. The scheduler handles ordering, re-execution, and retry — you don't need subtasks for these purposes.
 
-**`nested` vs `looping`:**
-- Use `nested` when the core goal is **reaching a specific end state** (e.g., "achieve 20% speedup", "all tests pass"). The AI evaluates the overall `completion_criteria` after each round and can stop early or retry intelligently.
-- Use `looping` when the core goal is **performing N rounds of work** (e.g., "do 5 rounds of optimization", "run 3 experiments with different configs"). There is no AI evaluation of overall completion — it simply repeats for `repeat_count` iterations.
-
-#### Task Granularity for AI Scheduling
-
-In AI scheduling mode, each top-level task represents a **logical unit of work** that the scheduler can independently select. Design tasks at the right granularity:
+Each top-level task should be a **complete, self-contained action** that produces a meaningful result the scheduler can evaluate:
 
 | Granularity | Example | Verdict |
 |-------------|---------|---------|
 | Too coarse | "Do everything: setup, optimize, test, report" | ❌ Scheduler has no control |
-| Right level | "Run one optimization round" | ✅ Scheduler can repeat or skip |
+| Right level | "Implement optimization, build, and test" | ✅ Scheduler can repeat or skip |
 | Too fine | "Edit line 42 of kernel.cu" | ❌ Scheduler shouldn't micromanage |
 
-**Rule of thumb:** Each task should be a complete, self-contained action that produces a meaningful result the scheduler can evaluate.
+**Task independence**: each task should be runnable without assuming a specific prior task ran in the same round. Use `strategy` to encode ordering constraints, and persist all inter-task communication to files (referenced in `last_result`).
 
-#### Task Independence
+#### When to Use Subtasks (and When Not To)
 
-Tasks should be as independent as possible:
-- Each task should be runnable without assuming a specific prior task ran in the same round
-- Use `strategy` to encode ordering constraints, not implicit assumptions
-- Persist all inter-task communication to files (referenced in `last_result`)
+In AI scheduling mode, the scheduler itself handles re-execution and ordering of top-level tasks. **Subtasks are only needed in two scenarios:**
+
+**Scenario A: Enforced sequential ordering** — when step B *must* run after step A succeeds, and the scheduler cannot reliably guarantee this ordering.
+
+The most common case is **trust boundaries / anti-hack**: implementation and verification must be in separate sessions with different `system_prompt_prefix`, and verification must only run after implementation succeeds.
+
+```yaml
+# GOOD: Subtasks enforce ordering that the scheduler can't guarantee
+- id: 2
+  name: "Implement and verify optimization"
+  type: nested
+  subtasks:
+    - id: 2.1
+      name: "Implement optimization, build, and test"
+      type: simple
+      # AI implements, builds, tests — all in one session for fast iteration
+    - id: 2.2
+      name: "Anti-hack verification"
+      type: simple
+      max_attempts: 1
+      system_prompt_prefix: "You are a code reviewer. Do NOT modify any code."
+      # Must run AFTER 2.1 succeeds; must be a different session
+```
+
+Other examples: "report must be written only after tests pass", "deployment must happen only after build succeeds".
+
+**Scenario B: Bundling lightweight steps** — when several small steps are too trivial to be individual top-level tasks (scheduling overhead > execution cost).
+
+```yaml
+# GOOD: Bundle trivial steps to avoid polluting the scheduler with micro-tasks
+- id: 1
+  name: "Setup and baseline"
+  type: nested
+  subtasks:
+    - id: 1.1
+      name: "Build and run tests"
+      type: simple
+      model: lite
+    - id: 1.2
+      name: "Run benchmark and record baseline"
+      type: long_running
+      model: lite
+```
+
+**When NOT to use subtasks:**
+
+| Scenario | Why not subtask |
+|----------|-----------------|
+| "Analyze" and "implement" as two subtasks | Both are high-intensity but independent — scheduler can re-execute each |
+| Expensive steps (e.g. training) | Scheduler handles re-execution natively |
+| Retry control | Scheduler's re-scheduling is the retry mechanism. Write retry strageties in scheduler's `strategy`. |
 
 #### Anti-Patterns
 
-**Over-decomposition** — too many fine-grained subtasks:
-
-Each subtask runs in a separate AI session with context isolation. More subtasks = more session resets + token overhead. Only create a separate subtask when the step has a **genuinely different failure mode** that benefits from independent retry. If two steps always succeed or fail together, merge them.
+**Over-decomposition (subtask level)** — using subtasks where separate top-level tasks would be better:
 
 ```yaml
-# BAD: 5 subtasks where 2–3 would do
-subtasks:
-  - id: 1.1
-    name: "Read and analyze the profiling report"    
-  - id: 1.2
-    name: "Identify the top bottleneck"  
-  - id: 1.3
-    name: "Implement the optimization" 
-  - id: 1.4
-    name: "Build the project"  
-  - id: 1.5
-    name: "Run benchmark and validate"
+# BAD: These should be separate top-level tasks in AI scheduling mode.
+# The scheduler can order and re-execute them independently.
+- id: 1
+  name: "Full optimization cycle"
+  type: nested
+  subtasks:
+    - id: 1.1
+      name: "Analyze profiling report"
+    - id: 1.2
+      name: "Implement optimization"
+    - id: 1.3
+      name: "Run benchmark"
+    - id: 1.4
+      name: "Write report"
 
-# GOOD: 3 subtasks with clear boundaries
-subtasks:
-  - id: 1.1
-    name: "Analyze profiling report and compose an optimization idea"
-    # AI reads the report, identifies the bottleneck, and formulates
-    # a concrete optimization plan — but does NOT implement yet.
-    # Thinking and coding are both high-intensity; separating them
-    # lets the AI focus fully on analysis without rushing to code.
-  - id: 1.2
-    name: "Implement the optimization and build"
-    # AI takes the idea from 1.1 and implements it. If build fails,
-    # the AI can fix immediately without a costly failure_analysis
-    # round-trip. Keeping implement + build together is key.
-  - id: 1.3
-    name: "Benchmark, validate, make keep/discard decision, and write report"
-    max_attempts: 1    # fail fast → parent decides retry strategy
+# GOOD: Flat top-level tasks; scheduler decides ordering and repetition.
+tasks:
+  - id: 1
+    name: "Analyze bottleneck and propose optimization"
+    type: simple
+  - id: 2
+    name: "Implement optimization, build, and test"
+    type: simple
+  - id: 3
+    name: "Benchmark and evaluate"
+    type: simple
 ```
 
-**Recommended pattern**: Group strongly dependent steps into one subtask, but **separate "thinking" from "doing"**:
-- **"analyze + compose idea" vs "implement + build"** — both are high-intensity tasks. When combined, the AI tends to rush the analysis to get to coding, or take shortcuts in implementation because it spent too much context on analysis. Give each its own session.
-- **"implement + build"** — if build fails, the AI can fix code immediately in the same session, saving a failure_analysis round-trip. These always belong together.
-- **"benchmark + validate + report"** — evaluation is a distinct phase. Separating it lets you fail fast and retry from the implementation step without re-running analysis.
-
-**Under-decomposition** — everything in one task when steps are logically independent:
+**Over-decomposition (top-level)** — splitting tightly coupled work into separate tasks, forcing the AI to implement without full context:
 
 ```yaml
-# BAD: Training + evaluation + deployment should be separate subtasks
+# BAD: Module A and B have tight coupling (shared interfaces, mutual calls).
+# Splitting them means each AI session only sees half the picture.
+tasks:
+  - id: 1
+    name: "Implement module A"
+    type: simple
+  - id: 2
+    name: "Implement module B"
+    type: simple
+
+# GOOD: Keep coupled modules together so the AI can make coherent cross-module decisions.
+tasks:
+  - id: 1
+    name: "Implement modules A and B"
+    type: simple
+```
+
+When tightly coupled work is split:
+- **Incoherent interfaces** — each AI session designs its half independently, leading to mismatched APIs.
+- **Wasted retries** — integration failures force both tasks to re-run, negating any granularity benefit.
+
+**Under-decomposition** — cramming everything into one task, removing scheduler granularity:
+
+```yaml
+# BAD: Scheduler can't re-run just the benchmark or just the implementation
 - id: 1
-  name: "Train, evaluate, and deploy the model"
+  name: "Analyze, implement, benchmark, and report"
   type: simple
 ```
 
-If deployment fails, the AI retries the entire task including expensive training. Use `nested` so deployment can be retried independently. Beyond wasted compute, under-decomposition also causes:
-- **Context explosion** — the AI accumulates too much context across many steps, degrading output quality.
-- **AI laziness** — when faced with too many responsibilities in one task, the AI tends to take shortcuts (e.g., choosing the simplest optimization because there's so much else to do).
+When a single task does too much:
+- **Scheduler loses control** — it can't re-execute just the failed phase.
+- **Context explosion** — the AI accumulates too much context, degrading output quality.
+- **AI laziness** — faced with too many responsibilities, the AI takes shortcuts.
 
 #### Result-Driven Design
 
@@ -411,11 +489,14 @@ completion_criteria: |
   3. No new files created outside src/parser/
 ```
 
-### 4.5 Retry and Failure Handling
+### 4.5 Failure Resilience
+
+Tasks may inherit broken state from two sources. Design defensively for both.
+
+#### Same-task retry
 
 When a subtask is retried, previous attempts may have modified files. The AI has summaries of previous attempts but **filesystem changes persist**.
 
-**Guidelines:**
 - **Mention cleanup in `initial_hint`** when a task modifies shared state:
   ```yaml
   initial_hint: |
@@ -426,7 +507,31 @@ When a subtask is retried, previous attempts may have modified files. The AI has
 - **Use git as a safety net** in `initial_hint` when appropriate: "Run `git diff` first to check for unexpected changes."
 - **Don't over-engineer for idempotency** — it's enough to make the AI *aware* that residual state may exist.
 
-**Defensive task design** — when tasks depend on external tools or services:
+#### Predecessor failure
+
+A preceding task may fail and leave partial or broken state. In AI scheduling mode, this can be handled at **two levels**:
+
+**Level 1 — Scheduler-level (preferred):** Design `last_result` and `strategy` so the scheduler detects predecessor failures and avoids scheduling dependent tasks:
+```yaml
+# In strategy:
+Scheduling rules:
+1. Do not run "Optimize" unless "Baseline benchmark" last_result
+   contains "benchmark completed successfully".
+2. If "Build and test" fails 3 consecutive times, skip to "Report".
+```
+This is the preferred approach because it avoids wasting tokens on tasks that are doomed to fail.
+
+**Level 2 — Task-level (safety net):** Even with scheduler-level handling, include basic prerequisite checks in `initial_hint` as a fallback, since the scheduler may not always make the right decision:
+```yaml
+initial_hint: |
+  Before starting: verify the project builds and the correctness test passes.
+  If either fails, this likely means a previous task did not complete
+  successfully. Report the issue and mark as NOT COMPLETED.
+```
+
+#### Defensive task design
+
+When tasks depend on external tools or services:
 
 - **In `completion_criteria`** — handle partial success explicitly:
   ```yaml
@@ -441,7 +546,8 @@ When a subtask is retried, previous attempts may have modified files. The AI has
     If either fails, fix that FIRST.
   ```
 
-**Subtask failure in nested/looping tasks:**
+#### Subtask failure in nested/looping tasks
+
 - Design subtasks so failure can be diagnosed from output.
 - Align subtask boundaries with logical checkpoints — retrying from step 2 or 3 should be meaningful.
 - Avoid subtasks that silently fail — ensure errors are visible in output.
@@ -776,6 +882,7 @@ Using `system_prompt_prefix` to restrict behavior is especially useful for execu
 | **Data Pipelines / ETL** | `data_pipelines.md` | Extract, transform, load, and validate data |
 | **Setup & Deployment** | `setup_and_deployment.md` | Environment setup, dependency install, deployment |
 | **Research & Analysis** | `research_and_analysis.md` | Code analysis, architecture review, report writing |
+| **Academic Experiments** | `academic_experiments.md` | Multi-branch comparison experiments, controlled variables, ablation studies |
 
 ---
 
