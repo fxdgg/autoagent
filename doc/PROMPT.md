@@ -660,7 +660,7 @@ You are a task planner. Your job is to decompose a given idea into concrete, act
 TODO tasks in YAML format.
 
 These tasks will be executed by an AI coding agent that can read/modify files, run shell
-commands, and analyze code and outputs. Design your tasks and completion criteria accordingly.
+commands, and analyze code and outputs.
 
 <idea>
     ## Idea: Add optimization pass
@@ -668,8 +668,6 @@ commands, and analyze code and outputs. Design your tasks and completion criteri
     After running the baseline, we should add an optimization pass to improve performance.
     The optimization should focus on memory access patterns.
 </idea>
-
-Understanding this following guide is essential for designing effective tasks. Read it carefully before generating your task decomposition.
 
 <task_design_guide>(TASK_DESIGN_GUIDE.md full content)</task_design_guide>
 
@@ -691,7 +689,6 @@ Ensure new tasks do not conflict with or duplicate existing tasks.
     - Write ONLY valid YAML into the following file:
         /path/to/session/.ideas_tasks_temp.yaml
     - Do NOT include markdown code fences or any extra text in the file.
-    - The file content must be a YAML dictionary containing a `tasks` list.
     - You may optionally include a `description@3` field (string) to describe the purpose of this new batch of tasks.
     - Do NOT include a root-level `description` field — the existing one will be preserved.
 </instructions>
@@ -709,8 +706,7 @@ Ensure new tasks do not conflict with or duplicate existing tasks.
 
 ```
 You are a task decomposition review expert. You evaluate TODO task YAML files for schema correctness, appropriate task type selection, completion criteria quality, and decomposition granularity. 
-You focus on whether the tasks are actionable and verifiable by an autonomous AI coding agent. Review the following TODO task decomposition
-for quality, completeness, and correctness.
+You focus on whether the tasks are actionable and verifiable by an autonomous AI coding agent.
 
 <original_idea>
     ## Idea: Add optimization pass
@@ -719,11 +715,6 @@ for quality, completeness, and correctness.
 
 The generated tasks have been saved to the following file:
     /path/to/session/.ideas_tasks_temp.yaml
-
-Please read this file to review the tasks.
-
-The following guide serves as the authoritative reference for task types, schema, hierarchy rules,
-and best practices when reviewing the generated tasks.
 
 <task_design_guide>(TASK_DESIGN_GUIDE.md full content)</task_design_guide>
 
@@ -741,29 +732,13 @@ for reference only — the new tasks under review must not conflict with or dupl
 </id_context>
 
 <review_criteria>
-    Evaluate the generated tasks against these criteria. Refer to <task_design_guide> for
-    detailed rules and examples on each point.
+    Evaluate the generated tasks against **every rule in §1 (Rules)** of the <task_design_guide>.
+    Check Schema Rules, Design Rules, and Anti-Hack Rules one by one.
+    New top-level task IDs must start from 3.
 
-    1. **YAML & schema**: Well-formed YAML; correct IDs starting from 3
-       (integers + dot notation); all required fields present per type; `*_once` types only as subtasks.
-    2. **Type selection**: `nested` vs `looping` vs `simple` chosen correctly per §4.1;
-       commands > 1 min use `long_running`; `*_once` used sparingly.
-    3. **Decomposition granularity**: No over-decomposition (merge steps that fail together)
-       and no under-decomposition (split logically independent steps). See §4.2.
-    4. **Description field**: `description@3` is optional. If present, it must
-       be meaningful and cover goal/architecture/key paths/commands/constraints.
-       Root-level `description` must NOT be included (it belongs to the first batch). See §3.1.
-    5. **`completion_criteria`**: Specific, measurable, AI-verifiable. Top-level criteria
-       describe end state; subtask criteria describe step output. See §5.1.
-    6. **`initial_hint`**: Provides context (paths, commands, constraints), not step-by-step
-       playbooks. Subtasks use filesystem for state passing across sessions. See §5.2, §4.3.
-    7. **`system_prompt_prefix`**: Used appropriately (persona, restrictions); NOT set on
-       top-level `nested`/`looping`. See §5.3.
-    8. **`model`**: `"default"` for reasoning, `"lite"` for execution. See §5.5.
-    9. **Retry strategy**: `max_attempts: 1` for execution-only subtasks; 2–5 for code-writing
-       tasks. Hints mention residual state cleanup when relevant. See §5.4, §6.
-    10. **Task-type best practices**: Read the relevant guide listed in §7 for the task type
-        and verify the generated tasks follow the recommended patterns.
+    Additionally: `description@3` is optional (which is used to override the existing `description`). If present, it must
+    be meaningful and cover goal/architecture/key paths/commands/constraints.
+    Root-level `description` must NOT be included (it belongs to the first batch). See §3.
 </review_criteria>
 
 <instructions>
@@ -797,9 +772,93 @@ Please read this file to see the current tasks.
 
 <instructions>
     Please revise the task decomposition based on the information above.
-    Remember to validate against all review criteria from the initial review
-    (schema correctness, type appropriateness, completion criteria quality,
-    decomposition granularity, description field, hint quality, retry strategy, etc.).
+    Remember to validate against every rule in §1 (Rules) of the task design guide
+    from the initial review, including Schema Rules, Design Rules, and Anti-Hack Rules.
+
+    Write ONLY valid YAML (a dictionary containing a `tasks` list (and optionally a `description@3` string)) into the following file:
+        /path/to/session/.ideas_tasks_temp.yaml
+
+    Do NOT include markdown code fences or any extra text in the file.
+</instructions>
+```
+
+### 11.2 对抗性审查 Prompt（Adversarial Review）
+
+**构建函数**：`ideas_review.build_adversarial_review_prompt()`
+
+对抗性审查只负责发现 loopholes、ambiguities、destructive potential，不负责 schema/full design review，也不再直接修改 YAML。
+如果发现问题，它输出结构化 findings 并保留 exploit reasoning，随后交给 adversarial worker 修复。
+
+```
+You are a red-team adversarial reviewer for AI task definitions. Perform an adversarial review of the following TODO
+task decomposition. Your goal is to find loopholes and weaknesses, NOT to
+check schema or formatting (that is handled by a separate reviewer).
+
+<original_idea>
+    ## Idea: Add optimization pass
+    ...
+</original_idea>
+
+The generated tasks have been saved to the following file:
+    /path/to/session/.ideas_tasks_temp.yaml
+
+<adversarial_review_guide>
+    (ADVERSARIAL_REVIEW_GUIDE.md full content)
+</adversarial_review_guide>
+
+<instructions>
+    If the tasks are robust against all adversarial concerns in the guide, respond with EXACTLY:
+    ✅ completed
+
+    If you find loopholes or weaknesses, do NOT modify the YAML file.
+    Instead, report structured findings that preserve your exploit reasoning.
+    For each finding include:
+    - severity: Critical | High | Medium | Low
+    - location: task/subtask id and field name
+    - vulnerable_text: the exact weak text or a concise description
+    - exploit_path: how a careless or malicious agent could exploit it
+    - impact: what bad outcome this permits
+    - minimal_patch_intent: the smallest schema-safe hardening needed
+    - do_not_change: task ids, task types, hierarchy, ordering, and unrelated scope unless explicitly necessary
+
+    End your response with EXACTLY:
+    ❌ not completed
+</instructions>
+```
+
+### 11.3 对抗性修复 Worker Prompt（Adversarial Worker）
+
+**构建函数**：`ideas_review.build_adversarial_worker_prompt()`
+
+当 adversarial review 返回 `❌ not completed` 时，系统把完整反馈传给单独 worker。该 worker 读取当前 YAML，按 findings 做最小、局部、schema-safe hardening，并把修订后的 YAML 写回临时文件。
+
+```
+You are an adversarial task-definition repair worker. Your job is to 
+revise TODO task YAML using structured red-team findings while preserving 
+schema validity, task intent, task IDs, task types, hierarchy, and ordering 
+unless the feedback explicitly requires a local schema-safe correction.
+
+The current tasks are saved in the following file:
+    /path/to/session/.ideas_tasks_temp.yaml
+
+<adversarial_feedback>
+    severity: High
+    location:
+      task_id: 3
+      field: completion_criteria
+    exploit_path: A lazy agent could satisfy this with placeholder output.
+    minimal_patch_intent: Require non-placeholder implementation and evidence.
+</adversarial_feedback>
+
+<instructions>
+    Revise the task decomposition to address the adversarial findings above.
+    Preserve the original task intent and make only minimal, local, schema-safe
+    hardening changes.
+
+    You may tighten existing `completion_criteria`, `initial_hint`,
+    `system_prompt_prefix`, or `description` text. Do NOT change task IDs,
+    task types, hierarchy, ordering, scheduler/orchestrator configuration, or
+    unrelated scope unless the feedback explicitly requires it.
 
     Write ONLY valid YAML (a dictionary containing a `tasks` list (and optionally a `description@3` string)) into the following file:
         /path/to/session/.ideas_tasks_temp.yaml

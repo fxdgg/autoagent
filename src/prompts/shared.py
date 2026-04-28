@@ -157,6 +157,26 @@ def load_task_design_guide(mode: str = "linear") -> str:
     if mode in _task_design_guide_cache:
         return _task_design_guide_cache[mode]
 
+    guide_filename = _GUIDE_FILENAMES.get(mode, _GUIDE_FILENAMES["linear"])
+    guide_path = os.path.join(_GUIDE_DIR, guide_filename)
+    try:
+        with open(guide_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        # Replace bare .md filenames with absolute paths so the AI can read
+        # them directly.  Only replace names that actually exist on disk.
+        for fname in os.listdir(_GUIDE_DIR):
+            if fname.endswith(".md") and fname != guide_filename:
+                abs_path = os.path.join(_GUIDE_DIR, fname)
+                content = content.replace(f"`{fname}`", f"`{abs_path}`")
+        _task_design_guide_cache[mode] = content
+    except OSError as e:
+        logger.warning(f"Failed to load {guide_filename}: {e}")
+        _task_design_guide_cache[mode] = (
+            "(Task Design Guide not available — refer to the task schema "
+            "documentation for task types, fields, and best practices.)"
+        )
+    return _task_design_guide_cache[mode]
+
 
 def load_adversarial_review_guide() -> str:
     """Load and cache the content of the adversarial review guide.
@@ -184,26 +204,6 @@ def load_adversarial_review_guide() -> str:
             "negative constraints.)"
         )
     return _adversarial_guide_cache
-
-    guide_filename = _GUIDE_FILENAMES.get(mode, _GUIDE_FILENAMES["linear"])
-    guide_path = os.path.join(_GUIDE_DIR, guide_filename)
-    try:
-        with open(guide_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        # Replace bare .md filenames with absolute paths so the AI can read
-        # them directly.  Only replace names that actually exist on disk.
-        for fname in os.listdir(_GUIDE_DIR):
-            if fname.endswith(".md") and fname != guide_filename:
-                abs_path = os.path.join(_GUIDE_DIR, fname)
-                content = content.replace(f"`{fname}`", f"`{abs_path}`")
-        _task_design_guide_cache[mode] = content
-    except OSError as e:
-        logger.warning(f"Failed to load {guide_filename}: {e}")
-        _task_design_guide_cache[mode] = (
-            "(Task Design Guide not available — refer to the task schema "
-            "documentation for task types, fields, and best practices.)"
-        )
-    return _task_design_guide_cache[mode]
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +325,13 @@ ROLE_ADVERSARIAL_REVIEWER = (
     "or that exploits vague constraints to cause unintended side effects.\n"
     "You focus on whether the tasks are robust against misinterpretation "
     "and whether their constraints are tight enough to prevent harmful behavior."
+)
+
+ROLE_ADVERSARIAL_WORKER = (
+    "You are an adversarial task-definition repair worker. Your job is to "
+    "revise TODO task YAML using structured red-team findings while preserving "
+    "schema validity, task intent, task IDs, task types, hierarchy, and ordering "
+    "unless the feedback explicitly requires a local schema-safe correction."
 )
 
 

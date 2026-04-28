@@ -55,26 +55,23 @@ Ensure new tasks do not conflict with or duplicate existing tasks.
     # Description instruction varies by whether this is the first batch
     if next_id == 1:
         description_instruction = (
-            "- The file content must be a YAML dictionary containing a `description` string and a `tasks` list."
+            ""
         )
     else:
         description_instruction = (
-            f"- The file content must be a YAML dictionary containing a `tasks` list.\n"
-            f"    - You may optionally include a `description@{next_id}` field (string) to describe the purpose of this new batch of tasks.\n"
-            f"    - Do NOT include a root-level `description` field — the existing one will be preserved."
+            f"- You may optionally include a `description@{next_id}` field (string) to describe the purpose of this new batch of tasks.\n"
+            f"- Do NOT include a root-level `description` field — the existing one will be preserved."
         )
 
     return f"""You are a task planner. Your job is to decompose a given idea into concrete, actionable
 TODO tasks in YAML format.
 
 These tasks will be executed by an AI coding agent that can read/modify files, run shell
-commands, and analyze code and outputs. Design your tasks and completion criteria accordingly.
+commands, and analyze code and outputs.
 
 <idea>
 {indent_block(idea_display, I4)}
 </idea>
-
-Understanding this following guide is essential for designing effective tasks. Read it carefully before generating your task decomposition.
 
 <task_design_guide>
 {indent_block(task_design_guide, I4)}

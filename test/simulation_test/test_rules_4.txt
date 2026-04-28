@@ -31,19 +31,22 @@
 #   Rule 5:  Idea 2 positive review #1   → ❌ not completed (rejected with feedback)
 #   Rule 6:  Idea 2 adversarial review #1→ ✅ completed (moot — positive failed)
 #   Rule 7:  Idea 2 positive review #2   → ✅ completed (approved on retry)
-#   Rule 8:  Idea 2 adversarial review #2→ ✅ completed (both pass → done)
-#   Rule 9:  Subtask 1.1 attempt #1      → ✅ completed
-#   Rule 10: Subtask 1.2 attempt #1      → autoagent-exec + LONG_RUNNING_IN_PROGRESS
-#   Rule 11: Subtask 1.2 callback        → ✅ completed
-#   Rule 12: Subtask 1.3 attempt #1      → ✅ completed
-#   Rule 13: Subtask 1.4 attempt #1      → ✅ completed
-#   Rule 14: Subtask 1.5 attempt #1      → ✅ completed
-#   Rule 15: Main task 1 evaluation      → main_task_completed: true
-#   Rule 16: Task 2 attempt #1           → ✅ completed
-#   Rule 17: Subtask 3.1 attempt #1      → ✅ completed
-#   Rule 18: Subtask 3.2 attempt #1      → autoagent-exec + LONG_RUNNING_IN_PROGRESS
-#   Rule 19: Subtask 3.2 callback        → ✅ completed
-#   Rule 20: Main task 3 evaluation      → main_task_completed: true
+#   Rule 8:  Idea 2 adversarial review #2→ ❌ not completed (structured findings)
+#   Rule 9:  Idea 2 adversarial worker   → revised YAML for task 3
+#   Rule 10: Idea 2 positive review #3   → ✅ completed (worker revision approved)
+#   Rule 11: Idea 2 adversarial review #3→ ✅ completed (both pass → done)
+#   Rule 12: Subtask 1.1 attempt #1      → ✅ completed
+#   Rule 13: Subtask 1.2 attempt #1      → autoagent-exec + LONG_RUNNING_IN_PROGRESS
+#   Rule 14: Subtask 1.2 callback        → ✅ completed
+#   Rule 15: Subtask 1.3 attempt #1      → ✅ completed
+#   Rule 16: Subtask 1.4 attempt #1      → ✅ completed
+#   Rule 17: Subtask 1.5 attempt #1      → ✅ completed
+#   Rule 18: Main task 1 evaluation      → main_task_completed: true
+#   Rule 19: Task 2 attempt #1           → ✅ completed
+#   Rule 20: Subtask 3.1 attempt #1      → ✅ completed
+#   Rule 21: Subtask 3.2 attempt #1      → autoagent-exec + LONG_RUNNING_IN_PROGRESS
+#   Rule 22: Subtask 3.2 callback        → ✅ completed
+#   Rule 23: Main task 3 evaluation      → main_task_completed: true
 # =============================================================================
 
 # --- Rule 1: Idea 1 decomposition ---
@@ -123,13 +126,63 @@ The task decomposition addresses the key requirements:
 
 ✅ completed
 ---RULE---
-# --- Rule 8: Idea 2 adversarial review #2 - APPROVED ---
-# Tests: Adversarial reviewer also approves — both pass, idea 2 done
-No adversarial concerns found. The nested task constraints are well-defined.
+# --- Rule 8: Idea 2 adversarial review #2 - REJECTED ---
+# Tests: Adversarial reviewer reports structured findings instead of editing YAML
+❌ not completed
+
+severity: High
+location:
+  task_id: 3
+  field: completion_criteria
+vulnerable_text: "Implement shared memory transpose buffer for AXIS=1 and AXIS=2 operations."
+exploit_path: A lazy agent could add placeholder shared memory declarations without proving correctness or preserving benchmark score.
+impact: The task could be marked complete while producing a dummy or incomplete optimization.
+minimal_patch_intent: Require functional implementation, no dummy placeholders, no weakened tests, and benchmark evidence.
+do_not_change:
+  - task id
+  - task type
+  - task hierarchy
+  - unrelated files
+---RULE---
+# --- Rule 9: Idea 2 adversarial worker revision ---
+# Tests: Separate worker receives adversarial feedback and returns revised YAML
+#        while preserving ids/types/hierarchy
+# The mock provider returns YAML directly; production workers may also write the temp file.
+description@3: "Optimize cuFFTDx DCT3D kernel with shared memory transpose for non-X axis"
+tasks:
+  - id: 3
+    name: "Implement shared memory transpose for non-X axis operations"
+    type: nested
+    max_attempts: 10
+    initial_hint: |
+      Modify cufftdx_dct3d.cuh only. Implement real shared-memory transpose logic for AXIS=1 and AXIS=2; do not add placeholder buffers, dummy branches, hardcoded benchmark outputs, or weaken tests/benchmarks.
+    completion_criteria: |
+      Implement functional shared memory transpose buffer logic for AXIS=1 and AXIS=2 operations. The result must not be a placeholder/no-op, must not hardcode benchmark outputs, must not modify tests or benchmark scoring, and must preserve correctness with benchmark evidence.
+    subtasks:
+      - id: 3.1
+        name: "Implement shared memory transpose buffer"
+        type: simple
+        completion_criteria: |
+          Add real shared memory transpose logic for Y and Z axis passes in cufftdx_dct3d.cuh. Do not use dummy placeholder buffers, no-op branches, or unrelated file changes.
+      - id: 3.2
+        name: "Benchmark and verify correctness"
+        type: long_running
+        completion_criteria: |
+          Run the full benchmark suite with the project benchmark command. Score must be 100/100, and tests/benchmark scoring must not be modified.
+---RULE---
+# --- Rule 10: Idea 2 positive review #3 - APPROVED ---
+# Tests: Reviewer approves the adversarial worker revision
+The adversarial worker revision preserves schema and task structure while adding useful anti-hack constraints.
 
 ✅ completed
 ---RULE---
-# --- Rule 9: Subtask 1.1 attempt #1 - COMPLETED ---
+# --- Rule 11: Idea 2 adversarial review #3 - APPROVED ---
+# Tests: Adversarial reviewer approves after worker hardening — both pass, idea 2 done
+No adversarial concerns found. The nested task constraints now forbid placeholders and benchmark tampering.
+
+✅ completed
+---RULE---
+# --- Rule 12: Subtask 1.1 attempt #1 - COMPLETED ---
 # Tests: Original task 1 subtask execution after ideas processing
 I have built the project and recorded the baseline performance.
 
@@ -141,14 +194,14 @@ The baseline timing has been recorded to baseline_timing.txt:
 
 ✅ completed
 ---RULE---
-# --- Rule 10: Subtask 1.2 attempt #1 - LONG_RUNNING submission ---
+# --- Rule 13: Subtask 1.2 attempt #1 - LONG_RUNNING submission ---
 I'll use autoagent-exec to run the ncu profiling command:
 
 autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.2
 
 ⏳ LONG_RUNNING_IN_PROGRESS
 ---RULE---
-# --- Rule 11: Subtask 1.2 callback - COMPLETED ---
+# --- Rule 14: Subtask 1.2 callback - COMPLETED ---
 I have analyzed the ncu profiling results.
 
 Key findings:
@@ -160,7 +213,7 @@ Written analysis to ncu_analysis.txt.
 
 ✅ completed
 ---RULE---
-# --- Rule 12: Subtask 1.3 attempt #1 - COMPLETED ---
+# --- Rule 15: Subtask 1.3 attempt #1 - COMPLETED ---
 I have optimized the CUDA kernel:
 1. Replaced cosf()/sinf() with __sincosf() intrinsic
 2. Improved memory coalescing for Y/Z axis operations
@@ -169,7 +222,7 @@ The code compiles without errors.
 
 ✅ completed
 ---RULE---
-# --- Rule 13: Subtask 1.4 attempt #1 - COMPLETED ---
+# --- Rule 16: Subtask 1.4 attempt #1 - COMPLETED ---
 Build and benchmark results:
 - Score: 100/100 (correctness preserved)
 - Elapsed: 115.00 ms (was 150.00 ms)
@@ -180,21 +233,21 @@ Written results to optimization_result.txt.
 
 ✅ completed
 ---RULE---
-# --- Rule 14: Subtask 1.5 attempt #1 - COMPLETED ---
+# --- Rule 17: Subtask 1.5 attempt #1 - COMPLETED ---
 The optimization achieved 23.3% speedup with correct results.
 Committed: git commit -m "perf: optimize cuFFTDx DCT3D kernel - 23.3% speedup"
 Updated baseline_timing.txt with new timing (115.00 ms).
 
 ✅ completed
 ---RULE---
-# --- Rule 15: Main task 1 evaluation - COMPLETED ---
+# --- Rule 18: Main task 1 evaluation - COMPLETED ---
 {
     "main_task_completed": true,
     "analysis": "The optimization achieved 23.3% speedup (150ms -> 115ms) with correctness preserved (Score: 100/100). The 20% target has been exceeded.",
     "confidence": "high"
 }
 ---RULE---
-# --- Rule 16: Task 2 (from idea 1) attempt #1 - COMPLETED ---
+# --- Rule 19: Task 2 (from idea 1) attempt #1 - COMPLETED ---
 # Tests: Execution of a task that was dynamically added from ideas.md
 I have replaced all separate cosf() and sinf() calls with __sincosf()
 in cufftdx_dct3d.cuh:
@@ -207,7 +260,7 @@ in cufftdx_dct3d.cuh:
 
 ✅ completed
 ---RULE---
-# --- Rule 17: Subtask 3.1 (from idea 2) attempt #1 - COMPLETED ---
+# --- Rule 20: Subtask 3.1 (from idea 2) attempt #1 - COMPLETED ---
 # Tests: Execution of a nested task subtask that was dynamically added
 I have implemented the shared memory transpose buffer:
 
@@ -218,7 +271,7 @@ I have implemented the shared memory transpose buffer:
 
 ✅ completed
 ---RULE---
-# --- Rule 18: Subtask 3.2 (from idea 2) attempt #1 - LONG_RUNNING ---
+# --- Rule 21: Subtask 3.2 (from idea 2) attempt #1 - LONG_RUNNING ---
 # Tests: Long-running subtask in a dynamically added nested task
 I'll run the full benchmark suite using autoagent-exec:
 
@@ -226,7 +279,7 @@ autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 3.2
 
 ⏳ LONG_RUNNING_IN_PROGRESS
 ---RULE---
-# --- Rule 19: Subtask 3.2 callback - COMPLETED ---
+# --- Rule 22: Subtask 3.2 callback - COMPLETED ---
 The benchmark completed successfully:
 - Score: 100/100 (correctness preserved!)
 - Y-axis speedup: 35% (better coalescing)
@@ -235,7 +288,7 @@ The benchmark completed successfully:
 
 ✅ completed
 ---RULE---
-# --- Rule 20: Main task 3 evaluation - COMPLETED ---
+# --- Rule 23: Main task 3 evaluation - COMPLETED ---
 {
     "main_task_completed": true,
     "analysis": "Shared memory transpose successfully implemented for AXIS=1 and AXIS=2. Correctness preserved (Score: 100/100). Y-axis improved by 35%, Z-axis by 28%.",

@@ -12,6 +12,7 @@ from prompts.shared import (
     indent_block,
     ROLE_TASK_REVIEWER,
     ROLE_ADVERSARIAL_REVIEWER,
+    ROLE_ADVERSARIAL_WORKER,
 )
 
 # Indentation constants (same as other prompt builders)
@@ -59,7 +60,7 @@ def build_ideas_review_prompt(
         )
     else:
         description_extra = (
-            f'    Additionally: `description@{next_id}` is optional. If present, it must\n'
+            f'    Additionally: `description@{next_id}` is optional (which is used to override the existing `description`). If present, it must\n'
             f'    be meaningful and cover goal/architecture/key paths/commands/constraints.\n'
             f'    Root-level `description` must NOT be included (it belongs to the first batch). See §3.'
         )
@@ -88,11 +89,6 @@ for quality, completeness, and correctness.
 
 The generated tasks have been saved to the following file:
     {temp_tasks_path}
-
-Please read this file to review the tasks.
-
-The following guide serves as the authoritative reference for task types, schema, hierarchy rules,
-and best practices when reviewing the generated tasks.
 
 <task_design_guide>
 {indent_block(task_design_guide, I4)}
@@ -165,9 +161,8 @@ Please read this file to see the current tasks.""")
 
     parts.append(f"""<instructions>
     Please revise the task decomposition based on the information above.
-    Remember to validate against all review criteria from the initial review
-    (schema correctness, type appropriateness, completion criteria quality,
-    decomposition granularity, description field, hint quality, retry strategy, etc.).
+    Remember to validate against every rule in §1 (Rules) of the task design guide
+    from the initial review, including Schema Rules, Design Rules, and Anti-Hack Rules.
 
     Write ONLY valid YAML (a dictionary containing {desc_guidance}) into the following file:
         {temp_tasks_path}
@@ -195,7 +190,7 @@ def build_adversarial_review_prompt(
 
     Args:
         idea_content: Raw idea text.
-        temp_tasks_path: File path where corrected YAML should be written.
+        temp_tasks_path: File path where the YAML under review is saved.
         next_id: Starting task ID for this batch.
     """
     adversarial_guide = load_adversarial_review_guide()
@@ -219,8 +214,6 @@ check schema or formatting (that is handled by a separate reviewer).
 The generated tasks have been saved to the following file:
     {temp_tasks_path}
 
-Please read this file to review the tasks.
-
 <adversarial_review_guide>
 {indent_block(adversarial_guide, I4)}
 </adversarial_review_guide>
@@ -229,13 +222,71 @@ Please read this file to review the tasks.
     If the tasks are robust against all adversarial concerns in the guide, respond with EXACTLY:
     ✅ completed
 
-    If you find loopholes or weaknesses:
-    DIRECTLY modify the YAML file at:
-        {temp_tasks_path}
-    to tighten constraints, add negative requirements, clarify ambiguous criteria,
-    or add safeguards. Follow the "What You Can Modify" section in the guide.
-    Do NOT include markdown code fences or any extra text in the file.
-    After modifying the file, respond with EXACTLY:
+    If you find loopholes or weaknesses, do NOT modify the YAML file.
+    Instead, report structured findings that preserve your exploit reasoning.
+    For each finding include:
+    - severity: Critical | High | Medium | Low
+    - location: task/subtask id and field name
+    - vulnerable_text: the exact weak text or a concise description
+    - exploit_path: how a careless or malicious agent could exploit it
+    - impact: what bad outcome this permits
+    - minimal_patch_intent: the smallest schema-safe hardening needed
+    - do_not_change: task ids, task types, hierarchy, ordering, and unrelated scope unless explicitly necessary
+
+    End your response with EXACTLY:
     ❌ not completed
+</instructions>
+"""
+
+
+def build_adversarial_worker_prompt(
+    temp_tasks_path: str,
+    adversarial_feedback: str,
+    next_id: int = 1,
+) -> str:
+    """Build a prompt for revising tasks from adversarial findings.
+
+    The adversarial worker receives the current YAML plus the full red-team
+    feedback and writes a revised, schema-preserving YAML file.
+
+    Args:
+        temp_tasks_path: File path where revised YAML should be written.
+        adversarial_feedback: Full feedback from the adversarial reviewer.
+        next_id: Starting task ID for this batch (for description field guidance).
+    """
+    role_line = ROLE_ADVERSARIAL_WORKER
+
+    feedback_display = adversarial_feedback[:limits.get('max')]
+    if len(adversarial_feedback) > limits.get('max'):
+        feedback_display += '\n\n(feedback truncated)'
+
+    if next_id == 1:
+        desc_guidance = "a `description` string and a `tasks` list"
+    else:
+        desc_guidance = f"a `tasks` list (and optionally a `description@{next_id}` string)"
+
+    return f"""{role_line}
+
+The current tasks are saved in the following file:
+    {temp_tasks_path}
+
+<adversarial_feedback>
+{indent_block(feedback_display, I4)}
+</adversarial_feedback>
+
+<instructions>
+    Revise the task decomposition to address the adversarial findings above.
+    Preserve the original task intent and make only minimal, local, schema-safe
+    hardening changes.
+
+    You may tighten existing `completion_criteria`, `initial_hint`,
+    `system_prompt_prefix`, or `description` text. Do NOT change task IDs,
+    task types, hierarchy, ordering, scheduler/orchestrator configuration, or
+    unrelated scope unless the feedback explicitly requires it.
+
+    Write ONLY valid YAML (a dictionary containing {desc_guidance}) into the following file:
+        {temp_tasks_path}
+
+    Do NOT include markdown code fences or any extra text in the file.
 </instructions>
 """
