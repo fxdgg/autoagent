@@ -263,27 +263,24 @@ def build_system_prompt_coding_agent(
     if exec_script_path:
         rules.append(
             "For any command that may run longer than a few minutes,\n"
-            "you MUST use autoagent-exec instead of running it directly in Bash:\n"
+            "you MUST use autoagent-exec instead of running it directly in Bash (which may cause **session timeout**):\n"
             f'  "{exec_script_path}" "<your entire command>"\n'
-            "Directly running in Bash may cause **session timeout**, wasting time or leaving the project in broken state.\n"
             "Always wrap the command in double quotes so that shell operators are passed correctly.\n\n"
+            "How does this work:\n"
+            "You are not executing commands using autoagent-exec; instead you are SUBMITTING the command to the background by using it.\n"
+            "So DO NOT manually wait for the command to finish.\n\n"
             "autoagent-exec has three possible outcomes:\n"
-            "  - \"TASK SUBMITTED\" → the command is running in the background. "
+            "  - \"TASK SUBMITTED\" → the command is submitted to background. "
             "Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.\n"
             "  - \"[OK]\" → the command finished quickly with exit code 0. "
             "Continue working — treat it as a normal completed command.\n"
             "  - \"[FAST-FAIL]\" → the command failed quickly. Read the error output, fix the issue, and retry.\n\n"
             "⚠️ CRITICAL — No Output Redirection:\n"
             "autoagent-exec already captures ALL stdout/stderr to a log file automatically.\n"
-            "If you add output redirection (>, >>, 2>, &>, | tee, etc.) to the command, you may NOT see any of the three outcomes above.\n"
+            "If you add output redirection (>, >>, 2>, &>, | tee, etc.), you may NOT see any of the three outcomes above.\n"
             "If the task hint's command already includes redirection, strip the redirection and use --stdout / --stderr instead:\n"
             f'  "{exec_script_path}" --stdout build.log --stderr build_err.log "make"\n\n'
-            "⚠️ If you can't see autoagent-exec's any of the three outcomes:\n"
-            "The most likely reason is that its output has been already redirected.\n"
-            "DO NOT run autoagent-exec again before checking if the process is still running by PID.\n"
-            "Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately if it's still running.\n"
-            "Check the command outputs and continue working if it has already finished.\n"
-            "DO NOT use `sleep` or any wait command.\n"
+            "Pass --help to autoagent-exec for further troubleshooting.\n"
         )
 
     rules.append(

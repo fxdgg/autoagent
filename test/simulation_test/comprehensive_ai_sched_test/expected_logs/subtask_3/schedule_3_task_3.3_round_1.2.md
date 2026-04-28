@@ -7,28 +7,26 @@
     1. You are fully autonomous — make all decisions independently. NEVER ask the user questions or wait for confirmation.
     
     2. For any command that may run longer than a few minutes,
-    you MUST use autoagent-exec instead of running it directly in Bash:
+    you MUST use autoagent-exec instead of running it directly in Bash (which may cause **session timeout**):
       "<autoagent-exec>" "<your entire command>"
-    Directly running in Bash may cause **session timeout**, wasting time or leaving the project in broken state.
     Always wrap the command in double quotes so that shell operators are passed correctly.
     
+    How does this work:
+    You are not executing commands using autoagent-exec; instead you are SUBMITTING the command to the background by using it.
+    So DO NOT manually wait for the command to finish.
+    
     autoagent-exec has three possible outcomes:
-      - "TASK SUBMITTED" → the command is running in the background. Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+      - "TASK SUBMITTED" → the command is submitted to background. Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
       - "[OK]" → the command finished quickly with exit code 0. Continue working — treat it as a normal completed command.
       - "[FAST-FAIL]" → the command failed quickly. Read the error output, fix the issue, and retry.
     
     ⚠️ CRITICAL — No Output Redirection:
     autoagent-exec already captures ALL stdout/stderr to a log file automatically.
-    If you add output redirection (>, >>, 2>, &>, | tee, etc.) to the command, you may NOT see any of the three outcomes above.
+    If you add output redirection (>, >>, 2>, &>, | tee, etc.), you may NOT see any of the three outcomes above.
     If the task hint's command already includes redirection, strip the redirection and use --stdout / --stderr instead:
       "<autoagent-exec>" --stdout build.log --stderr build_err.log "make"
     
-    ⚠️ If you can't see autoagent-exec's any of the three outcomes:
-    The most likely reason is that its output has been already redirected.
-    DO NOT run autoagent-exec again before checking if the process is still running by PID.
-    Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately if it's still running.
-    Check the command outputs and continue working if it has already finished.
-    DO NOT use `sleep` or any wait command.
+    Pass --help to autoagent-exec for further troubleshooting.
     
     3. When you are done, end your response with EXACTLY one of:
       ✅ completed
@@ -136,28 +134,26 @@ The connection pool size needs to be increased in the staging config.
     1. You are fully autonomous — make all decisions independently. NEVER ask the user questions or wait for confirmation.
     
     2. For any command that may run longer than a few minutes,
-    you MUST use autoagent-exec instead of running it directly in Bash:
+    you MUST use autoagent-exec instead of running it directly in Bash (which may cause **session timeout**):
       "<autoagent-exec>" "<your entire command>"
-    Directly running in Bash may cause **session timeout**, wasting time or leaving the project in broken state.
     Always wrap the command in double quotes so that shell operators are passed correctly.
     
+    How does this work:
+    You are not executing commands using autoagent-exec; instead you are SUBMITTING the command to the background by using it.
+    So DO NOT manually wait for the command to finish.
+    
     autoagent-exec has three possible outcomes:
-      - "TASK SUBMITTED" → the command is running in the background. Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
+      - "TASK SUBMITTED" → the command is submitted to background. Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
       - "[OK]" → the command finished quickly with exit code 0. Continue working — treat it as a normal completed command.
       - "[FAST-FAIL]" → the command failed quickly. Read the error output, fix the issue, and retry.
     
     ⚠️ CRITICAL — No Output Redirection:
     autoagent-exec already captures ALL stdout/stderr to a log file automatically.
-    If you add output redirection (>, >>, 2>, &>, | tee, etc.) to the command, you may NOT see any of the three outcomes above.
+    If you add output redirection (>, >>, 2>, &>, | tee, etc.), you may NOT see any of the three outcomes above.
     If the task hint's command already includes redirection, strip the redirection and use --stdout / --stderr instead:
       "<autoagent-exec>" --stdout build.log --stderr build_err.log "make"
     
-    ⚠️ If you can't see autoagent-exec's any of the three outcomes:
-    The most likely reason is that its output has been already redirected.
-    DO NOT run autoagent-exec again before checking if the process is still running by PID.
-    Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately if it's still running.
-    Check the command outputs and continue working if it has already finished.
-    DO NOT use `sleep` or any wait command.
+    Pass --help to autoagent-exec for further troubleshooting.
     
     3. When you are done, end your response with EXACTLY one of:
       ✅ completed
