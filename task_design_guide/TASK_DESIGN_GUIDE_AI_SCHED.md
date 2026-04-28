@@ -15,7 +15,8 @@ I. General Schema Rules
 1. **Root `description`** exists and:
 (1) covers Goal, Architecture, Key file paths, Hard constraints, Rules;
 (2) does not cover step-by-step instructions which should belong to `initial_hint`;
-(3) does not cover scheduler-only ordering rules (e.g. execute task 2 after 1, this is a two-phase optimization).
+(3) does not include "potential/recommended approach" since AI can figure it out themselves. Doing this only narrows AI's creativity;
+(4) does not cover scheduler-only ordering rules (e.g. execute task 2 after 1, this is a two-phase optimization).
 See §3 for full guidance.
 2. **Every task** has `id`, `name`, `type`, `description`, `completion_criteria`.
 3. **ID assignment**: top-level IDs are sequential integers; subtask IDs use dot notation (e.g., 1.1, 1.2).
@@ -82,7 +83,7 @@ Verification subtasks must (a) check for negative constraints in rule 27; (b) us
 
 31. Are inter-task handoffs written to named files instead of relying on conversation context?
 32. Are completion criteria specific, measurable, and verifiable enough?
-33. Are `last_result` correctly set so that scheduler can see each task's execution results?
+33. Are `last_result` correctly set so that scheduler can see each task's execution results? Will files specified in `last_result` be created BEFORE scheduler wants to see them?
 34. Does `completion_criteria` include negative constraints, and is there a verify task after each implement task for complex implementations?
 
 ---
@@ -141,7 +142,7 @@ What the scheduler does **not** see directly:
 3. **`last_result` is not scheduler-only**
 
 File paths in `last_result` is shared between scheduler and executor, not scheduler-only.
-**Implication**: `last_result` only informs the scheduler of where to retrieve results. Executor tasks does not need to copy results to `last_result`.
+**Implication**: Use `last_result` to inform the scheduler of where to retrieve results, instead of saying "Executor must copy results to xxx" or "Persist scheduler-relevant outcomes in xxx" elsewhere.
 
 ---
 
@@ -168,6 +169,7 @@ Include:
 Do not include:
 - **scheduler-only ordering rules** (e.g. execute task 2 after 1, this is a two-phase optimization): put them in `ai_orchestrator.strategy`.
 - **step-by-step instructions**: put them in task's `initial_hint`.
+- **potential/recommended approach**: AI can figure it out themselves. Doing this only narrows AI's creativity.
 
 Rule of thumb:
 root `description` is for shared project context; `strategy` is for scheduler decisions; `initial_hint` is for executor.

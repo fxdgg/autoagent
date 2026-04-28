@@ -801,7 +801,7 @@ class ConversationLogger:
 
         content_parts = []
         content_parts.append(f"### Revision #{revision_round} Prompt\n\n")
-        content_parts.append(f"```\n{prompt}\n```\n\n")
+        content_parts.append(f"```\n{_strip_task_design_guide(prompt)}\n```\n\n")
 
         try:
             with open(filepath, 'a', encoding='utf-8') as f:

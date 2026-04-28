@@ -203,9 +203,7 @@ def build_adversarial_review_prompt(
     else:
         idea_display = idea_content
 
-    return f"""{role_line} Perform an adversarial review of the following TODO
-task decomposition. Your goal is to find loopholes and weaknesses, NOT to
-check schema or formatting (that is handled by a separate reviewer).
+    return f"""{role_line}
 
 <original_idea>
 {indent_block(idea_display, I4)}
@@ -243,17 +241,21 @@ def build_adversarial_worker_prompt(
     temp_tasks_path: str,
     adversarial_feedback: str,
     next_id: int = 1,
+    mode: str = "linear",
 ) -> str:
     """Build a prompt for revising tasks from adversarial findings.
 
-    The adversarial worker receives the current YAML plus the full red-team
-    feedback and writes a revised, schema-preserving YAML file.
+    The adversarial worker receives the current YAML, the full task design
+    guide, and the full red-team feedback, then writes a complete revised,
+    schema-preserving YAML file.
 
     Args:
         temp_tasks_path: File path where revised YAML should be written.
         adversarial_feedback: Full feedback from the adversarial reviewer.
         next_id: Starting task ID for this batch (for description field guidance).
+        mode: Execution mode — ``"linear"`` or ``"ai"``.
     """
+    task_design_guide = load_task_design_guide(mode)
     role_line = ROLE_ADVERSARIAL_WORKER
 
     feedback_display = adversarial_feedback[:limits.get('max')]
@@ -270,21 +272,19 @@ def build_adversarial_worker_prompt(
 The current tasks are saved in the following file:
     {temp_tasks_path}
 
+<task_design_guide>
+{indent_block(task_design_guide, I4)}
+</task_design_guide>
+
 <adversarial_feedback>
 {indent_block(feedback_display, I4)}
 </adversarial_feedback>
 
 <instructions>
-    Revise the task decomposition to address the adversarial findings above.
-    Preserve the original task intent and make only minimal, local, schema-safe
-    hardening changes.
+    Revise the task decomposition to fully address every adversarial finding above, 
+    while keeping the result compliant with every rule in §1 (Rules) of the <task_design_guide>.
 
-    You may tighten existing `completion_criteria`, `initial_hint`,
-    `system_prompt_prefix`, or `description` text. Do NOT change task IDs,
-    task types, hierarchy, ordering, scheduler/orchestrator configuration, or
-    unrelated scope unless the feedback explicitly requires it.
-
-    Write ONLY valid YAML (a dictionary containing {desc_guidance}) into the following file:
+    Write ONLY the complete revised valid YAML (a dictionary containing {desc_guidance}) into the following file:
         {temp_tasks_path}
 
     Do NOT include markdown code fences or any extra text in the file.

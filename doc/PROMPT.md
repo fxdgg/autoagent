@@ -830,7 +830,7 @@ The generated tasks have been saved to the following file:
 
 **构建函数**：`ideas_review.build_adversarial_worker_prompt()`
 
-当 adversarial review 返回 `❌ not completed` 时，系统把完整反馈传给单独 worker。该 worker 读取当前 YAML，按 findings 做最小、局部、schema-safe hardening，并把修订后的 YAML 写回临时文件。
+当 adversarial review 返回 `❌ not completed` 时，系统把完整反馈传给单独 worker。该 worker 读取当前 YAML，并同时参考完整 `<task_design_guide>`，一次性按 findings 做最小、局部、schema-safe hardening，把完整修订后的 YAML 写回临时文件；不能把修复责任继续传给后续 task、reviewer、注释或 TODO。worker 完成后，外层 review loop 进入下一轮，并首先由新的 positive reviewer 审查修订结果。
 
 ```
 You are an adversarial task-definition repair worker. Your job is to 
@@ -840,6 +840,10 @@ unless the feedback explicitly requires a local schema-safe correction.
 
 The current tasks are saved in the following file:
     /path/to/session/.ideas_tasks_temp.yaml
+
+<task_design_guide>
+    (TASK_DESIGN_GUIDE.md full content)
+</task_design_guide>
 
 <adversarial_feedback>
     severity: High
@@ -851,16 +855,10 @@ The current tasks are saved in the following file:
 </adversarial_feedback>
 
 <instructions>
-    Revise the task decomposition to address the adversarial findings above.
-    Preserve the original task intent and make only minimal, local, schema-safe
-    hardening changes.
+    Revise the task decomposition to fully address every adversarial finding above, 
+    while keeping the result compliant with every rule in §1 (Rules) of the <task_design_guide>.
 
-    You may tighten existing `completion_criteria`, `initial_hint`,
-    `system_prompt_prefix`, or `description` text. Do NOT change task IDs,
-    task types, hierarchy, ordering, scheduler/orchestrator configuration, or
-    unrelated scope unless the feedback explicitly requires it.
-
-    Write ONLY valid YAML (a dictionary containing a `tasks` list (and optionally a `description@3` string)) into the following file:
+    Write ONLY the complete revised valid YAML (a dictionary containing a `tasks` list (and optionally a `description@3` string)) into the following file:
         /path/to/session/.ideas_tasks_temp.yaml
 
     Do NOT include markdown code fences or any extra text in the file.

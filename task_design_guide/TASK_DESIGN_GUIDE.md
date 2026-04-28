@@ -12,7 +12,8 @@ Reference for AI agents that generate `todos.yaml` tasks for AutoAgent.
 
 1. **Root `description`** exists and:
 (1) covers Goal, Architecture, Key file paths, Hard constraints, Rules;
-(2) does not cover step-by-step instructions which should belong to `initial_hint`.
+(2) does not cover step-by-step instructions which should belong to `initial_hint`;
+(3) does not include "potential/recommended approach" since AI can figure it out themselves. Doing this only narrows AI's creativity.
 See §3 for full guidance.
 2. **Every task** has `id`, `name`, `type`, `completion_criteria`.
 3. **ID assignment**: top-level IDs are sequential integers; subtask IDs use dot notation (e.g., 1.1, 1.2).
@@ -109,7 +110,9 @@ Include:
   - Naming Conventions: required file, branch, metric, or artifact naming patterns.
   - Historical Result Files: paths to prior attempt/iteration outputs that should be read to avoid repeated work.
 
-Do not put task-specific step-by-step instructions here; put those in the task's `initial_hint`.
+Do not include:
+- **step-by-step instructions**: put them in task's `initial_hint`.
+- **potential/recommended approach**: AI can figure it out themselves. Doing this only narrows AI's creativity.
 
 ---
 

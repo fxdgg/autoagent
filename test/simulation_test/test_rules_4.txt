@@ -145,8 +145,8 @@ do_not_change:
   - unrelated files
 ---RULE---
 # --- Rule 9: Idea 2 adversarial worker revision ---
-# Tests: Separate worker receives adversarial feedback and returns revised YAML
-#        while preserving ids/types/hierarchy
+# Tests: Separate worker receives adversarial feedback plus the full task design guide,
+#        fixes the findings in one pass, and returns revised YAML while preserving ids/types/hierarchy
 # The mock provider returns YAML directly; production workers may also write the temp file.
 description@3: "Optimize cuFFTDx DCT3D kernel with shared memory transpose for non-X axis"
 tasks:

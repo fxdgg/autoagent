@@ -425,6 +425,7 @@ class IdeasReviewerMixin:
             temp_tasks_path=temp_tasks_path,
             adversarial_feedback=adversarial_feedback,
             next_id=next_id,
+            mode=self._detect_mode(),
         )
 
         try:
