@@ -358,7 +358,7 @@ Read only the guide relevant to the task domain:
 
 ## 8. Complete Example
 
-Below is a complete linear-mode `todos.yaml` demonstrating key patterns: root `description`, reference docs, fixed-count `looping`, file-backed handoffs, anti-hack verification, failure resilience, `completion_criteria`, `initial_hint`, `system_prompt_prefix`, `model` selection, and retry boundaries.
+Below is a complete linear-mode `todos.yaml` demonstrating key patterns: root `description`, reference docs, fixed-count `looping`, file-backed handoffs, optimization hypotheses, anti-hack verification, per-round optimization reporting, failure-pattern tracking, failure resilience, `completion_criteria`, `initial_hint`, `system_prompt_prefix`, `model` selection, and retry boundaries.
 
 ```yaml
 description: |
@@ -367,8 +367,8 @@ description: |
   ## Goal
   Iteratively optimize the REST API server to reduce p95 latency below 50ms
   while keeping all integration tests passing. Run a fixed number of focused
-  optimization iterations, preserve evidence in files, and finish with a report
-  that explains the best result and any remaining blocker.
+  optimization iterations, preserve evidence in files, update the rolling report
+  after every optimization round, and finish with a final summary.
 
   ## Architecture
   - src/handlers/ —— HTTP route handlers
@@ -382,6 +382,8 @@ description: |
   - Cumulative results: doc/optimization_results.tsv
   - Optimization log: doc/optimization_log.md
   - Implementation status: doc/implementation_status.md
+  - Rolling optimization report: doc/optimization_report.md
+  - Failure patterns: doc/failure_patterns.md
   - Final report: doc/final_report.md
   - Benchmark script: benchmarks/load_test.js
   - Benchmark JSON output: results.json
@@ -395,19 +397,25 @@ description: |
   - Do NOT modify public request/response schemas.
   - Do NOT remove, weaken, skip, or rewrite tests to hide failures.
   - Do NOT edit generated benchmark results by hand except to summarize them in docs.
+  - Do NOT change benchmark scripts, load shape, config thresholds, or server config to hide performance or correctness problems.
   - Keep each optimization focused, reversible, and limited to its declared scope.
 
   ## Workflow State Conventions
-  - doc/optimization_results.tsv rows include: iteration_id, kind, p95_ms,
-    tests, decision, notes.
-  - doc/optimization_log.md recommendations include: iteration_id,
-    recommendation_id, status, allowed_paths, forbidden_paths, rationale,
-    expected_impact, risk.
-  - doc/implementation_status.md includes: iteration_id, recommendation_id,
-    decision, changed_paths, build_status, test_status, verification_status,
-    notes.
-  - Each loop iteration should reuse the same recommendation when retrying after
-    implementation or verification failure; do not create a new recommendation
+  - doc/optimization_results.tsv rows include: attempt_id, kind, p95_ms,
+    tests, decision, commit, notes.
+  - doc/optimization_log.md experiment entries include: attempt_id, status,
+    target_area, hypothesis, expected_impact, risk, allowed_paths,
+    forbidden_paths, result, and decision_reason.
+  - doc/implementation_status.md includes: attempt_id, decision,
+    changed_paths, build_status, test_status, verification_status, notes.
+  - doc/optimization_report.md is the rolling report updated after every
+    benchmark/evaluation round with baseline, current best, experiment summary table,
+    kept/reverted/rejected attempts, and next directions.
+  - doc/failure_patterns.md contains proven failure patterns and promising
+    directions. It is read before new hypotheses and updated after every
+    keep/revert/reject decision.
+  - Each loop iteration should reuse the same planned hypothesis when retrying
+    after implementation or verification failure; do not create a new hypothesis
     just because the previous implementation attempt failed.
 
   ## Reference Docs
@@ -419,7 +427,7 @@ description: |
   ## Rules
   - Fully autonomous: never ask the user questions.
   - Persist inter-task handoffs in the files listed above.
-  - Implement at most one recommendation per loop iteration.
+  - Propose and implement at most one optimization hypothesis per loop iteration.
   - If prerequisites are broken before a task starts, report that state in the
     relevant output file instead of broadening scope.
   - If a retry inherits partial changes, inspect git diff before editing.
@@ -435,8 +443,11 @@ tasks:
       2. cargo test --all exits 0.
       3. k6 benchmark completes and writes results.json.
       4. doc/optimization_results.tsv contains one baseline row with kind=baseline, p95_ms, tests=pass, and decision=baseline.
-      5. No source files, tests, configs, benchmark scripts, or generated benchmark results are modified except results.json from the benchmark command.
-      6. git diff --name-only shows only doc/optimization_results.tsv and results.json changed by this task.
+      5. doc/optimization_log.md exists with baseline context and experiment numbering format.
+      6. doc/optimization_report.md exists with baseline p95 and an empty experiment summary table.
+      7. doc/failure_patterns.md exists, created from the template if missing.
+      8. No source files, tests, configs, benchmark scripts, or generated benchmark results are modified except results.json from the benchmark command.
+      9. git diff --name-only shows only doc/optimization_results.tsv, doc/optimization_log.md, doc/optimization_report.md, doc/failure_patterns.md, and results.json changed by this task.
     subtasks:
       - id: 1.1
         name: "Build and run tests without modifications"
@@ -458,23 +469,38 @@ tasks:
           the failure and stop; do not edit files.
 
       - id: 1.2
-        name: "Run baseline benchmark and record results"
+        name: "Run baseline benchmark and initialize tracking docs"
         type: long_running
         max_attempts: 1
         model: lite
         completion_criteria: |
           1. k6 benchmark exits 0 and writes results.json.
           2. doc/optimization_results.tsv exists and contains one baseline row with kind=baseline, p95_ms, tests=pass, and decision=baseline.
-          3. Existing optimization rows, if any, are preserved.
-          4. git diff --name-only shows only doc/optimization_results.tsv and results.json changed by this subtask.
+          3. doc/optimization_log.md exists with baseline context and experiment numbering format.
+          4. doc/optimization_report.md exists with baseline p95 and an empty experiment summary table.
+          5. doc/failure_patterns.md exists with proven failure patterns and promising directions sections.
+          6. Existing optimization rows, experiment entries, and report history are preserved.
+          7. git diff --name-only shows only doc/optimization_results.tsv, doc/optimization_log.md, doc/optimization_report.md, doc/failure_patterns.md, and results.json changed by this subtask.
         initial_hint: |
           Run:
           - k6 run benchmarks/load_test.js --out json=results.json
 
           Parse results.json for p95 latency. If doc/optimization_results.tsv
           already exists, preserve existing optimization rows and append or
-          refresh only the baseline row. Do not modify source code, tests,
-          configs, benchmark scripts, or unrelated docs.
+          refresh only the baseline row. Ensure doc/optimization_log.md exists
+          with baseline context and the attempt_id format.
+
+          Initialize doc/optimization_report.md with baseline p95 and an empty
+          experiment summary table if it does not exist. Initialize
+          doc/failure_patterns.md with this template if it does not exist:
+            # Web API Optimization Failure Patterns & Insights
+            ## Proven Failure Patterns
+            (none yet)
+            ## Promising Directions
+            (none yet)
+
+          Do not modify source code, tests, configs, benchmark scripts, or
+          unrelated docs.
 
   # ── Task 2: Fixed Iterative Optimization Loop ─────────────────────────
   - id: 2
@@ -484,92 +510,112 @@ tasks:
     max_attempts_per_loop: 3
     completion_criteria: |
       Each iteration completes this linear cycle: analyze current evidence,
-      implement or reject exactly one recommendation, verify behavior and scope,
-      then benchmark and evaluate the verified change.
+      propose or reuse exactly one optimization hypothesis, implement or reject
+      it, run anti-hack verification, then benchmark, evaluate, and update the
+      rolling report and failure patterns.
     subtasks:
       - id: 2.1
-        name: "Analyze bottleneck and write one recommendation"
+        name: "Analyze bottleneck and propose optimization hypothesis"
         type: simple
         system_prompt_prefix: |
           You are a backend performance engineer specializing in Rust async services.
         completion_criteria: |
-          1. doc/optimization_log.md contains exactly one new recommendation for the current iteration.
-          2. The recommendation includes iteration_id, recommendation_id, status=unused, allowed_paths, forbidden_paths, rationale, expected_impact, and risk.
-          3. The recommendation is not a repeat of an experiment already marked failed, reverted, rejected, or kept.
-          4. No source code, tests, configs, benchmark scripts, benchmark outputs, or result tables are modified.
+          1. doc/optimization_log.md contains exactly one new experiment entry for the current iteration with attempt_id, status=planned, target_area, hypothesis, expected_impact, risk, allowed_paths, and forbidden_paths.
+          2. The hypothesis is not a repeat of an experiment already marked reverted, rejected, failed, or kept.
+          3. doc/failure_patterns.md and doc/optimization_report.md have been read and consulted.
+          4. No source code, tests, configs, benchmark scripts, benchmark outputs, result tables, or status files are modified.
         initial_hint: |
-          Read doc/optimization_results.tsv and doc/optimization_log.md. Inspect
-          only the relevant source files needed to understand the current
-          bottleneck. Write exactly one focused recommendation for this loop
-          iteration. Keep allowed_paths narrow enough for git diff --name-only
-          verification in Task 2.3.
+          Read doc/optimization_results.tsv, doc/optimization_log.md,
+          doc/optimization_report.md, and doc/failure_patterns.md. If the last
+          3+ experiments failed in the same category, choose a different
+          direction. Inspect only the relevant source files needed to understand
+          the current bottleneck. Write exactly one focused optimization
+          hypothesis for this loop iteration. Keep allowed_paths narrow enough
+          for git diff --name-only verification in Task 2.3, and list explicit
+          forbidden_paths.
 
           If this loop iteration is being retried after Task 2.2 or Task 2.3
-          failed, do not create a new recommendation. Reuse the current
-          iteration's existing unused recommendation and make no changes unless
-          the log is missing required fields.
+          failed, do not create a new hypothesis. Reuse the current iteration's
+          existing planned hypothesis and make no changes unless the log is
+          missing required fields.
 
       - id: 2.2
-        name: "Implement or reject the latest recommendation"
+        name: "Implement or reject the latest hypothesis"
         type: simple
         completion_criteria: |
-          1. Exactly one latest recommendation with status=unused is either implemented or rejected.
+          1. Exactly one latest hypothesis with status=planned is either implemented or rejected.
           2. If implemented, cargo build --release exits 0 and cargo test --all exits 0.
-          3. If implemented, git diff --name-only contains only files listed under allowed_paths for the recommendation plus doc/implementation_status.md.
+          3. If implemented, git diff --name-only contains only files listed under allowed_paths for the hypothesis plus doc/implementation_status.md.
           4. If rejected, no source/test/config changes remain and doc/implementation_status.md records the concrete safety or feasibility reason.
-          5. doc/implementation_status.md records iteration_id, recommendation_id, decision, changed_paths, build_status, test_status, and notes.
-          6. No tests, public schemas, benchmark scripts, generated benchmark outputs, or forbidden_paths are modified.
+          5. doc/implementation_status.md records attempt_id, decision, changed_paths, build_status, test_status, and notes.
+          6. No tests, public schemas, benchmark scripts, generated benchmark outputs, configs, or forbidden_paths are modified.
         initial_hint: |
-          Read the latest recommendation with status=unused in
+          Read the latest experiment entry with status=planned in
           doc/optimization_log.md. Respect its allowed_paths and forbidden_paths.
           Before editing, inspect git diff in case a previous retry left partial
           changes.
 
-          If the recommendation is unsafe or infeasible, do not edit source
-          code; write decision=rejected and the reason to
-          doc/implementation_status.md. If implemented, keep the change minimal,
-          then run cargo build --release and cargo test --all. Do not commit;
-          Task 2.4 decides whether the change is kept or reverted.
+          If the hypothesis is unsafe or infeasible, do not edit source code;
+          write decision=rejected and the reason to doc/implementation_status.md.
+          If implemented, keep the change minimal, then run cargo build --release
+          and cargo test --all. Do not commit; Task 2.4 decides whether the
+          change is kept or reverted.
 
       - id: 2.3
-        name: "Verify implementation behavior and scope"
+        name: "Anti-hack verification"
         type: simple
         max_attempts: 1
-        model: lite
         system_prompt_prefix: |
-          You are a verifier. Do NOT modify source code, tests, configs, benchmark scripts, generated data, or documentation files other than doc/implementation_status.md.
+          You are an anti-hack verifier. Your sole job is to detect constraint violations.
+          Do NOT modify source code, tests, configs, benchmark scripts, generated data,
+          public schemas, or any file other than doc/implementation_status.md.
         completion_criteria: |
-          1. doc/implementation_status.md exists and references the latest recommendation_id.
+          1. doc/implementation_status.md exists and references the latest attempt_id.
           2. If decision=implemented, cargo test --all exits 0.
-          3. If decision=implemented, git diff --name-only contains only files listed under allowed_paths for the recommendation plus doc/implementation_status.md.
-          4. No tests, public API schemas, benchmark scripts, configs, generated benchmark outputs, or forbidden_paths were modified.
-          5. doc/implementation_status.md contains verification_status=pass, or the verifier records the exact failed check and stops with failure.
-          6. Only doc/implementation_status.md may be updated by this verifier subtask.
+          3. If decision=implemented, git diff --name-only contains only files listed under allowed_paths for the hypothesis plus doc/implementation_status.md.
+          4. No tests, public API schemas, benchmark scripts, generated benchmark outputs, configs, or forbidden_paths were modified.
+          5. Tests are not weakened: no skipped assertions, relaxed tolerances, removed test cases, or conditional bypasses.
+          6. Benchmark integrity is preserved: load shape, benchmark duration, thresholds, and result JSON are not hand-edited to hide regressions.
+          7. Config integrity is preserved: server config and performance thresholds are not changed to hide performance or correctness problems.
+          8. API behavior is preserved: public request/response schemas and endpoint semantics are unchanged unless explicitly listed in allowed_paths and justified by the hypothesis.
+          9. doc/implementation_status.md contains verification_status=pass or the verifier records the exact failed check and stops with failure.
+          10. Only doc/implementation_status.md may be updated by this verifier subtask.
         initial_hint: |
-          Run verification only. Compare git diff --name-only against the latest
-          recommendation's allowed_paths and forbidden_paths. If checks fail,
-          record the exact failure in doc/implementation_status.md and stop;
-          do not fix code in this subtask. A failed verifier should propagate
-          failure so the loop retry re-enters the implementation step for the
-          same recommendation instead of adding a nested evaluation layer.
+          This is anti-hack verification only. Compare git diff --name-only and
+          git diff against the latest hypothesis's allowed_paths and
+          forbidden_paths. Check every hard constraint systematically:
+          allowed_paths, forbidden_paths, public schema stability, test
+          integrity, benchmark integrity, config integrity, endpoint behavior,
+          and generated-result integrity.
+
+          If any check fails, record the exact violation in
+          doc/implementation_status.md and stop; do not fix code in this subtask.
+          A failed verifier should propagate failure so the loop retry re-enters
+          the implementation step for the same hypothesis instead of adding a
+          nested evaluation layer.
 
       - id: 2.4
-        name: "Benchmark and evaluate the verified change"
+        name: "Benchmark, evaluate, and update report"
         type: long_running
         max_attempts: 1
         model: lite
         completion_criteria: |
-          1. If the latest recommendation was rejected, doc/optimization_results.tsv has an iteration row with decision=rejected and no benchmark is required.
+          1. If the latest hypothesis was rejected, doc/optimization_results.tsv has an iteration row with decision=rejected and no benchmark is required.
           2. If implemented, cargo test --all exits 0 before benchmarking, or the latest result row records tests=fail and decision=reverted.
           3. If implemented and tests pass, k6 benchmark exits 0 and results.json contains p95 latency.
-          4. doc/optimization_results.tsv has a new row with iteration_id, kind=optimization, p95_ms or n/a, tests, decision, and notes.
+          4. doc/optimization_results.tsv has a new row with attempt_id, kind=optimization, p95_ms or n/a, tests, decision, commit, and notes.
           5. If tests fail or p95_ms regresses by more than 5% versus the previous best kept row, only the latest implementation is reverted and the row has decision=reverted.
           6. If the change is kept, tests=pass and decision=kept, and no unrelated files are modified.
-          7. doc/optimization_log.md marks the evaluated recommendation as kept, reverted, or rejected with the same iteration_id.
+          7. doc/optimization_log.md marks the evaluated attempt as kept, reverted, or rejected with evidence and decision_reason.
+          8. doc/optimization_report.md is updated for this round with baseline vs current best, experiment summary table, kept/reverted/rejected attempts, and next directions.
+          9. doc/failure_patterns.md is updated: reverted/rejected attempts are classified under proven failure patterns, and kept changes are added to promising directions.
+          10. git commit completed for doc updates and any revert.
         initial_hint: |
           Read doc/implementation_status.md and doc/optimization_log.md. If the
           latest decision is rejected, append a rejected row to
-          doc/optimization_results.tsv and update the recommendation status.
+          doc/optimization_results.tsv, update the experiment status, update
+          doc/optimization_report.md, and update doc/failure_patterns.md without
+          running the benchmark.
 
           If the latest decision is implemented, first run cargo test --all. If
           tests fail, revert only the latest implementation and record
@@ -578,7 +624,14 @@ tasks:
 
           Compare p95_ms to the previous best kept row in
           doc/optimization_results.tsv. Revert only the latest optimization when
-          needed; do not modify unrelated files.
+          needed; do not modify unrelated files. Update doc/optimization_log.md
+          with results and decision. Update doc/failure_patterns.md:
+          - If reverted or rejected: classify the failure (new pattern or existing?).
+          - If kept: add to "Promising Directions" with what worked and why.
+          Update doc/optimization_report.md by overwriting the rolling report
+          with the latest baseline, current best, experiment summary table,
+          kept/reverted/rejected attempts, and next directions. Commit doc
+          changes and any revert.
 
   # ── Task 3: Final Report ──────────────────────────────────────────────
   - id: 3
@@ -587,13 +640,14 @@ tasks:
     max_attempts: 1
     completion_criteria: |
       1. doc/final_report.md exists.
-      2. The report includes baseline p95, best/final p95, test status, kept changes, reverted changes, rejected recommendations, and remaining blockers if any.
-      3. The report is consistent with doc/optimization_results.tsv, doc/optimization_log.md, and doc/implementation_status.md.
+      2. The report includes baseline p95, best/final p95, test status, kept changes, reverted changes, rejected hypotheses, failure patterns, and remaining blockers if any.
+      3. The report is consistent with doc/optimization_results.tsv, doc/optimization_log.md, doc/implementation_status.md, doc/optimization_report.md, and doc/failure_patterns.md.
       4. Only doc/final_report.md is modified by this task.
-      5. No source code, tests, configs, benchmark scripts, benchmark outputs, or result tables are modified.
+      5. No source code, tests, configs, benchmark scripts, benchmark outputs, result tables, rolling report, or failure-pattern database are modified.
     initial_hint: |
-      Read doc/optimization_results.tsv, doc/optimization_log.md, and
-      doc/implementation_status.md. This is a reporting task only; do not modify
-      source code, tests, configs, benchmark scripts, benchmark outputs, or
-      result tables.
+      Read doc/optimization_results.tsv, doc/optimization_log.md,
+      doc/implementation_status.md, doc/optimization_report.md, and
+      doc/failure_patterns.md. This is a final reporting task only; do not
+      modify source code, tests, configs, benchmark scripts, benchmark outputs,
+      result tables, rolling report, or failure-pattern database.
 ```
