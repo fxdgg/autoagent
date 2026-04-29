@@ -135,7 +135,7 @@ don't cover.
 
 ## 4. What You Can Modify
 
-When you find loopholes, you may tighten the following fields to close them:
+When you find loopholes, you can directly modify the following fields:
 
 - `completion_criteria` — add negative constraints, make criteria more specific
 - `initial_hint` — add warnings, forbidden actions, scope boundaries

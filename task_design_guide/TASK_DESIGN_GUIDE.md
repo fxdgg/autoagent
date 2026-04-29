@@ -11,9 +11,9 @@ Reference for AI agents that generate `todos.yaml` tasks for AutoAgent.
 ### Schema Rules
 
 1. **Root `description`** exists and:
-(1) covers Goal, Architecture, Key file paths, Hard constraints, Rules;
-(2) does not cover step-by-step instructions which should belong to `initial_hint`;
-(3) does not include "potential/recommended approach" since AI can figure it out themselves. Doing this only narrows AI's creativity.
+(1) Covers Goal, Architecture, Key file paths, Hard constraints, Rules;
+(2) Does not cover step-by-step instructions;
+(3) Does not include "potential/recommended approach" (unless the project requires) since AI can figure it out themselves. Doing this only narrows AI's creativity.
 See §3 for full guidance.
 2. **Every task** has `id`, `name`, `type`, `completion_criteria`.
 3. **ID assignment**: top-level IDs are sequential integers; subtask IDs use dot notation (e.g., 1.1, 1.2).
@@ -25,47 +25,53 @@ See §3 for full guidance.
 I. Task Decomposition
 
 6. **No over-decomposition**:
-(1) keep logically dependent work in one subtask (e.g. when implementing tightly coupled modules A and B).
+(1) Keep logically dependent work in one subtask (e.g. when implementing tightly coupled modules A and B).
 (2) Keep implement + build + test in one subtask so the AI can self-correct in the same session.
 (3) Split tasks only at trust boundaries (e.g. anti-hack verification must be a separate subtask) or expensive/time-consuming checkpoints (See rule 7).
 (4) 2-4 subtasks typical for one task. See §4.1.
 7. **No under-decomposition**: separate expensive (e.g. idea composition, implementation) and time-consuming steps (e.g. training, benchmark, verification, reporting) into distinct subtasks. See §4.1.
-8. **Search for fast-check build/test modes**: when merging implement + build + test in one subtask, search for fast-check/profile mode in build/test framework instead of running the full test/training. This will significantly speed up self-correction. Split long-running full test/training to subsequent benchmark task.
-9. **Choose `nested` vs `looping` by evaluation behavior**: use `nested` to reach a target end state with overall AI evaluation/retry; use `looping` to run a fixed number of iterations without overall completion evaluation. See §4.1 and §5.2.
-10. **State persistence**: write inter-task handoffs to named files; never assume the next task can see prior conversation context. See §4.7.
-11. **Failure resilience**: tasks may inherit broken state from (a) their own failed retries, or (b) a predecessor task that failed and left partial changes. Include prerequisite checks in `initial_hint` and reports in `completion_criteria` for preceding failures. See §4.6.
+8. **Search for fast-check training/profiling modes, if it is long-running**: 
+when merging implement + build + test into one subtask, search for fast validation mode in training/profiling framework (e.g. --validate, --doctor) when it is long-running.
+The key insight is to ensure correctness in implementation before the next task runs full time-consuming training/profiling, while significantly speed up self-correction in implementation task.
+9. **Choose `nested` vs `looping` by evaluation behavior**: use `nested` to reach a target end state; use `looping` to run a fixed number of iterations. See §4.1 and §5.2.
+10. **State persistence**: write inter-task handoffs to files; never assume the next task can see prior conversation context. See §4.9.
+11. **Failure resilience**: tasks may inherit broken state from (a) their own failed retries, or (b) a predecessor task that failed and left partial changes. Include prerequisite checks in `initial_hint` and reports in `completion_criteria` for preceding failures. See §4.8.
 
 II. Task Fields
 
 12. **`completion_criteria`** are specific, measurable, and verifiable by the AI —— not vague or subjective like "code is good". See §4.2.
-13. **`initial_hint`** lists the exact paths, commands, prerequisites, scope boundaries, and handoff files needed for the task, but it must not duplicate `completion_criteria` or become a rigid click-by-click script. See §4.3.
+13. **`initial_hint`** lists the exact prerequisites, paths, commands, scope boundaries, and handoff files needed for the task, but never include:
+(1) step-by-step instructions;
+(2) "potential/recommended approach" (unless the project requires) which can be figured out by AI themselves and only narrows AI's creativity. See §4.3.
 14. **`system_prompt_prefix`** defines the AI persona, role, expertise, style, and hard behavior constraints for any task, but not a substitute for `initial_hint`. See §4.4 and §6.1.
-15. **`max_attempts: 1`** is set on execution-only tasks (build, benchmark, test) that don't write code for fast failure propagation. Do not set `max_attempts: 1` on active coding tasks that benefit from retries. See §6.2.
-16. **`model: "lite"`** is set on deterministic execution tasks; use default for most reasoning-heavy tasks like debugging, design, optimization, implementation, anti-hack review and keep/discard decisions. See §6.3.
-17. **`git commit` is used** when each task or subtask completes.
+15. **`max_attempts: 1`** is set on execution-only tasks (build, benchmark, test) that don't write code for fast failure propagation. Do not set `max_attempts: 1` on active coding tasks that benefit from retries. See §4.5.
+16. **`model: "lite"`** is set on deterministic execution tasks; use default for most reasoning-heavy tasks like debugging, design, optimization, implementation, anti-hack review and keep/discard decisions. See §4.6.
+17. **`git commit` is used** to track each task's work (if have) when each task or subtask completes.
 
 III. Type-specific Guide
 
-18. **Type-specific patterns**: choose the single guide in §7 matching the task domain before designing task boundaries.
+18. **Type-specific patterns**: read the relevant guide in §6 for domain-specific knowledge.
 
 ### Anti-Hack Rules
 
 19. **Negative constraints in `completion_criteria`**: For every "implement X" task, `completion_criteria` should explicitly state what must not happen (e.g. no weakened tests, no unrelated files, no API changes, no regressions, or no forbidden generated outputs).
 20. **Scope boundaries**: When a task modifies code, specify which files/directories are in scope. Forbid changes outside that scope.
 21. **Verification separation**: Separate "implement" from "verify" (e.g. verification, anti-hack check, static quality review) into different subtasks.
-Verification subtasks must (a) check for negative constraints in rule 18; (b) use `system_prompt_prefix` to forbid code modification and `max_attempts: 1` for fast error propagation.
+Verification subtasks must (a) check for negative constraints in rule 19; (b) use `system_prompt_prefix` to forbid code modification; (c) use `max_attempts: 1` for fast error propagation.
 
 ### ⚠️ Critical Pitfalls —— Must Double Check
 
-22. Are inter-task handoffs written to named files instead of relying on conversation context?
+22. Are inter-task handoffs written to files instead of relying on conversation context?
 23. Are completion criteria specific, measurable, and verifiable enough?
-24. Does `completion_criteria` include negative constraints, and is there a verify task after each implement task for complex implementations?
+24. Does `completion_criteria` include negative constraints, and is there a "verify" task after each "implement" task for complex implementations?
+25. Does `description` or `initial_hint` include step-by-step instructions or "potential/recommended approach" (unless the project requires)?
 
 ---
 
 ## 2. Execution Model Overview
 
 AutoAgent drives an AI coding agent (e.g. Codex, Gemini CLI, Claude Code) through tasks defined in `todos.yaml`.
+The AI agent can do anything a developer can: edit code, run commands, read logs, install packages, use git, etc.
 
 1. **Fully autonomous —— No human is in the loop**
 
@@ -74,7 +80,7 @@ AutoAgent drives an AI coding agent (e.g. Codex, Gemini CLI, Claude Code) throug
 2. **Context isolation between tasks and subtasks**
 
 Tasks and subtasks **share the filesystem, not conversation context**. AI sessions are reset between tasks and subtasks. No response is passed between top-level tasks; only a summary of the previous subtask may be passed between subtasks.
-**Implication**: design top-level tasks independently, and persist detailed intermediate results to files.
+**Implication**: design top-level tasks independently; tasks and subtasks should persist detailed intermediate results to files.
 
 3. **Tasks execute in ascending ID order**
 
@@ -86,33 +92,34 @@ Tasks and subtasks **share the filesystem, not conversation context**. AI sessio
 
 5. **`long_running` is used to avoid AI session timeout**
 
+When running time-consuming commands like training with native bash tool provided by AI coding agents, the AI session is prone to timeout. This is what `long_running` is designed for.
 **Implication**: Use `long_running` for builds, tests, benchmarks, training, profiling, or data jobs that can run >1 minute.
 
 ---
 
 ## 3. Root `description`
 
-The root `description` is injected into every executor prompt. It should contain only shared context that most tasks need; put task-specific steps in `initial_hint`.
+The root `description` is injected into every executor's prompt.
 
 Include:
 - **Goal**: final observable outcome and success threshold.
 - **Architecture**: key directories/modules and their responsibilities.
-- **Key file paths**: configs, inputs, outputs, reports, logs.
+- **Key file paths**: key source files/directories, configs, inputs, outputs, reports, and logs.
 - **Key commands**: build/test/run/validate commands with required working directory, environment variables, and expected output locations.
 - **Hard constraints**: files, APIs, tests, data, or behavior that must not change.
 - **Rules**: project-wide behavior such as experiment discipline, allowed change size, or reporting format.
 - **Reference Docs**: project documentation with reading priority. Keep paths and short reasons here; do not embed full document content.
   - **P0 Must Read**: read before starting any task; use only for essential architecture, API contracts, or safety constraints.
   - **P1 Read Before Related Work**: read before touching the related subsystem, file type, or feature area.
-  - **P2 On Demand**: read only when debugging, blocked, or needing deeper historical/troubleshooting context.
+  - **P2 On Demand**: read only when debugging, stuck, or needing deeper historical/troubleshooting context.
 - **Optional**:
   - Architecture Coupling Notes: exact files/modules that must be updated together.
   - Naming Conventions: required file, branch, metric, or artifact naming patterns.
   - Historical Result Files: paths to prior attempt/iteration outputs that should be read to avoid repeated work.
 
 Do not include:
-- **step-by-step instructions**: put them in task's `initial_hint`.
-- **potential/recommended approach**: AI can figure it out themselves. Doing this only narrows AI's creativity.
+- **step-by-step instructions**: AI can figure it out themselves.
+- **potential/recommended approach** (unless the project requires): AI can figure it out themselves. Doing this only narrows AI's creativity.
 
 ---
 
@@ -122,42 +129,43 @@ These principles are not self-contained; they extend rules in §1. Take both pri
 
 ### 4.1 Task Decomposition
 
-Choose task boundaries by failure mode, context needs, and cost:
-
 | Situation | Prefer |
 |-----------|--------|
-| Small targeted fix, format run, inspection, or quick test | One `simple` task |
-| Multi-step goal with final success evaluation | `nested` |
-| Fixed number of repeated experiments or trials | `looping` |
-| Command may run >1 minute | `long_running` or `long_running_once` |
+| Small targeted fix, inspection, or quick test | `simple` task |
+| Contains command that may run >1 minute | `long_running` task |
+| Multi-step goal with final success evaluation | `nested` top-level task with 2-4 `simple` / `long_running` tasks |
+| Fixed number of repeated experiments or trials | `looping` top-level task with 2-4 `simple` / `long_running` tasks |
 
 Difference between `nested` and `looping`:
-- **`nested`**: reach a target end state; parent evaluates overall `completion_criteria` and can retry.
-- **`looping`**: run exactly `repeat_count` iterations; do not rely on early overall-completion evaluation.
+- **`nested`**: useful when the purpose is to reach a target end state. Contains an AI session that checks whether the main task criteria is met.
+- **`looping`**: useful when the purpose is to run a fixed number of iterations/experiments. No AI session for main task criteria check: only stops after a fixed number of loops.
 
 Recommended splits:
-- **Analyze / compose idea**: separate when it produces a plan, hypothesis, or experiment design.
+- **Analyze / compose idea**: expensive since it produces a plan, hypothesis, or experiment design.
 - **Implement + build/test**: keep together so the AI can self-correct.
+- **Anti-hack verification**: separate this from implementation because of trust boundary.
 - **Benchmark / validate / report**: group execution-focused evaluation together.
-- **Anti-hack verification**: separate this from implementation because it is a trust boundary and must forbid code changes.
 
 #### Anti-Patterns
 
 - **Over-decomposition**: splitting `edit -> build -> fix build -> test` into separate subtasks will lose local reasoning context. Keep one coding loop together unless:
-(1) The `test` command is long-running or verification must be isolated;
-(2) Code has substantial changes that are not suitable to implement in one single session. In this case, split code changes by modules.
+(1) The `test` is long-running. In this case, search for fast validation mode in training/profiling framework (e.g. --validate, --doctor). The key insight is to ensure correctness in implementation before the next task runs full time-consuming training/profiling, while significantly speed up self-correction in implementation task.
+(2) verification must be isolated;
+(3) Code has substantial changes that are not suitable to implement in one single session. In this case, split code changes by modules.
 
-- **Under-decomposition**: putting everything (analysis, implementation, benchmark, anti-hack review, and reporting) into one task causes context explosion, degrading AI performance and wasting retries. Split when a phase has a separate artifact, high runtime cost, or different trust boundary.
+- **Under-decomposition**: putting everything (analysis, implementation, benchmark, anti-hack review, and reporting) into one task causes context explosion, degrading AI performance and wasting retries.
 
 ### 4.2 `completion_criteria`
 
 Completion criteria define observable success. They must be specific, measurable, and checkable by running commands, reading files, inspecting artifacts, or comparing metrics.
 
-| Level | Role | Example |
-|-------|------|---------|
-| Top-level task | Final task success visible to the orchestrator | `doc/perf_result.tsv contains p95 latency and correctness status` |
-| Subtask | Step-level pass/fail and retry boundary | `cargo test --all passes with no source changes in tests/` |
-| Looping task | Overall goal context; iterations rely on subtask criteria | `Each iteration appends one row to results.tsv` |
+| Level | Role |
+|-------|------|
+| Top-level simple / long_running task | Single source of final success condition |
+| Subtask | Subtask's `completion_criteria` determine subtask-level goal; after all subtask completes, an AI session is invoked to check top-level `completion_criteria` |
+| Looping task | Top-level `completion_criteria` is not checked by separate AI sessions after each iteration, but still visible to all subtask executors |
+
+Important: For `nested` / `looping` task, top-level criteria should describe the combined final outcome of the whole nested task, while subtask criteria should describe local checkpoint evidence. Top-level criteria should not become a copy of all subtask criteria.
 
 Good:
 
@@ -173,8 +181,8 @@ Anti-patterns:
 
 | Anti-pattern | Problem | Better |
 |--------------|---------|--------|
-| Prescribing methods | Locks the AI into one approach. | Describe the target outcome unless method is mandatory. |
-| Describing implementation steps or repeating a to-do list | A to-do list is not success evidence. | State the artifact or observable result. |
+| Prescribing methods | AI can figure it out themselves. Doing this only narrows AI's creativity. | Describe the target outcome unless the project requires a specific method. |
+| Describing implementation steps | A to-do list is not success evidence. | State the artifact or observable result. |
 | Unverifiable criteria | AI can claim success without proof. | Use command output, files, metrics, or diffs. |
 | Missing negative conditions | Allows weakened tests or unrelated edits. | State forbidden changes explicitly. |
 
@@ -184,17 +192,19 @@ Bad: `"code is good"`, `"performance is improved"`, `"run tests and fix things"`
 
 `initial_hint` is executor-facing task-local context.
 
-| Put in `initial_hint` | Do not put in `initial_hint` |
-|-----------------------|------------------------------|
-| Exact files/directories to inspect or modify | Project-wide context already in root `description` |
-| Commands, working directory, environment, and output files | `completion_criteria` copied from the separate field |
-| Step-specific constraints, scope boundaries, and forbidden changes | Obvious instructions such as "read carefully" |
-| Prerequisite checks and handoff artifacts | Persona, role, expertise, or global behavior framing |
-| Expected artifacts to read/write | Overly rigid click-by-click scripts or stale guesses |
-| Cleanup guidance for previous failed attempts | Unrelated background docs |
-| Likely failure modes and safe recovery hints | |
+What to put in `initial_hint`:
+- Prerequisite checks / Cleanup guidance for previous failed attempts
+- Commands, working directory, environment, and output files
+- Step-specific constraints, scope boundaries, and forbidden changes
+- Files that contain previous attempts to avoid repeated approach 
+- Exact files/directories to inspect or modify
+- Expected artifacts to read/write
 
-Use `initial_hint` to make retries safe: ask the executor to inspect `git diff`, generated files, partial outputs, and previous result files when relevant.
+Do not put:
+- project-wide context already in root `description`
+- Contents copied from `completion_criteria`
+- Step-by-step instructions
+- Potential/Recommended approach (unless the project requires)
 
 ### 4.4 `system_prompt_prefix`
 
@@ -206,27 +216,45 @@ Use it for:
 - **Style constraints**: `Prefer minimal, well-tested changes.`
 - **Hard behavior constraints**: `Do NOT modify source code, tests, configs, or data.`
 
-Keep task-specific files, commands, prerequisites, and handoff artifacts in `initial_hint`.
+Keep prerequisites, task-specific files, commands, and artifacts in `initial_hint`.
 
-### 4.5 Anti-Hack Patterns
+### 4.5 `max_attempts`
 
-AI agents may satisfy criteria through shortcuts. Prevent that with explicit constraints.
+Set different `max_attempts` by:
+
+| Value | Use |
+|-------|-----|
+| `1` | Execution-only subtasks: build, test, benchmark, lint, format-check, verify. These tasks do the same within retries, so `max_attempts` = 1 and fastly propagate errors to failure analysis step is recommended. |
+| `2-3` | Targeted uncertain work with constrained scope. |
+| Default / higher | Active coding, debugging, optimization, refactoring. These tasks benefit from retries. |
+
+### 4.6 `model`
+
+Set different `model` by:
+
+| Value | Use |
+|-------|-----|
+| Omit / `default` | Reasoning-heavy work: design, debug, implement, optimize, anti-hack review. |
+| `lite` | Deterministic execution: run commands, format, copy/summarize known outputs. |
+| Direct name | Only when the project specifies a tailored model name. |
+
+### 4.7 Anti-Hack Patterns
+
+AI agents may satisfy criteria through shortcuts (like directly modifying test files). Prevent that with explicit constraints.
 
 Implementation tasks should specify:
-- allowed files/directories;
-- files/directories that must not change;
-- tests/configs/data that must not be weakened;
-- expected `git diff` shape when useful.
+- allowed files/directories
+- files/directories that must not change
+- tests/configs/data that must not be weakened
 
-Verification subtasks should:
-- be separate from implementation when anti-hack risk matters;
-- use `system_prompt_prefix` to forbid code/test/config/data edits;
-- use `max_attempts: 1` for fast failure propagation;
-- use `model: default` when evidence review or reasoning is required;
-- use `model: lite` when only running deterministic checks;
-- verify both behavior and scope, e.g. tests pass and `git diff --name-only` stays within scope.
+Verification / Anti-hack / Static quality review subtasks should be contained unless the project itself or implementation is straightforward, and should:
+- be separate from implementation
+- use `system_prompt_prefix` to forbid code/test/config/data edits
+- use `max_attempts: 1` for fast failure propagation
+- use `model: default` for deep and complex review and reasoning; use `model: lite` when only running deterministic checks
+- verify both behavior and scope
 
-### 4.6 Failure Resilience
+### 4.8 Failure Resilience
 
 Design for residual state: tasks may inherit broken filesystem state from their own retries or from earlier linear tasks.
 
@@ -236,7 +264,7 @@ Design for residual state: tasks may inherit broken filesystem state from their 
 - **Nested/looping subtasks**: align failure boundaries with meaningful checkpoints and independent failure modes.
 - **Progress tracking**: store progress in clearly named files instead of relying on prior conversation context.
 
-### 4.7 State Persistence
+### 4.9 State Persistence
 
 Tasks and subtasks share files, not conversation memory.
 
@@ -252,7 +280,7 @@ Tasks and subtasks share files, not conversation memory.
 | Field | Required | Notes |
 |-------|----------|-------|
 | `description` | Required by task generation rules | Shared project context. Runtime accepts missing text, but generated tasks must include it. |
-| `description@N` | Optional | Scoped description used for tasks with top-level ID >= N. |
+| `description@N` | Optional | Scoped description used for tasks with top-level ID >= N. Only used when there are existing todos, and the existing `description` needs to be modified to match new tasks's context. |
 | `tasks` | Yes | List of top-level tasks. |
 
 ### 5.2 Task Types
@@ -263,8 +291,8 @@ Tasks and subtasks share files, not conversation memory.
 | `nested` | Yes | Yes | Ordered subtasks with overall AI evaluation/retry. |
 | `looping` | Yes | Yes | Fixed `repeat_count` iterations. |
 | `long_running` | Yes | Yes | Background command that may run >1 minute. |
-| `simple_once` | No | Yes | One-time setup that should not re-run after completion. |
-| `long_running_once` | No | Yes | Expensive one-time setup/baseline command. |
+| `simple_once` | **No** | Yes | One-time setup that should not re-run after completion. |
+| `long_running_once` | **No** | Yes | Expensive one-time setup/baseline command. |
 
 ### 5.3 Common Task Fields
 
@@ -280,6 +308,10 @@ Tasks and subtasks share files, not conversation memory.
 | `system_prompt_prefix` | Optional | Persona, expertise, style, role, or hard behavior constraints. Set on subtasks, not top-level `nested`/`looping`. |
 | `max_attempts` | Optional | Default from config. Use `1` for execution-only subtasks. |
 
+ID rules:
+- Top-level IDs must be positive integers and strictly increasing.
+- Subtask IDs must be unique, dot-notated, parent-prefixed, and increasing under the same parent.
+
 ### 5.4 Type-Specific Fields
 
 | Type | Extra fields |
@@ -288,59 +320,9 @@ Tasks and subtasks share files, not conversation memory.
 | `looping` | `subtasks` and positive integer `repeat_count` required; optional `max_attempts_per_loop`. |
 | `simple` / `long_running` / `*_once` | Optional `initial_hint`, `max_attempts`, `model`, `system_prompt_prefix`. |
 
-ID rules:
-- Top-level IDs must be positive integers and, in linear mode, strictly increasing.
-- Subtask IDs must be unique, dot-notated, parent-prefixed, and increasing under the same parent.
-
 ---
 
-## 6. Field Usage Cheatsheet
-
-### 6.1 `system_prompt_prefix`
-
-Use for task-wide persona, expertise, role, style, and hard behavior constraints; keep task-specific files and commands in `initial_hint`.
-
-| Need | Example |
-|------|---------|
-| Analysis / implementation persona | `You are a careful ML engineer.` |
-| Domain/style | `You are a GPU performance engineer. Follow Google C++ style.` |
-| Scope restriction | `Never modify files under vendor/.` |
-| Execution-only | `You are a benchmark runner. Do NOT modify source code.` |
-| Verification | `You are a verifier. Do NOT modify source code, tests, configs, or data.` |
-
-### 6.2 `max_attempts`
-
-| Value | Use |
-|-------|-----|
-| `1` | Execution-only subtasks: build, test, benchmark, lint, format-check, verify. |
-| `2-3` | Targeted uncertain work with constrained scope. |
-| Default / higher | Active coding, debugging, optimization, refactoring. |
-
-Do not use `max_attempts: 1` for coding tasks that can self-correct after errors.
-
-### 6.3 `model`
-
-| Value | Use |
-|-------|-----|
-| Omit / `default` | Reasoning-heavy work: design, debug, implement, optimize, anti-hack review. |
-| `lite` | Deterministic execution: run commands, format, copy/summarize known outputs. |
-| Direct model/role | Only when explicitly required. |
-
-Use `default` when reviewing evidence or making keep/discard decisions.
-
-### 6.4 `long_running`
-
-Use for commands that may exceed 1 minute: full builds/tests, training, profiling, data jobs, benchmarks, deployments.
-
-| Command shape | Prefer |
-|---------------|--------|
-| Quick inspection or short unit test | `simple` |
-| Full command may exceed 1 minute | `long_running` |
-| Expensive setup/baseline should not rerun | `long_running_once` subtask |
-
----
-
-## 7. Task-Type-Specific Guides
+## 6. Task-Type-Specific Guides
 
 Read only the guide relevant to the task domain:
 
@@ -356,7 +338,7 @@ Read only the guide relevant to the task domain:
 
 ---
 
-## 8. Complete Example
+## 7. Complete Example
 
 Below is a complete linear-mode `todos.yaml` demonstrating key patterns: root `description`, reference docs, fixed-count `looping`, file-backed handoffs, optimization hypotheses, anti-hack verification, per-round optimization reporting, failure-pattern tracking, failure resilience, `completion_criteria`, `initial_hint`, `system_prompt_prefix`, `model` selection, and retry boundaries.
 
@@ -378,6 +360,9 @@ description: |
   - benchmarks/ —— k6 load testing scripts
 
   ## Key File Paths
+  - Route handlers: src/handlers/
+  - Database query layer: src/db/
+  - Cache layer: src/cache/
   - Config: config/server.yaml
   - Cumulative results: doc/optimization_results.tsv
   - Optimization log: doc/optimization_log.md
