@@ -118,33 +118,49 @@ def prepend_system_prompt_prefix(prompt: str, task: dict = None) -> str:
 # ---------------------------------------------------------------------------
 
 _task_design_guide_cache: dict[str, str] = {}
-_adversarial_guide_cache: str | None = None
+_adversarial_guide_cache: dict[str, str] = {}
 
-# Directory containing the task design guide and its sub-guides.
-_GUIDE_DIR = os.path.normpath(
+# Root directory containing mode-specific task design guide directories.
+_GUIDE_ROOT_DIR = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "task_design_guide")
 )
 
-# Mapping from mode to guide filename
+# Mapping from execution mode to guide subdirectory.
+_GUIDE_MODE_DIRS = {
+    "linear": "linear",
+    "ai": "ai_sched",
+}
+
+# Mapping from mode to the primary task design guide filename inside the mode directory.
 _GUIDE_FILENAMES = {
     "linear": "TASK_DESIGN_GUIDE.md",
     "ai": "TASK_DESIGN_GUIDE_AI_SCHED.md",
 }
 
-_ADVERSARIAL_GUIDE_FILENAME = "ADVERSARIAL_REVIEW_GUIDE.md"
+_ADVERSARIAL_GUIDE_FILENAMES = {
+    "linear": "ADVERSARIAL_REVIEW_GUIDE.md",
+    "ai": "ADVERSARIAL_REVIEW_GUIDE_AI_SCHED.md",
+}
+
+
+def _get_mode_guide_dir(mode: str) -> str:
+    """Return the guide directory for *mode*, defaulting unknown modes to linear."""
+    guide_subdir = _GUIDE_MODE_DIRS.get(mode, _GUIDE_MODE_DIRS["linear"])
+    return os.path.join(_GUIDE_ROOT_DIR, guide_subdir)
 
 
 def load_task_design_guide(mode: str = "linear") -> str:
     """Load and cache the content of the task design guide for the given mode.
 
     When *mode* is ``"linear"`` (the default), loads
-    ``autoagent/task_design_guide/TASK_DESIGN_GUIDE.md``.
+    ``autoagent/task_design_guide/linear/TASK_DESIGN_GUIDE.md``.
     When *mode* is ``"ai"``, loads
-    ``autoagent/task_design_guide/TASK_DESIGN_GUIDE_AI_SCHED.md``.
+    ``autoagent/task_design_guide/ai_sched/TASK_DESIGN_GUIDE_AI_SCHED.md``.
 
     After loading, bare filenames that correspond to sibling ``.md`` files in
-    the same directory (e.g. ``build_and_ship.md``) are replaced with their
-    absolute paths so the consuming AI can read them directly without guessing.
+    the same mode directory (e.g. ``build_and_ship.md``) are replaced with their
+    absolute paths so the consuming AI can read the mode-specific version
+    directly without guessing.
 
     Args:
         mode: Execution mode — ``"linear"`` or ``"ai"``.
@@ -157,20 +173,22 @@ def load_task_design_guide(mode: str = "linear") -> str:
     if mode in _task_design_guide_cache:
         return _task_design_guide_cache[mode]
 
+    guide_dir = _get_mode_guide_dir(mode)
     guide_filename = _GUIDE_FILENAMES.get(mode, _GUIDE_FILENAMES["linear"])
-    guide_path = os.path.join(_GUIDE_DIR, guide_filename)
+    guide_path = os.path.join(guide_dir, guide_filename)
     try:
         with open(guide_path, "r", encoding="utf-8") as f:
             content = f.read()
         # Replace bare .md filenames with absolute paths so the AI can read
-        # them directly.  Only replace names that actually exist on disk.
-        for fname in os.listdir(_GUIDE_DIR):
+        # the mode-specific sibling guides directly. Only replace names that
+        # actually exist on disk.
+        for fname in os.listdir(guide_dir):
             if fname.endswith(".md") and fname != guide_filename:
-                abs_path = os.path.join(_GUIDE_DIR, fname)
+                abs_path = os.path.join(guide_dir, fname)
                 content = content.replace(f"`{fname}`", f"`{abs_path}`")
         _task_design_guide_cache[mode] = content
     except OSError as e:
-        logger.warning(f"Failed to load {guide_filename}: {e}")
+        logger.warning(f"Failed to load {guide_path}: {e}")
         _task_design_guide_cache[mode] = (
             "(Task Design Guide not available — refer to the task schema "
             "documentation for task types, fields, and best practices.)"
@@ -178,32 +196,40 @@ def load_task_design_guide(mode: str = "linear") -> str:
     return _task_design_guide_cache[mode]
 
 
-def load_adversarial_review_guide() -> str:
-    """Load and cache the content of the adversarial review guide.
+def load_adversarial_review_guide(mode: str = "linear") -> str:
+    """Load and cache the adversarial review guide for the given mode.
 
-    Loads ``autoagent/task_design_guide/ADVERSARIAL_REVIEW_GUIDE.md``.
+    When *mode* is ``"linear"`` (the default), loads
+    ``autoagent/task_design_guide/linear/ADVERSARIAL_REVIEW_GUIDE.md``.
+    When *mode* is ``"ai"``, loads
+    ``autoagent/task_design_guide/ai_sched/ADVERSARIAL_REVIEW_GUIDE_AI_SCHED.md``.
+
+    Args:
+        mode: Execution mode — ``"linear"`` or ``"ai"``.
 
     Returns:
         The full text of the guide, or a short fallback message if the file
         cannot be read.
     """
     global _adversarial_guide_cache
-    if _adversarial_guide_cache is not None:
-        return _adversarial_guide_cache
+    if mode in _adversarial_guide_cache:
+        return _adversarial_guide_cache[mode]
 
-    guide_path = os.path.join(_GUIDE_DIR, _ADVERSARIAL_GUIDE_FILENAME)
+    guide_dir = _get_mode_guide_dir(mode)
+    guide_filename = _ADVERSARIAL_GUIDE_FILENAMES.get(mode, _ADVERSARIAL_GUIDE_FILENAMES["linear"])
+    guide_path = os.path.join(guide_dir, guide_filename)
     try:
         with open(guide_path, "r", encoding="utf-8") as f:
             content = f.read()
-        _adversarial_guide_cache = content
+        _adversarial_guide_cache[mode] = content
     except OSError as e:
-        logger.warning(f"Failed to load {_ADVERSARIAL_GUIDE_FILENAME}: {e}")
-        _adversarial_guide_cache = (
-            "(Adversarial Review Guide not available — focus on finding "
-            "loopholes in completion_criteria, initial_hint, and missing "
-            "negative constraints.)"
+        logger.warning(f"Failed to load {guide_path}: {e}")
+        _adversarial_guide_cache[mode] = (
+            "(Adversarial Review Guide not available for this execution mode — focus on "
+            "finding loopholes in completion_criteria, initial_hint, handoff state, "
+            "and missing negative constraints.)"
         )
-    return _adversarial_guide_cache
+    return _adversarial_guide_cache[mode]
 
 
 # ---------------------------------------------------------------------------

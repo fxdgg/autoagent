@@ -177,6 +177,7 @@ def build_adversarial_review_prompt(
     idea_content: str,
     temp_tasks_path: str,
     next_id: int = 1,
+    mode: str = "linear",
 ) -> str:
     """Build the prompt for an adversarial (red-team) review of generated tasks.
 
@@ -185,15 +186,16 @@ def build_adversarial_review_prompt(
     technically violating any stated constraint.
 
     Unlike the positive review prompt, this does NOT include the full task
-    design guide.  Instead it loads a dedicated adversarial review guide that
-    focuses on attack patterns and exploitability.
+    design guide.  Instead it loads the mode-specific adversarial review guide
+    that focuses on attack patterns and exploitability.
 
     Args:
         idea_content: Raw idea text.
         temp_tasks_path: File path where the YAML under review is saved.
         next_id: Starting task ID for this batch.
+        mode: Execution mode — ``"linear"`` or ``"ai"``.
     """
-    adversarial_guide = load_adversarial_review_guide()
+    adversarial_guide = load_adversarial_review_guide(mode)
 
     role_line = ROLE_ADVERSARIAL_REVIEWER
 

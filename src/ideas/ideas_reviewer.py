@@ -371,6 +371,7 @@ class IdeasReviewerMixin:
             idea_content=idea['content'],
             temp_tasks_path=temp_tasks_path,
             next_id=next_id,
+            mode=self._detect_mode(),
         )
 
         try:

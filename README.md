@@ -131,7 +131,7 @@ tasks:
 > [!TIP]
 > **不想手写这么复杂的 YAML？让 AI 帮你写。**
 >
-> 你只需要用自然语言描述你想做的事情，然后把 [TASK_DESIGN_GUIDE.md](task_design_guide/TASK_DESIGN_GUIDE.md) 喂给任意 AI（ChatGPT、Claude、CodeBuddy 等），让它按照这份指南帮你拆解成 `todos.yaml`。这份指南详细定义了任务类型、字段含义、最佳实践和常见陷阱，AI 读完就能生成高质量的任务配置。
+> 你只需要用自然语言描述你想做的事情，然后把 [TASK_DESIGN_GUIDE.md](task_design_guide/linear/TASK_DESIGN_GUIDE.md) 喂给任意 AI（ChatGPT、Claude、CodeBuddy 等），让它按照这份指南帮你拆解成 `todos.yaml`。这份指南详细定义了任务类型、字段含义、最佳实践和常见陷阱，AI 读完就能生成高质量的任务配置。
 >
 > ```
 > 你：「我想让 AI 自动把项目的测试覆盖率从 60% 提到 90%」

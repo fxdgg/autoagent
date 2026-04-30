@@ -75,14 +75,24 @@ autoagent/
 │       └── DESIGN.md                # AI 调度器设计方案
 │
 ├── task_design_guide/           # 任务设计指南（供 AI 消费）
-│   ├── TASK_DESIGN_GUIDE.md         # 线性模式任务设计指南
-│   ├── TASK_DESIGN_GUIDE_AI_SCHED.md # AI 调度模式任务设计指南
-│   ├── build_and_ship.md            # 构建与发布模式
-│   ├── data_pipelines.md            # 数据管线模式
-│   ├── iterative_optimization.md    # 迭代优化模式
-│   ├── research_and_analysis.md     # 研究与分析模式
-│   ├── setup_and_deployment.md      # 环境与部署模式
-│   └── testing_and_verification.md  # 测试与验证模式
+│   ├── linear/                      # 线性模式指南
+│   │   ├── TASK_DESIGN_GUIDE.md         # 线性模式任务设计指南
+│   │   ├── ADVERSARIAL_REVIEW_GUIDE.md  # 线性模式对抗性审查指南
+│   │   ├── build_and_ship.md            # 构建与发布模式
+│   │   ├── data_pipelines.md            # 数据管线模式
+│   │   ├── iterative_optimization.md    # 迭代优化模式
+│   │   ├── research_and_analysis.md     # 研究与分析模式
+│   │   ├── setup_and_deployment.md      # 环境与部署模式
+│   │   └── testing_and_verification.md  # 测试与验证模式
+│   └── ai_sched/                    # AI 调度模式指南
+│       ├── TASK_DESIGN_GUIDE_AI_SCHED.md # AI 调度模式任务设计指南
+│       ├── ADVERSARIAL_REVIEW_GUIDE_AI_SCHED.md # AI 调度模式对抗性审查指南
+│       ├── build_and_ship.md            # 构建与发布模式
+│       ├── data_pipelines.md            # 数据管线模式
+│       ├── iterative_optimization.md    # 迭代优化模式
+│       ├── research_and_analysis.md     # 研究与分析模式
+│       ├── setup_and_deployment.md      # 环境与部署模式
+│       └── testing_and_verification.md  # 测试与验证模式
 │
 ├── sample/                      # 示例项目
 │   ├── mini_compiler/

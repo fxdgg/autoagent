@@ -669,7 +669,7 @@ commands, and analyze code and outputs.
     The optimization should focus on memory access patterns.
 </idea>
 
-<task_design_guide>(TASK_DESIGN_GUIDE.md full content)</task_design_guide>
+<task_design_guide>(mode-specific task design guide full content)</task_design_guide>
 
 The following are the existing tasks already defined in the project. They are provided
 for reference only — do NOT modify, duplicate, or regenerate them.
@@ -716,7 +716,7 @@ You focus on whether the tasks are actionable and verifiable by an autonomous AI
 The generated tasks have been saved to the following file:
     /path/to/session/.ideas_tasks_temp.yaml
 
-<task_design_guide>(TASK_DESIGN_GUIDE.md full content)</task_design_guide>
+<task_design_guide>(mode-specific task design guide full content)</task_design_guide>
 
 The following are the existing tasks already defined in the project. They are provided
 for reference only — the new tasks under review must not conflict with or duplicate them.
@@ -789,6 +789,11 @@ Please read this file to see the current tasks.
 对抗性审查只负责发现 loopholes、ambiguities、destructive potential，不负责 schema/full design review，也不再直接修改 YAML。
 如果发现问题，它输出结构化 findings 并保留 exploit reasoning，随后交给 adversarial worker 修复。
 
+对抗性审查会根据当前 execution mode 注入对应的自包含 guide：
+
+- linear mode：`ADVERSARIAL_REVIEW_GUIDE.md`
+- AI scheduling mode：`ADVERSARIAL_REVIEW_GUIDE_AI_SCHED.md`
+
 ```
 You are a red-team adversarial reviewer for AI task definitions. Perform an adversarial review of the following TODO
 task decomposition. Your goal is to find loopholes and weaknesses, NOT to
@@ -803,7 +808,7 @@ The generated tasks have been saved to the following file:
     /path/to/session/.ideas_tasks_temp.yaml
 
 <adversarial_review_guide>
-    (ADVERSARIAL_REVIEW_GUIDE.md full content)
+    (mode-specific adversarial review guide full content)
 </adversarial_review_guide>
 
 <instructions>
@@ -842,7 +847,7 @@ The current tasks are saved in the following file:
     /path/to/session/.ideas_tasks_temp.yaml
 
 <task_design_guide>
-    (TASK_DESIGN_GUIDE.md full content)
+    (mode-specific task design guide full content)
 </task_design_guide>
 
 <adversarial_feedback>
