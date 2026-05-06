@@ -115,6 +115,7 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
         todos_file: str = "todos.yaml",
         plans_state_file: str = None,
         cli_mode: str = None,
+        allow_unsupported_models: bool = False,
     ):
         """
         Initialize IdeasWatcher.
@@ -129,6 +130,7 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
         """
         self.ideas_file = ideas_file
         self.todos_file = todos_file
+        self.allow_unsupported_models = allow_unsupported_models
         self.plans_state_file = plans_state_file or self.PLANS_STATE_FILE
         self._cli_mode = cli_mode
         self._lock = threading.Lock()
@@ -544,7 +546,8 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
 
     @staticmethod
     def _validate_task_schema(task: dict, is_subtask: bool = False,
-                              parent_id: str = None) -> List[str]:
+                              parent_id: str = None,
+                              allow_unsupported_models: bool = False) -> List[str]:
         """Validate a single task's schema and return a list of error messages.
 
         This mirrors the validation logic in ``Orchestrator._validate_task`` so
@@ -634,7 +637,8 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
                 )
                 for st in subtasks:
                     errors.extend(IdeasWatcher._validate_task_schema(
-                        st, is_subtask=True, parent_id=str(task_id)
+                        st, is_subtask=True, parent_id=str(task_id),
+                        allow_unsupported_models=allow_unsupported_models
                     ))
 
         # Validate looping tasks
@@ -648,7 +652,8 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
                 )
                 for st in subtasks:
                     errors.extend(IdeasWatcher._validate_task_schema(
-                        st, is_subtask=True, parent_id=str(task_id)
+                        st, is_subtask=True, parent_id=str(task_id),
+                        allow_unsupported_models=allow_unsupported_models
                     ))
             repeat_count = task.get('repeat_count')
             if repeat_count is None:
@@ -667,7 +672,7 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
             # Warn if model is not a known role and not in CodeBuddy's supported list
             from ai_client.ai_providers import MODEL_ROLES, CodeBuddyProvider
             model_lower = model.strip().lower()
-            if model_lower not in MODEL_ROLES:
+            if model_lower not in MODEL_ROLES and not allow_unsupported_models:
                 global _codebuddy_supported_models_cache
                 if _codebuddy_supported_models_cache is None:
                     result = CodeBuddyProvider.get_supported_models()
@@ -714,7 +719,8 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
         return errors
 
     @staticmethod
-    def _validate_tasks_schema(parsed_data: dict, next_id: int = 1) -> tuple:
+    def _validate_tasks_schema(parsed_data: dict, next_id: int = 1,
+                               allow_unsupported_models: bool = False) -> tuple:
         """Validate the schema of the parsed YAML data (tasks and description).
 
         Args:
@@ -761,7 +767,9 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
                     prev_top_id = tid
 
         for task in tasks:
-            all_errors.extend(IdeasWatcher._validate_task_schema(task, is_subtask=False))
+            all_errors.extend(IdeasWatcher._validate_task_schema(
+                task, is_subtask=False,
+                allow_unsupported_models=allow_unsupported_models))
 
         return (len(all_errors) == 0, all_errors)
 

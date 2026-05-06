@@ -198,6 +198,7 @@ def _warn_unsupported_model_roles(
     provider_name: str,
     executable: str | None,
     model_roles: dict,
+    allow_unsupported: bool = False,
 ):
     """Warn if any model in *model_roles* is not supported by CodeBuddy.
 
@@ -206,7 +207,12 @@ def _warn_unsupported_model_roles(
     validated before the provider is even created.
 
     Only runs when the resolved provider is CodeBuddy.
+
+    If *allow_unsupported* is True, validation is skipped entirely.
     """
+    if allow_unsupported:
+        return
+
     resolved = PROVIDER_ALIASES.get(provider_name.lower(), provider_name.lower())
     if resolved != "codebuddy":
         return
@@ -227,7 +233,7 @@ def _warn_unsupported_model_roles(
         for role, model in bad:
             print(f"      • role '{role}' → model '{model}'")
         print(f"   Supported models: {', '.join(sorted(supported))}")
-        print("   Fix the model name(s) and try again.")
+        print("   Fix the model name(s) or use --allow-unsupported-models to bypass this check.")
         sys.exit(1)
 
 
@@ -438,6 +444,12 @@ Examples:
         help='Comma-separated list of additional directories the AI tool is allowed '
              'to access outside the workspace (Gemini only). '
              'Example: --include-directories /path/to/dir1,/path/to/dir2',
+    )
+    provider_group.add_argument(
+        '--allow-unsupported-models',
+        action='store_true',
+        help='Skip model name validation against CodeBuddy\'s supported model list. '
+             'Useful when CodeBuddy has not yet updated its --help to include newer models.',
     )
 
     # ── Preset & Config ───────────────────────────────
@@ -707,7 +719,8 @@ Examples:
         provider_model = model_roles["default"] if model_roles["default"] else args.model
 
         # ── Validate model names from CLI / config.yaml against CodeBuddy ──
-        _warn_unsupported_model_roles(args.provider, args.executable, model_roles)
+        _warn_unsupported_model_roles(args.provider, args.executable, model_roles,
+                                      allow_unsupported=args.allow_unsupported_models)
 
         # Parse --include-directories into a list
         include_dirs = None
@@ -764,6 +777,7 @@ Examples:
             model_roles=model_roles,
             default_max_attempts=default_max_attempts,
             cli_mode=args.mode,
+            allow_unsupported_models=args.allow_unsupported_models,
         )
         
         # Handle special commands

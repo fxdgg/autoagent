@@ -163,7 +163,8 @@ class IdeasReviewerMixin:
             if not parsed_data or not parsed_data.get('tasks'):
                 break
 
-            valid, errors = self._validate_tasks_schema(parsed_data, next_id=next_id)
+            valid, errors = self._validate_tasks_schema(parsed_data, next_id=next_id,
+                                                          allow_unsupported_models=self.allow_unsupported_models)
             if valid:
                 print(f"   ✅ Schema validation passed")
                 break
@@ -555,7 +556,8 @@ class IdeasReviewerMixin:
                 edited_data = self._read_tasks_from_temp_file()
                 if edited_data is not None:
                     # Validate the human-edited tasks
-                    valid, errors = self._validate_tasks_schema(edited_data, next_id=next_id)
+                    valid, errors = self._validate_tasks_schema(edited_data, next_id=next_id,
+                                                               allow_unsupported_models=self.allow_unsupported_models)
                     if valid:
                         parsed_data = edited_data
                         print(f"   ✅ Human approved the tasks (loaded from temp file).")
@@ -624,7 +626,8 @@ class IdeasReviewerMixin:
                     if new_parsed_data and new_parsed_data.get('tasks'):
                         parsed_data = new_parsed_data
                         # Run validation on the new tasks
-                        valid, errors = self._validate_tasks_schema(parsed_data, next_id=next_id)
+                        valid, errors = self._validate_tasks_schema(parsed_data, next_id=next_id,
+                                                                   allow_unsupported_models=self.allow_unsupported_models)
                         if not valid:
                             print(f"   ⚠️  AI revision has schema errors:")
                             for e in errors:

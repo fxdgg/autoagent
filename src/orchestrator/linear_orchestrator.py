@@ -96,6 +96,7 @@ class TodoOrchestrator(AISchedulerMixin):
         model_roles: dict = None,
         default_max_attempts: int = None,
         cli_mode: str = None,
+        allow_unsupported_models: bool = False,
     ):
         """
         Initialize the TodoOrchestrator.
@@ -136,6 +137,7 @@ class TodoOrchestrator(AISchedulerMixin):
         self.use_cli = use_cli
         self.backoff_max_wait = backoff_max_wait if backoff_max_wait is not None else DEFAULTS['backoff_max_wait']
         self.default_max_attempts = default_max_attempts if default_max_attempts is not None else DEFAULTS['default_max_attempts']
+        self.allow_unsupported_models = allow_unsupported_models
 
         self.provider = provider
 
@@ -184,6 +186,7 @@ class TodoOrchestrator(AISchedulerMixin):
                 todos_file=todos_file,
                 plans_state_file=resolved_plans_state,
                 cli_mode=cli_mode,
+                allow_unsupported_models=allow_unsupported_models,
             )
         else:
             self.ideas_watcher = None
@@ -507,7 +510,12 @@ class TodoOrchestrator(AISchedulerMixin):
         Only runs when the provider is CodeBuddy.  Produces warnings (not
         errors) for model names that are not recognized role names and not
         in the supported model list extracted from ``codebuddy --help``.
+
+        Skipped entirely when ``allow_unsupported_models`` is True.
         """
+        if self.allow_unsupported_models:
+            return
+
         if not isinstance(self.provider, CodeBuddyProvider):
             return
 
@@ -539,7 +547,7 @@ class TodoOrchestrator(AISchedulerMixin):
             for task_id, model in bad:
                 print(f"      • Task {task_id} → model '{model}'")
             print(f"   Supported models: {', '.join(sorted(supported))}")
-            print("   Fix the model name(s) and try again.")
+            print("   Fix the model name(s) or use --allow-unsupported-models to bypass this check.")
             sys.exit(1)
 
     def _validate_subtask_ids(self, subtasks: list, parent_id: str):
