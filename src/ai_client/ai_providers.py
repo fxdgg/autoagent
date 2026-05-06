@@ -199,12 +199,36 @@ class CodeBuddyProvider(AIProvider):
             cls._supported_models_cache[exe] = None
             return None
 
-        # The --model line looks like:
-        #   --model <model>  Model for ... Currently supported: (model1, model2, ...)
-        # We want the content inside the parentheses after "Currently supported:"
+        # The --model section in help text may span multiple lines, e.g.:
+        #   --model <model>  Model for AI processing.
+        #                    Currently supported: (model1, model2, ...)
+        # We collect all lines from "--model" until the next CLI option
+        # (a line starting with '-') to form the full --model description.
+        # If the format changes and we can't parse it, we gracefully
+        # disable the check (return None).
+        lines = help_text.splitlines()
+        model_section = None
+        for i, line in enumerate(lines):
+            if "--model" in line:
+                # Collect this line and continuation lines until next option
+                section_lines = [line]
+                for j in range(i + 1, len(lines)):
+                    stripped = lines[j].lstrip()
+                    # A new option starts with '-' (e.g. --foo or -x)
+                    if stripped.startswith("-"):
+                        break
+                    section_lines.append(lines[j])
+                model_section = " ".join(section_lines)
+                break
+
+        if not model_section:
+            cls._supported_models_cache[exe] = None
+            return None
+
+        # Extract the parenthesized list after "Currently supported:"
         match = re.search(
             r"Currently supported:\s*\(([^)]+)\)",
-            help_text,
+            model_section,
             re.IGNORECASE,
         )
         if not match:
