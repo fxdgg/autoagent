@@ -9,7 +9,6 @@
 ```
 autoagent/
 ├── config.yaml                  # 全局配置文件
-├── todos.example.yaml           # 任务定义示例
 ├── requirements.txt             # Python 依赖
 ├── README.md                    # 项目 README
 │
@@ -61,6 +60,7 @@ autoagent/
 │   │
 │   └── util/                    # 工具模块
 │       ├── default_value.py         # DEFAULTS 字典、默认配置模板
+│       ├── config_registry.py       # 全局配置注册表
 │       ├── truncation_limits.py     # Prompt 截断限制
 │       └── autoagent_exec.py        # 长时间任务启动器
 │
@@ -68,7 +68,6 @@ autoagent/
 │   ├── INDEX.md                     # 文档索引
 │   ├── ARCHITECTURE.md              # 系统架构
 │   ├── USAGE.md                     # 使用指南
-│   ├── EXAMPLES.md                  # 使用示例
 │   ├── FILES.md                     # 文件结构（本文档）
 │   ├── PROMPT.md                    # Prompt 工程
 │   └── ai_orchestrator/
@@ -78,6 +77,7 @@ autoagent/
 │   ├── linear/                      # 线性模式指南
 │   │   ├── TASK_DESIGN_GUIDE.md         # 线性模式任务设计指南
 │   │   ├── ADVERSARIAL_REVIEW_GUIDE.md  # 线性模式对抗性审查指南
+│   │   ├── academic_experiments.md      # 学术实验模式
 │   │   ├── build_and_ship.md            # 构建与发布模式
 │   │   ├── data_pipelines.md            # 数据管线模式
 │   │   ├── iterative_optimization.md    # 迭代优化模式
@@ -87,6 +87,7 @@ autoagent/
 │   └── ai_sched/                    # AI 调度模式指南
 │       ├── TASK_DESIGN_GUIDE_AI_SCHED.md # AI 调度模式任务设计指南
 │       ├── ADVERSARIAL_REVIEW_GUIDE_AI_SCHED.md # AI 调度模式对抗性审查指南
+│       ├── academic_experiments.md      # 学术实验模式
 │       ├── build_and_ship.md            # 构建与发布模式
 │       ├── data_pipelines.md            # 数据管线模式
 │       ├── iterative_optimization.md    # 迭代优化模式
@@ -162,6 +163,7 @@ autoagent/
 | 文件 | 职责 |
 |------|------|
 | `default_value.py` | `DEFAULTS` 字典（所有默认值的唯一真相源）、配置模板生成 |
+| `config_registry.py` | 全局配置注册表：启动时注册合并后的配置 dict，各模块通过 `get_config()` 读取 |
 | `truncation_limits.py` | Prompt 字段截断限制 |
 | `autoagent_exec.py` | 长时间任务启动脚本：快速失败检测、信号文件、后台分离、stdout/stderr 分离、防御性重定向检测 |
 
@@ -177,7 +179,7 @@ autoagent/
 |------|------|
 | General | `system_prompt_prefix`、`default_model`、`truncation_limits` |
 | Timeout & Wait | `session_timeout`、`bash_timeout`、`fast_fail_timeout`、`backoff_max_wait`、`idle_interval` |
-| Max Rounds & Retries | `max_plan_retries`、`max_review_rounds`、`max_validation_retries`、`default_max_attempts`、`max_marker_nudges` |
+| Max Rounds & Retries | `max_plan_retries`、`max_review_rounds`、`max_adversarial_rounds`、`max_validation_retries`、`default_max_attempts`、`max_marker_nudges` |
 | AI Scheduler | `scheduler_history_limit`、`scheduler_decision_max_retries`、`scheduler_max_session_retries` |
 | Debug | `autoagent_exec_show_console` |
 | Presets | 命名预设配置组合 |

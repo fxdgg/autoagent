@@ -217,6 +217,7 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 | `--use-cli` | false | 使用 CLI 子进程模式 |
 | `--list-providers` | false | 列出所有可用 Provider 并退出 |
 | `--include-directories` | 无 | 允许 AI 访问的额外目录（仅 Gemini），逗号分隔 |
+| `--allow-unsupported-models` | false | 跳过对 CodeBuddy 支持模型列表的校验，适用于 CodeBuddy 尚未更新 --help 的新模型 |
 
 ### Ideas
 
@@ -234,6 +235,7 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 | `--continue` | false | 继续最近访问的会话（基于 `last_accessed_at`） |
 | `--resume` | 无 | 恢复指定会话 ID |
 | `--list-sessions` | false | 列出所有会话 |
+| `--rename OLD NEW` | 无 | 重命名 sessions.csv 中的 workspace 路径（将所有匹配 OLD 的条目更新为 NEW） |
 
 ### Preset 与配置
 
@@ -362,34 +364,7 @@ python orchestrator.py --list-sessions
 
 ---
 
-## 9. 最佳实践
-
-### 任务设计
-
-1. **completion_criteria 要具体可验证**：引用具体文件、命令输出、数值阈值
-2. **initial_hint 提供上下文而非剧本**：给 AI 关键信息，让它自主决策
-3. **合理分解子任务**：2-3 个子任务通常足够，不要过度拆分
-4. **用 `model: lite` 节省 Token**：编译、跑命令等不需要推理的任务用便宜模型
-5. **用 `*_once` 避免重复**：环境搭建、依赖安装等一次性操作
-
-### AI 调度模式
-
-1. **strategy 用编号规则**：清晰的条件-动作规则
-2. **description 必填**：调度器靠它理解任务
-3. **配置 last_result**：让调度器看到执行结果
-4. **任务数控制在 5-8 个**：太多会撑爆调度器 prompt
-5. **设计可重复执行的任务**：同一任务可能被调度多次
-
-### 长时间任务
-
-1. **超过 1 分钟的命令用 `long_running`**：避免 session timeout
-2. **completion_criteria 引用输出日志中的模式**
-3. **用 `long_running_once` 做一次性基准测试**
-4. **不要在命令中添加输出重定向**：autoagent-exec 已自动捕获所有输出；如需将输出保存到特定文件，使用 `--stdout`/`--stderr` 参数
-
----
-
-## 10. 故障排除
+## 9. 故障排除
 
 | 问题 | 原因 | 解决方案 |
 |------|------|---------|
@@ -406,7 +381,7 @@ python orchestrator.py --list-sessions
 
 ---
 
-## 11. FAQ
+## 10. FAQ
 
 **Q: 任务失败后会阻塞后续任务吗？**
 

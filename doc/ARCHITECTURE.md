@@ -67,6 +67,7 @@ AutoAgent 采用 **编排器-执行器** 模式，通过 Mixin 组合实现功�
 **关键设计决策**：
 - 每个任务创建独立的 `AIClient` 实例，实现对话上下文隔离
 - 通过 `SessionHelper` 静态方法管理会话目录
+- 通过 `config_registry` 全局注册合并后的配置，各模块通过 `get_config()` 读取，避免重复加载文件
 - 支持断点续传：保存 `session_id` 和 `interrupt_pending` 标记
 - 启动时校验 model 名称：当 Provider 为 CodeBuddy 时，通过 `codebuddy --help` 提取支持的模型列表，对 `todos.yaml`、CLI `--model` 和 `config.yaml` preset 中的 model 名称进行校验（仅 warning，不阻止运行）
 
@@ -387,6 +388,8 @@ ideas.md 变化检测（SHA-256 哈希比对）
 AI 拆解（plan 模型）→ 生成结构化任务 YAML
     ↓
 AI 审查（plan 模型）→ 质量评估
+    ↓
+对抗性审查（plan 模型）→ 红队检查任务定义的漏洞和歧义
     ↓
 可选人工审核（--human-review）
     ↓

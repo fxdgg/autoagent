@@ -8,8 +8,8 @@
 |------|------|--------|
 | [README.md](../README.md) ⭐ | 项目介绍、核心特性、快速开始 | 所有人 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) 🏗️ | 系统架构、模块设计、执行流程、AI 决策机制 | 开发者 |
-| [USAGE.md](USAGE.md) 📖 | 使用指南、配置详解、执行模式、最佳实践 | 使用者 |
-| [EXAMPLES.md](EXAMPLES.md) 💡 | 实际使用示例（线性模式、AI 调度模式、Ideas 模式） | 所有人 |
+| [USAGE.md](USAGE.md) 📖 | 使用指南、配置详解、执行模式 | 使用者 |
+| [TASK_DESIGN_GUIDE.md](../task_design_guide/linear/TASK_DESIGN_GUIDE.md) 💡 | 任务编写指南和最佳实践（线性模式） | 所有人 |
 | [FILES.md](FILES.md) 📁 | 项目文件结构与模块说明 | 开发者 |
 | [PROMPT.md](PROMPT.md) 📝 | Prompt 工程：所有 AI 交互的提示词模板 | 开发者 |
 | [AI Orchestrator 设计](ai_orchestrator/DESIGN.md) 🤖 | AI 调度器的详细设计方案 | 开发者 |
@@ -23,7 +23,7 @@
 | 配置任务 YAML | [USAGE.md](USAGE.md) → 任务配置 |
 | 使用 AI 调度模式 | [USAGE.md](USAGE.md) → AI 调度模式 |
 | 使用 Preset 配置 | [USAGE.md](USAGE.md) → Preset 配置 |
-| 看使用示例 | [EXAMPLES.md](EXAMPLES.md) |
+| 看使用示例 | [TASK_DESIGN_GUIDE.md](../task_design_guide/linear/TASK_DESIGN_GUIDE.md) |
 | 了解 AI 调度器设计 | [ai_orchestrator/DESIGN.md](ai_orchestrator/DESIGN.md) |
 | 了解 Prompt 设计 | [PROMPT.md](PROMPT.md) |
 | 了解文件结构 | [FILES.md](FILES.md) |
@@ -31,7 +31,7 @@
 
 ## 📖 推荐阅读顺序
 
-**新手**：README → EXAMPLES → USAGE
+**新手**：README → TASK_DESIGN_GUIDE → USAGE
 
 **开发者**：README → ARCHITECTURE → FILES
 

@@ -44,7 +44,7 @@ claude --version
 
 ### Step 3：创建任务
 
-创建 `todos.yaml`（可参考 `todos.example.yaml`），定义目标、完成标准和执行提示，这是一个全自动优化CUDA程序性能的todos示例：
+创建 `todos.yaml`，定义目标、完成标准和执行提示。以下是一个全自动优化 CUDA 程序性能的示例：
 
 ```yaml
 # description 提供全局上下文，AI 在执行每个任务时都能看到
@@ -290,7 +290,7 @@ AutoAgent 适合任何需要 **AI 长时间自主工作** 的场景：
 
 > 核心思路：**你定义「做什么」和「做到什么程度」，AI 负责 24 小时不间断地自主执行和迭代。**
 
-更多示例见 [示例集合](doc/EXAMPLES.md) 和 `todos.example.yaml`。
+更多示例和任务编写指南见 [任务设计指南](task_design_guide/linear/TASK_DESIGN_GUIDE.md)。
 
 ---
 
@@ -362,8 +362,8 @@ python orchestrator.py --preset default
 | 文档 | 说明 |
 |------|------|
 | [架构设计](doc/ARCHITECTURE.md) | 系统架构和核心概念详解 |
-| [使用指南](doc/USAGE.md) | 完整使用指南和最佳实践 |
-| [示例集合](doc/EXAMPLES.md) | 更多实际使用示例 |
+| [使用指南](doc/USAGE.md) | 完整使用指南 |
+| [任务设计指南](task_design_guide/linear/TASK_DESIGN_GUIDE.md) | 任务编写指南和最佳实践 |
 | [文件说明](doc/FILES.md) | 项目文件结构说明 |
 | [AI 调度器设计](doc/ai_orchestrator/DESIGN.md) | AI 调度模式的详细设计方案 |
 
