@@ -55,8 +55,8 @@ II. Task Fields
 (3) Instructions about copying results to a specified path for scheduler since scheduler and executor share the same filesystem. See §4.4.
 16. **`system_prompt_prefix`** defines the AI persona, role, expertise, style, and hard behavior constraints for any task, but not a substitute for `initial_hint`. See §7.1.
 17. **`max_attempts: 1`** is set on execution-only tasks (build, benchmark, test) that don't write code for fast failure propagation. Do not set `max_attempts: 1` on active coding tasks that benefit from retries. See §4.6 and §4.7.
-18. **Explicitly tells the AI to output `not completed`** when the prerequisites are already broken for execution-only subtasks. See §4.7.
-19. **`model: "lite"`** is set on deterministic execution tasks; use default for most reasoning-heavy tasks like debugging, design, optimization, implementation, anti-hack review and keep/discard decisions. See §4.8.
+18. **Explicitly tells the AI to output `❌ not completed: <reason>`** when the prerequisites are already broken for execution-only subtasks. See §4.7.
+19. **`model: "lite"`** is set on deterministic execution tasks; use **`model: "default"`** for most reasoning-heavy tasks like debugging, design, optimization, implementation, anti-hack review and keep/discard decisions. See §4.8.
 20. **`git commit` is used** to track each task's work (if have) when each task or subtask completes.
 
 III. Type-specific Guide
@@ -296,7 +296,7 @@ Set different `max_attempts` for different types of tasks:
 
 AutoAgent detects task failure by instructing the AI to output `not completed` when they cannot meet the `completion_criteria`. It is recommended to take advantage of this mechanism when failure must propagate correctly.
 
-- **Explicitly tell the AI to output `not completed: <reason>`** when execution-only tasks (e.g. build, test, benchmark, lint, format-check, verify) fail because prerequisites are already broken, such as implementation errors from an earlier task.
+- **Explicitly tell the AI to output `❌ not completed: <reason>`** when execution-only tasks (e.g. build, test, benchmark, lint, format-check, verify) fail because prerequisites are already broken, such as implementation errors from an earlier task.
 The execution-only task is not supposed to modify source code. With `max_attempts: 1`, this enables fast failure propagation. For execution-only subtasks inside `nested` tasks, it allows failure analysis to choose the correct retry boundary.
 
 **Important: this only applies to subtasks, not top-level `simple` tasks.**
