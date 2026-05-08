@@ -18,7 +18,7 @@ I. General Schema Rules
 (3) Does not include "potential/recommended approach" (unless the project requires) since AI can figure it out themselves. Doing this only narrows AI's creativity.
 (4) Does not cover scheduler-only ordering rules (e.g. execute task 2 after 1, this is a two-phase optimization).
 See §3 for full guidance.
-2. **Every task** has `id`, `name`, `type`, `description`, `completion_criteria`.
+2. **Every task** has `id`, `name`, `type`, `description`, `completion_criteria`, `initial_hint`.
 3. **ID assignment**: top-level IDs are sequential integers; subtask IDs use dot notation (e.g., 1.1, 1.2).
 4. **`*_once` types** (`simple_once`, `long_running_once`) can ONLY be subtasks, not top-level tasks.
 5. **`long_running`** is used for any command that may take > 1 minute.
@@ -468,9 +468,9 @@ Tips:
 | `id` | Yes | Integer for top-level, dot notation for subtasks. |
 | `name` | Yes | Concise task name. |
 | `type` | Yes | Valid task type. |
-| `description` | Yes by guide | Scheduler-facing summary of what the task does and produces. |
+| `description` | Yes | Scheduler-facing summary of what the task does and produces. |
 | `completion_criteria` | Yes | Specific, measurable success criteria. |
-| `initial_hint` | Optional | Executor-facing context and guidance. |
+| `initial_hint` | Yes | Executor-facing context and guidance. |
 | `model` | Optional | `default`, `lite`, role name, or direct model name. |
 | `system_prompt_prefix` | Optional | Persona, role, or hard behavior constraints. |
 | `max_attempts` | Optional | Max retry attempts for this task/subtask. |
@@ -485,11 +485,82 @@ ID rules:
 |------|--------------|
 | `nested` | `subtasks` required; optional `max_attempts`. |
 | `looping` | `subtasks` and positive integer `repeat_count` required; optional `max_attempts_per_loop`. |
-| `simple` / `long_running` / `*_once` | Optional `initial_hint`, `max_attempts`, `model`, `system_prompt_prefix`. |
+| `simple` / `long_running` / `*_once` | `initial_hint` required; optional `max_attempts`, `model`, `system_prompt_prefix`. |
 
 ---
 
-## 7. Task-Type-Specific Guides
+## 7. Minimal Skeleton Example
+
+Use this skeleton to understand the required `todos.yaml` structure. Replace every `<placeholder>` token with task-specific content; do not copy the placeholder wording into real tasks.
+
+```yaml
+description: |
+  # <project-name>
+
+  ## Goal
+  <goal>
+
+  ## Architecture
+  - <component-or-path>: <responsibility>
+
+  ## Key file paths
+  - <path>: <purpose>
+
+  ## Key commands
+  - <command-name>: <command>
+
+  ## Hard constraints
+  - <constraint>
+
+  ## Rules
+  - <rule>
+
+ai_orchestrator:
+  strategy: |
+    <scheduling-rule>
+    <failure-recovery-rule>
+  stop_condition: |
+    <observable-stop-condition>
+  last_result:
+    1:
+      type: file
+      path: ${workspace}/<path-to-result>
+    2:
+      type: response
+
+tasks:
+  - id: 1
+    name: "<task-name>"
+    type: simple
+    description: |
+      <scheduler-facing-summary>
+    completion_criteria: |
+      <measurable-condition>
+    initial_hint: |
+      <prerequisites-paths-commands-scope>
+
+  - id: 2
+    name: "<task-name>"
+    type: nested
+    description: |
+      <scheduler-facing-summary>
+    completion_criteria: |
+      <measurable-condition>
+    subtasks:
+      - id: 2.1
+        name: "<subtask-name>"
+        type: long_running
+        description: |
+          <scheduler-facing-summary>
+        completion_criteria: |
+          <measurable-condition>
+        initial_hint: |
+          <prerequisites-paths-commands-scope>
+```
+
+---
+
+## 8. Task-Type-Specific Guides
 
 Read only the guide relevant to the task domain:
 

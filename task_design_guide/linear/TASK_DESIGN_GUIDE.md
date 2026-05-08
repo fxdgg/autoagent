@@ -15,7 +15,7 @@ Reference for AI agents that generate `todos.yaml` tasks for AutoAgent.
 (2) Does not cover step-by-step instructions;
 (3) Does not include "potential/recommended approach" (unless the project requires) since AI can figure it out themselves. Doing this only narrows AI's creativity.
 See §3 for full guidance.
-2. **Every task** has `id`, `name`, `type`, `completion_criteria`.
+2. **Every task** has `id`, `name`, `type`, `completion_criteria`, `initial_hint`.
 3. **ID assignment**: top-level IDs are sequential integers; subtask IDs use dot notation (e.g., 1.1, 1.2).
 4. **`*_once` types** (`simple_once`, `long_running_once`) can ONLY be subtasks, not top-level tasks.
 5. **`long_running`** is used for any command that may take > 1 minute.
@@ -318,7 +318,7 @@ Tasks and subtasks share files, not conversation memory.
 | `type` | Yes | One of the task types above. |
 | `completion_criteria` | Yes | Specific and verifiable. |
 | `description` | Optional in linear mode | Useful short summary; required/recommended in AI scheduling mode. |
-| `initial_hint` | Optional | Context for executor attempts. |
+| `initial_hint` | Yes | Executor-facing context and guidance. |
 | `model` | Optional | `default`, `lite`, role name, or direct model name. |
 | `system_prompt_prefix` | Optional | Persona, expertise, style, role, or hard behavior constraints. Set on subtasks, not top-level `nested`/`looping`. |
 | `max_attempts` | Optional | Default from config. Use `1` for execution-only subtasks. |
@@ -333,11 +333,77 @@ ID rules:
 |------|--------------|
 | `nested` | `subtasks` required; optional `max_attempts`. |
 | `looping` | `subtasks` and positive integer `repeat_count` required; optional `max_attempts_per_loop`. |
-| `simple` / `long_running` / `*_once` | Optional `initial_hint`, `max_attempts`, `model`, `system_prompt_prefix`. |
+| `simple` / `long_running` / `*_once` | `initial_hint` required; optional `max_attempts`, `model`, `system_prompt_prefix`. |
 
 ---
 
-## 6. Task-Type-Specific Guides
+## 6. Minimal Skeleton Example
+
+Use this skeleton to understand the required `todos.yaml` structure. Replace every `<placeholder>` token with task-specific content; do not copy the placeholder wording into real tasks.
+
+```yaml
+description: |
+  # <project-name>
+
+  ## Goal
+  <goal>
+
+  ## Architecture
+  - <component-or-path>: <responsibility>
+
+  ## Key file paths
+  - <path>: <purpose>
+
+  ## Key commands
+  - <command-name>: <command>
+
+  ## Hard constraints
+  - <constraint>
+
+  ## Rules
+  - <rule>
+
+tasks:
+  - id: 1
+    name: "<task-name>"
+    type: simple
+    completion_criteria: |
+      <measurable-condition>
+    initial_hint: |
+      <prerequisites-paths-commands-scope>
+
+  - id: 2
+    name: "<task-name>"
+    type: nested
+    completion_criteria: |
+      <measurable-condition>
+    subtasks:
+      - id: 2.1
+        name: "<subtask-name>"
+        type: simple
+        completion_criteria: |
+          <measurable-condition>
+        initial_hint: |
+          <prerequisites-paths-commands-scope>
+
+  - id: 3
+    name: "<task-name>"
+    type: looping
+    completion_criteria: |
+      <measurable-condition>
+    subtasks:
+      - id: 3.1
+        name: "<subtask-name>"
+        type: long_running
+        completion_criteria: |
+          <measurable-condition>
+        initial_hint: |
+          <prerequisites-paths-commands-scope>    
+```
+
+---
+
+## 7. Task-Type-Specific Guides
 
 Read only the guide relevant to the task domain:
 

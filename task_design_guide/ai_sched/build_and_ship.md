@@ -449,7 +449,6 @@ tasks:
         name: "Anti-hack verification for CSV parser"
         type: simple
         max_attempts: 1
-        model: lite
         system_prompt_prefix: |
           You are a code integrity verifier. Do NOT modify any files.
         completion_criteria: |
@@ -530,7 +529,6 @@ tasks:
         name: "Anti-hack verification for DB layer"
         type: simple
         max_attempts: 1
-        model: lite
         system_prompt_prefix: |
           You are a code integrity verifier. Do NOT modify any files.
         completion_criteria: |
@@ -610,7 +608,6 @@ tasks:
         name: "Anti-hack verification for service"
         type: simple
         max_attempts: 1
-        model: lite
         system_prompt_prefix: |
           You are a code integrity verifier. Do NOT modify any files.
         completion_criteria: |
@@ -690,7 +687,6 @@ tasks:
         name: "Anti-hack verification for route"
         type: simple
         max_attempts: 1
-        model: lite
         system_prompt_prefix: |
           You are a code integrity verifier. Do NOT modify any files.
         completion_criteria: |
@@ -763,7 +759,6 @@ tasks:
         name: "Global anti-hack and full-suite verification"
         type: simple
         max_attempts: 1
-        model: lite
         system_prompt_prefix: |
           You are a test runner and code integrity verifier. Do NOT modify any files.
         completion_criteria: |
@@ -823,7 +818,7 @@ tasks:
 
 - **Module-based splitting at the top level**: tasks 2–5 each own one module (utils / db / service / route) as independent top-level `nested` tasks. The scheduler can redispatch the failed or stale module task without rerunning unrelated module tasks, and prerequisite failures become signals to redispatch the missing producer.
 - **Scheduler visibility**: Task 1 exposes durable planning artifacts with `last_result: type: file`; the two-subtask module tasks and integration task use `last_result: type: response` because their final responses are enough for scheduler decisions in this example.
-- **Anti-hack verification**: subtasks 2.2, 3.2, 4.2, 5.2, 6.2 are all dedicated `max_attempts: 1`, `model: lite` verifiers with `system_prompt_prefix` forbidding edits; each checks tests + recorded-SHA diff scope + test-integrity heuristics. If a verifier command may exceed one minute, switch that verifier from `simple` to `long_running`.
+- **Anti-hack verification**: subtasks 2.2, 3.2, 4.2, 5.2, 6.2 are all dedicated `max_attempts: 1` verifiers with `system_prompt_prefix` forbidding edits; each checks tests + recorded-SHA diff scope + test-integrity heuristics. If a verifier command may exceed one minute, switch that verifier from `simple` to `long_running`.
 - **Unit test discipline**: each implementation subtask (2.1, 3.1, 4.1, 5.1) lists the exact unit test categories it must cover, written in the same subtask as the code. Integration tests are deferred to task 6.1, intentionally — they only become tractable once all modules exist.
 
 ### 5.1 Variants in design-doc mode
