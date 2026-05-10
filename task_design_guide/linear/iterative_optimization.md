@@ -1,300 +1,382 @@
 # Best Practice: Iterative Optimization
 
-## Recommended Structure
+## 1. Recommended Structure
 
 ```
 ├── nested
-|   ├── build the project                    (simple, model: lite)
-|   └── establish baseline                   (simple, model: lite)
+|   ├── build the project                    (simple or long_running, model: lite)
+|   └── establish baseline                   (simple or long_running, model: lite)
 └── looping (repeat_count: N)
-    ├── analyze + propose hypothesis (3 ideas at a time) (simple)
-    └── looping (repeat_count: 3)
-        ├── implement + build + test         (simple)
-        ├── anti-hack check                  (simple, max_attempts: 1)
-        ├── benchmark                        (simple or long_running, max_attempts: 1, model: lite)
-        └── evaluate + keep/revert + report  (simple, max_attempts: 1)
+    ├── analyze + propose hypothesis         (simple)
+    ├── implement + build + test             (simple)
+    ├── anti-hack check                      (simple, max_attempts: 1)
+    ├── benchmark                            (simple or long_running, max_attempts: 1, model: lite)
+    └── evaluate + keep/revert + report      (simple, max_attempts: 1)
 ```
+
+Key Considerations:
 
 - Use `looping` (not `nested`) because the goal is "run N rounds", not "reach a specific target".
 - **Separate "thinking" from "doing"**: analysis in one subtask, implementation in another (see main guide §4.1).
-- **finding fast-check profiling modes**: in implementation task, search for fast validation mode in training/profiling framework (e.g. --validate, --doctor) when it is long-running to speed up self-correction (see main guide rule 8).
-- **Explicitly tells the AI to output `not completed`** for anti-hack checks and benchmark subtasks (see main guide §4.6).
 - Anti-hack check, benchmark and evaluation subtasks should use `max_attempts: 1` —— failures should propagate to the parent for proper retry.
 - Benchmark subtask should use `model: lite` —— they just execute.
 - Use `long_running` for benchmark if it takes more than a minute (e.g. GPU profiling, large simulation runs).
 
 ---
 
-## Patterns
+## 2. Recommended State Files
 
-### Pattern 1: Separate documentation commits from code commits
+Use a small, stable set of files to preserve optimization state across isolated agent sessions.
 
-Commit the hypothesis documentation **before** implementing code. If the code is rolled back on failure/regression, the documentation survives and informs the next iteration.
+### 2.1 `optimization_results.tsv`
 
-### Pattern 2: Re-evaluate the bottleneck every iteration
+Records the baseline benchmark history and every experiment result. This is the compact source of truth and **must be read before deciding what to try, keep, revert, or reject**.
 
-Don't assume the bottleneck is the same as the previous round. Instruct the AI to compute a diagnostic metric at the start of each iteration to determine where to focus.
-
-### Pattern 3: Define a decision matrix for keep/discard
-
-Don't let the AI make subjective keep/discard decisions. Provide a structured decision matrix in the evaluation subtask's `initial_hint`:
-
-```yaml
-initial_hint: |
-  ┌─────────────────────────────────────────────────────────────────┬──────────┐
-  │ Condition                                                       │ Decision │
-  ├─────────────────────────────────────────────────────────────────┼──────────┤
-  │ Pure bug fix (no optimization intent)                           │ keep     │
-  │ Primary bottleneck metric improved ≥5%                          │ keep     │
-  │   AND no other metric group worsened >3%                        │          │
-  │ Secondary bottleneck metric improved ≥5%                        │ keep     │
-  │   AND primary not worsened >3%                                  │          │
-  │ Multiple metrics improved (even if each <5%)                    │ keep     │
-  │   AND none worsened >3%                                         │          │
-  │ Primary bottleneck metric worsened >10%                         │ discard  │
-  │ Any metric worsened >5% with no bottleneck compensation         │ discard  │
-  │ All metrics within ±1% (no meaningful change)                   │ discard  │
-  │ Mixed results not covered above                                 │ discard  │
-  └─────────────────────────────────────────────────────────────────┴──────────┘
-```
-
-### Pattern 4: Clean workspace at iteration start
-
-Since subtasks share the filesystem, the start of each iteration may find uncommitted changes or stashed work from a previous failed attempt. Instruct the first subtask to handle this.
-
----
-
-## Recommended State Files
-
-Use a small, stable set of files to preserve optimization state across isolated agent sessions. The files below assume they live under `doc/`, but the same names can be adapted to the target project's documentation directory.
-
-### `optimization_results.tsv`
-
-Records the baseline and every experiment result. This is a structured source of truth and **must be read by the AI agent** before deciding what to try, keep, revert, or reject.
-
-Recommended columns:
+Required columns:
 
 ```tsv
-exp_id	date	module	changes	 <metric columns...>	status	reason	commit_hash
+exp_id  date  module  changes <metric columns...> status  reason  commit_hash
 ```
-
-- `exp_id`: stable experiment ID, such as `EXP-001`.
-- `date`: date when the experiment row was created or finalized.
-- `module`: the module or subsystem changed by the experiment.
-- `changes`: short summary of what changed.
+- `exp_id`: `BASELINE-001`, `BASELINE-002`, ... for baseline benchmark rows; `EXP-001`, `EXP-002`, ... for experiments. When rerunning baseline, append the next sequential `BASELINE-00N` row instead of overwriting previous baseline rows.
+- `date`: date when the row is created.
+- `module`: the touched module or subsystem for experiments (`all` for baseline benchmark rows).
+- `changes`: short summary for experiments (`baseline` for baseline benchmark rows).
 - `<metric columns...>`: task-specific metric columns chosen by the todo-generating AI. Different projects need different metrics, so do not force a universal metric schema.
+Pending rows should use `NA` for metric values that do not exist yet. Benchmark task replaces `NA` with measured values.
 - `status`: one of `baseline`, `pending`, `kept`, `reverted`, or `rejected`.
-- `reason`: compact explanation of the status or decision.
-- `commit_hash`: commit that contains the kept/reverted implementation or relevant documentation update.
+- `reason`: compact explanation of the current status or final decision.
+- `commit_hash`: use hypothesis commit hash for each experiment. `commit_hash` is `pending` until final evaluation is performed; final evaluator fills the hypothesis commit hash. For baseline benchmark rows, use the baseline documentation commit hash after the baseline docs are committed.
 
-### `optimization_log.md`
+Status lifecycle:
 
-Records **detailed** experiment hypotheses, target areas, risks, profiling results, and decision reasons. The AI agent should **always read the tail/recent entries** and may read older entries on demand when investigating history or avoiding repeated work.
+- `baseline`: created for each baseline benchmark row before optimization starts or when baseline is rerun; baseline reruns use the next sequential `BASELINE-00N` id and preserve previous baseline rows.
+- `pending`: created by the analysis subtask before implementation starts.
+- `rejected`: used when the pending idea is not implemented because it is stale, unsafe, duplicate, or not meaningful.
+- `kept`: used when the implementation is accepted by evidence-based evaluation using the defined metrics, metric priorities, and hard failure conditions.
+- `reverted`: used when the implementation is discarded after evaluation. 
 
-Idea generation may produce more than one candidate at a time. In linear mode, this can be represented with a `nested` structure, such as generating three ideas first in one subtask and then executing three implementation rounds via nested subtasks.
+When one experiment is `reverted`, only the code change is reverted —— the hypothesis remains.
 
-Pending ideas are candidates, not obligations: before the implementation subtask implements a pending idea, confirm that it is still valid after any earlier idea has been kept. If not, tell the AI to say `rejected`.
+### 2.2 `optimization_log.md`
 
-Recommended entry format:
+Records detailed hypotheses, target areas, risks, profiling results, and decision reasons. The AI agent should **always read recent entries first** and may read older entries on demand when investigating history or avoiding repeated work.
+
+Required head:
 
 ```md
-## Exp xxx: xxx
-Date: xxx
-Module: xxx
-Status: xxx
+# Optimization Log —— <project name>
+
+## Project Overview
+
+<project overview>
+
+## Environments
+
+<environments>
+Latest baseline commit: <baseline commit>
+Latest baseline branch: <baseline branch>
+
+## Baseline
+
+### Baseline-00N
+<baseline metrics and relevant context for run N>
+
+## Experiment Index
+
+Next experiment id: EXP-001
+```
+
+Required format for each experiment:
+
+```md
+## Exp EXP-xxx: <short title>
+Date: <date>
+Module: <module>
+Status: pending | kept | reverted | rejected
+Hypothesis commit: <hypothesis commit hash>
 
 ### Hypothesis
 
-xxx
+<hypothesis>
 
 ### Proposed Changes
 
-xxx
+<proposed changes>
 
 ### Expected Outcome
 
-xxx
+<expected outcome>
 
 ### Risk
 
-xxx
+<risk>
 
 ### Profiling Results
 
-xxx
+<benchmark or profiling results, or NA before benchmark>
 
 ### Decision
 
-xxx
-
+<decision and reason, or pending before evaluation>
 ```
 
-The idea generation stage writes the header, `Hypothesis`, `Proposed Changes`, `Expected Outcome`, and `Risk`. The benchmark stage writes `Profiling Results`. The reporting/evaluation stage writes `Decision` and updates the status.
+### 2.3 `optimization_report.md`
 
-### `optimization_report.md`
+A rolling summary updated after every round. It summarizes the current state from `optimization_log.md` and `optimization_results.tsv`. It **must be read before proposing or implementing further optimization work**.
 
-A rolling summary updated after every round. It summarizes `optimization_log.md`. It **must be read by the AI agent** before proposing or implementing further optimization work.
-
-Recommended structure:
+Required structure:
 
 ```md
+# Optimization Report —— <project name>
+
 ## Project Overview
 
-xxx
+<project overview>
 
 ## Current Best vs Baseline
 
-xxx
+<current best result, baseline result, and overall delta using the project-specific primary metric>
 
 ## Experiment Summary
 
 | Exp | Date | Module | Changes | Module Delta | Total Delta | Status | Reason |
 |-----|------|--------|---------|--------------|-------------|--------|--------|
+| BASELINE-00N | <date> | all | baseline | 0 | 0 | baseline | baseline or new baseline |
 
 ## Cumulative Improvement
 
 | Experiment | Value |
 |------------|-------|
-| Baseline | 615.1 us |
-| After EXP-001 | 585.8 us (-4.8%) |
-| After EXP-003 | 426.4 us (-30.7%) |
-| After EXP-004 | 414.6 us (-32.6%) |
+| BASELINE-001 | <baseline primary metric value> |
+| After EXP-001 | <primary metric value and delta vs baseline-001> |
+| After EXP-002 | <primary metric value and delta vs baseline-001> |
+| BASELINE-002 | <baseline primary metric value> |
+| After EXP-003 | <primary metric value and delta vs baseline-002> |
+| After EXP-004 | <primary metric value and delta vs baseline-002> |
+...
+| BASELINE-00M | <baseline primary metric value> |
+| After EXP-00N | <primary metric value and delta vs baseline-00M> |
+
 
 ## Key Changes
 
-1. **EXP-001 (KEEP)**: short summary.
-2. **EXP-002 (REVERT)**: short summary.
+(none yet)
 ```
 
-Keep summaries concise. The report should make the current state easy to understand without forcing the agent to reread the full `optimization_log` every round.
+`Key Changes` should stay concise; it is a navigable summary, not a duplicate of the full log.
 
-### `failure_patterns.md`
+### 2.4 `failure_patterns.md`
 
-Records proven failure patterns and promising directions to prevent repeated attempts. This file **must be read by the AI agent** before proposing new ideas.
+Records proven failure patterns and promising directions to prevent repeated attempts. This file **must be read before proposing new ideas**.
 
-Recommended structure:
+Required structure:
 
 ```md
+# Failure Patterns —— <project name>
+
 ## Proven Failure Patterns
 
-### Pattern xxx: xxx
-Experiment: EXP-xxx — xxx
-Result: xxx time 122.7 -> 133.2ms (+8.6%)
-Root Cause: xxx
-Lesson: xxx
+(none yet)
 
 ## Promising Directions
 
-### Direction xxx: xxx
-Experiment: EXP-xxx — xxx
-Result: xxx time 120.4 -> 92.2ms (-23.4%)
-Why it worked: xxx
-Lesson: xxx
+(none yet)
+```
+
+Required entry format:
+
+```md
+### Pattern 00N: <short name>
+Experiment: EXP-xxx — <short title>
+Result: <metric summary>
+Root Cause: <root cause>
+Lesson: <lesson>
+
+### Direction 00N: <short name>
+Experiment: EXP-xxx — <short title>
+Result: <metric summary>
+Why it worked: <reason>
+Lesson: <lesson>
 ```
 
 Keep `Root Cause`, `Why it worked`, and `Lesson` short. This file should be a compact knowledge base, not a long-form report.
 
 ---
 
-## Complete Example
+## 3. Macro Workflow
 
-Below is a complete linear-mode `todos.yaml` demonstrating a fixed-count optimization workflow with batched idea generation, file-backed state, explicit failure propagation for execution-only subtasks, anti-hack verification, benchmark evaluation, and a rolling final report.
+### Task 1: Build, test, benchmark, and initialize optimization state
+
+#### Subtask 1.1: Build and run tests without modifications
+
+Build and test without modifying the repository.
+
+#### Subtask 1.2: Run baseline benchmark and initialize state files
+
+1. Run the baseline benchmark.
+2. Create or update the optimization state files:
+   - `optimization_results.tsv`
+   - `optimization_log.md`
+   - `optimization_report.md`
+   - `failure_patterns.md`
+
+### Task 2: Run fixed optimization rounds
+
+#### Subtask 2.1: Analyze and propose one hypothesis
+
+1. read all optimization state files, re-evaluate the current bottleneck, and avoid repeated failed directions.
+2. Append one `pending` row to `optimization_results.tsv`.
+3. Writes `Hypothesis`, `Proposed Changes`, `Expected Outcome`, and `Risk` to `optimization_log.md`.
+
+#### Subtask 2.2: Implement or reject the proposed experiment
+
+1. implement only the selected pending experiment, or mark it `rejected` if it is stale, unsafe, or no longer meaningful.
+2. If the idea is not implemented, change status to `rejected` in both `optimization_results.tsv` and `optimization_log.md` and record the reason.
+
+#### Subtask 2.3: Anti-hack verification
+
+1. Skip this step if the idea is marked as `rejected`.
+2. Run anti-hack checks without modifying files.
+3. If anti-hack result is 'FAIL', explicitly output `❌ not completed` so that 2.2 could be retried.
+
+#### Subtask 2.4: Run benchmark for the implementation
+
+1. Skip this step if the idea is marked as `rejected`.
+2. Run the project-specific benchmark only for implemented experiments, and immediately output `❌ not completed` on benchmark failure so that 2.2 could be retried.
+3. Write measured metric values into the selected `optimization_results.tsv` row, and `Profiling Results` section in `optimization_log.md`.
+
+#### Subtask 2.5: Evaluate result, keep or revert, and update optimization state
+
+1. Read the benchmark results already written to `optimization_results.tsv`. if required benchmark evidence is missing or incomplete for an implemented experiment, output `❌ not completed` so that 2.4 could be retried.
+2. Compare against the previous best kept result, use the project-specific metric definitions, metric priorities, and hard failure conditions, and choose `kept` or `reverted`. `rejected` can only be chosen by implementation task.
+3. Update `Decision` and `Status` in `optimization_log.md`.
+4. Update `optimization_report.md` and failure/promising-pattern notes in `failure_patterns.md`.
+
+---
+
+## 4. Patterns
+
+### Pattern 1: Separate hypothesis, implementation, and decision commits
+
+Commit the hypothesis documentation **before** implementing code. Commit the implementation separately before benchmarking. Finalize the experiment with one decision commit.
+
+Use exactly these commit message formats:
+
+```text
+xxx_opt(EXP-xxx): hypothesis —— <hypothesis>
+xxx_opt(EXP-xxx): implementation —— <implementation>
+xxx_opt(EXP-xxx): kept/reverted/rejected —— <reason>
+```
+
+If the final decision is `reverted`, use `git reset` to remove the implementation commit, then commit only the final state documentation.
+
+### Pattern 2: Re-evaluate the bottleneck every iteration
+
+Don't assume the bottleneck is the same as the previous round. Instruct the AI to compute a diagnostic metric at the start of each iteration to determine where to focus.
+
+### Pattern 3: Finding fast-check training/profiling modes
+
+In implementation task, search for fast validation mode in training/profiling framework (e.g. --validate, --doctor) when it is long-running to speed up self-correction (see main guide rule 8).
+If tests are not long-running, this pattern should not be applied —— use full test mode.
+
+### Pattern 4: Define metrics, priorities, and hard failure conditions
+
+Don't encode numeric keep/revert thresholds in generated todos unless they are true project requirements. Instead, the evaluation subtask's `initial_hint` should define what the metrics mean, how they are prioritized, which benchmark evidence is required before a decision can be made, and which failures make a result impossible to keep.
+
+---
+
+## 5. Complete Example
+
+Use this example to understand the recommended linear-mode structure for iterative optimization. Replace every `<placeholder>` token with project-specific content; do not copy placeholder wording into real tasks. `<!-- xxx -->` are comments that explain this example in detail, so do not include them into real tasks either.
 
 ```yaml
 description: |
-  # Project: Web API Performance Optimization
+  # <project name>
 
   ## Goal
-  Run a fixed number of optimization rounds for the REST API server. Reduce p95
-  latency while keeping all integration tests passing and preserving benchmark
-  integrity. Every experiment must be traceable through the optimization state
-  files under doc/.
+  <goal>
 
   ## Architecture
-  - src/handlers/users.rs —— user-facing HTTP handlers and request validation
-  - src/handlers/orders.rs —— order APIs and response assembly
-  - src/db/pool.rs —— PostgreSQL connection pool and transaction helpers
-  - src/db/queries.rs —— hot-path SQL query functions
-  - src/cache/redis.rs —— Redis client wrapper and cache key construction
-  - src/middleware/auth.rs —— authentication middleware used by all routes
-  - tests/integration/ —— end-to-end API behavior tests
-  - benchmarks/load_test.js —— k6 load test for latency measurements
-  - config/server.yaml —— runtime configuration for local benchmark runs
+  - <component or module 1>: <its responsibility>
+  - <component or module 2>: <its responsibility>
+  ...
+
+  ## Key file paths
+  - <file path 1>: <its purpose>
+  - <file path 2>: <its purpose>
+  <!-- Only put relevant files here. -->
+  ...
 
   ## Optimization Docs
-  - doc/optimization_results.tsv —— structured baseline and experiment results; must read
-  - doc/optimization_log.md —— detailed experiment log; read recent entries first, older entries on demand
-  - doc/optimization_report.md —— rolling summary and final report; must read
-  - doc/failure_patterns.md —— proven failures and promising directions; must read
+  - <path/to/optimization_results.tsv> —— baseline and each experiment's results (Must Read)
+  - <path/to/optimization_log.md> —— detailed experiment log (Read recent entries first; read older entries on demand)
+  - <path/to/optimization_report.md> —— rolling summary and final report (Must Read)
+  - <path/to/failure_patterns.md> —— proven failures and promising directions (Must Read)
 
-  ## Environment
-  - Run commands from the repository root.
-  - PostgreSQL and Redis must be available through the local development compose stack.
-  - Benchmark runs must use the checked-in benchmark script and checked-in server config.
+  ## Environments
+  <environments>
 
   ## Key Commands
-  - Start dependencies: docker compose up -d postgres redis
-  - Build: cargo build --release
-  - Test: cargo test --all
-  - Benchmark: k6 run benchmarks/load_test.js --out json=results.json
+  - <command 1>: <command>
+  - <command 2>: <command>
+  ...
 
   ## Hard Constraints
-  - Do NOT modify public request/response schemas.
-  - Do NOT remove, weaken, skip, or rewrite tests to hide failures.
-  - Do NOT change benchmark scripts, load shape, benchmark thresholds, or server config to hide regressions.
-  - Do NOT edit generated benchmark output by hand; summarize it in docs instead.
-  - Keep each implementation focused and reversible.
+  - Keep each experiment small, focused, and reversible.
+  - <rules on what should not be modified>
+  - <rules on not weakening tests>
+  - <rules on preserving benchmark integrity>
+  - <other project-specific constraints>
 
   ## Reference Docs
-  - P0 Must Read: doc/architecture.md —— request flow, service boundaries, and public API contracts
-  - P1 Read Before Related Work: doc/database_indexes.md —— read before changing src/db/
-  - P1 Read Before Related Work: doc/cache_semantics.md —— read before changing src/cache/
-  - P1 Read Before Related Work: doc/benchmark_methodology.md —— read before interpreting benchmark results
-  - P2 On Demand: doc/runtime_tuning.md —— read only when investigating runtime or pooling behavior
+  ### P0 Must Read
+    - <document path 1>: <its responsibility>
+    - <document path 2>: <its responsibility>
+    ...
+  ### P1 Read Before Related Work
+    - <document path 1>: <its responsibility>
+    - <document path 2>: <its responsibility>
+    ...
+  ### P2 On Demand:
+    - <document path 1>: <its responsibility>
+    - <document path 2>: <its responsibility>
+    ...
 
   ## Rules
-  - Fully autonomous: never ask the user questions.
-  - Persist all inter-task handoffs in the optimization docs listed above.
-  - Generate a small batch of candidate ideas, then implement pending ideas one at a time.
-  - Before implementing a pending idea, confirm it is still valid after any earlier kept changes.
-  - If an execution-only subtask finds broken prerequisites, output `not completed: <reason>`.
+  - One optimization experiment per iteration.
+  - Record every experiment faithfully in the optimization docs. Preserve optimization history even when code is reverted. 
+  Optimization histories from previous experiments should not be modified.
+  - <other project-specific rules>
 
 tasks:
-  # ── Task 1: Establish Baseline ────────────────────────────────────────
+  # ── Task 1: Establish baseline ─────────────────────────
   - id: 1
     name: "Build, test, benchmark, and initialize optimization state"
     type: nested
     max_attempts: 3
     completion_criteria: |
-      1. cargo build --release exits 0.
-      2. cargo test --all exits 0.
-      3. k6 benchmark completes and writes results.json.
-      4. doc/optimization_results.tsv exists with one baseline row using status=baseline.
-      5. doc/optimization_log.md exists with baseline context and experiment numbering guidance.
-      6. doc/optimization_report.md exists with project overview, baseline, empty experiment summary, cumulative improvement, and key changes sections.
-      7. doc/failure_patterns.md exists with Proven Failure Patterns and Promising Directions sections.
-      8. No source files, tests, configs, benchmark scripts, or hand-edited benchmark outputs are modified.
+      1. <build command> exits 0.
+      2. <test command> exits 0.
+      3. <benchmark command> exits 0 and baseline measurements are recorded.
+      4. optimization_results.tsv exists with columns: exp_id, date, module, changes, task-specific metric columns, status, reason, commit_hash; it contains at least one baseline row whose exp_id follows BASELINE-00N, latest baseline row uses module=all, changes=baseline, status=baseline, and reason=baseline or new baseline.
+      5. optimization_log.md exists with Project Overview, Environments, Baseline, and Experiment Index sections, including Next experiment id: EXP-001.
+      6. optimization_report.md exists with Project Overview, Current Best vs Baseline, Experiment Summary, Cumulative Improvement, and Key Changes sections; the latest BASELINE-00N row is the current best before optimization experiments.
+      7. failure_patterns.md exists with Proven Failure Patterns and Promising Directions sections, both initially empty unless history already exists.
+      8. No source files, tests, configs, or benchmark scripts are modified.
     subtasks:
       - id: 1.1
         name: "Build and run tests without modifications"
         type: simple
         max_attempts: 1
         model: lite
+        completion_criteria: |
+          1. <build command> exits 0.
+          2. <test command> exits 0.
+          3. git diff --name-only shows no changes.
         system_prompt_prefix: |
           You are a build engineer. Do NOT modify source code, tests, configs, benchmark scripts, generated data, or documentation.
-        completion_criteria: |
-          1. cargo build --release exits 0.
-          2. cargo test --all exits 0.
-          3. git diff --name-only shows no changes.
         initial_hint: |
-          Run:
-          - docker compose up -d postgres redis
-          - cargo build --release
-          - cargo test --all
-
-          This is an execution-only subtask. If dependencies are unavailable,
-          the build fails, or tests fail because the repository is already
-          broken, output `not completed: <reason>` and do not edit files.
+          <hint on running build and test commands>
 
       - id: 1.2
         name: "Run baseline benchmark and initialize state files"
@@ -302,194 +384,377 @@ tasks:
         max_attempts: 1
         model: lite
         completion_criteria: |
-          1. k6 benchmark exits 0 and writes results.json.
-          2. doc/optimization_results.tsv contains a baseline row with exp_id=BASELINE, date, module=all, changes=baseline, task-specific metric columns, status=baseline, reason, and commit_hash.
-          3. doc/optimization_log.md contains baseline context and the next experiment ID format.
-          4. doc/optimization_report.md summarizes project overview, baseline, current best, empty experiment table, cumulative improvement, and key changes.
-          5. doc/failure_patterns.md contains Proven Failure Patterns and Promising Directions sections.
-          6. Existing experiment rows, log entries, report history, and failure-pattern entries are preserved.
-          7. Only doc/optimization_results.tsv, doc/optimization_log.md, doc/optimization_report.md, doc/failure_patterns.md, and results.json may change.
+          1. <benchmark command> exits 0 and baseline measurements are recorded.
+          2. optimization_results.tsv contains at least one baseline row whose exp_id follows BASELINE-00N; the latest baseline row uses module=all, changes=baseline, task-specific metric values, status=baseline, reason=baseline or new baseline, and commit_hash=<commit hash>.
+          3. optimization_log.md contains Project Overview, Environments, Baseline, and Experiment Index sections with Next experiment id: EXP-001.
+          4. optimization_report.md contains Project Overview, Current Best vs Baseline, Experiment Summary with a latest BASELINE-00N row, Cumulative Improvement with that baseline as the last row, and Key Changes.
+          5. failure_patterns.md contains Proven Failure Patterns and Promising Directions sections, both initially empty unless history already exists.
+          6. Only optimization docs and allowed benchmark artifacts may change. No source files, tests, configs, or benchmark scripts are modified.
+        system_prompt_prefix: |
+          You are a benchmark runner and documenter. Do NOT modify source code, tests, configs, benchmark scripts, or generated data.
         initial_hint: |
-          Run:
-          - k6 run benchmarks/load_test.js --out json=results.json
+          1. Run the project-specific benchmark:
 
-          Parse results.json for the task-specific metrics, including p95 latency.
-          Create the four optimization state files if missing. Use metric columns
-          appropriate for this API optimization task, such as p50_ms, p95_ms,
-          p99_ms, error_rate, and throughput_rps.
+          <hints on how to run benchmark commands>
 
-          results.json is a temporary benchmark artifact, not long-lived state.
-          Preserve existing optimization history if the files already exist.
-          If the benchmark cannot run because prerequisites are broken, output
-          `not completed: <reason>` and do not edit source code, tests, configs,
-          or benchmark scripts.
+          2. Create or update optimization_results.tsv exactly in this TSV format:
+            exp_id	  date	  module	changes	  <metric columns...>	status	  reason	  commit_hash
+            BASELINE-00N	<date>	all	    baseline	<metric values...>	baseline	baseline or new baseline  <commit_hash>
 
-  # ── Task 2: Fixed Iterative Optimization Loop ─────────────────────────
+          Use `BASELINE-001` when no prior baseline rows exist. If baseline rows already exist, use the next sequential baseline id, such as `BASELINE-002`.
+
+          3. Create or update optimization_log.md exactly in this Markdown format:
+          # Optimization Log —— <project name>
+
+          ## Project Overview
+
+          <project overview>
+
+          ## Environments
+
+          <environments>
+          Latest baseline commit: <baseline commit hash>
+          Latest baseline branch: <baseline branch>
+
+          ## Baseline
+
+          ### Baseline-00N
+          <baseline metrics and relevant context for run N>
+
+          ## Experiment Index
+
+          Next experiment id: EXP-001
+
+          4. Create or update optimization_report.md exactly in this Markdown format:
+          # Optimization Report —— <project name>
+
+          ## Project Overview
+
+          <project overview>
+
+          ## Current Best vs Baseline
+
+          <current best result, baseline result, and overall delta using the project-specific primary metric>
+
+          ## Experiment Summary
+
+          | Exp | Date | Module | Changes | Module Delta | Total Delta | Status | Reason |
+          |-----|------|--------|---------|--------------|-------------|--------|--------|
+          | BASELINE-00N | <date> | all | baseline | 0 | 0 | baseline | baseline or new baseline |
+          <!-- Always append it to the end if there are existing baselines. DO NOT override previous ones. -->
+
+          ## Cumulative Improvement
+
+          | Experiment | Value |
+          |------------|-------|
+          | BASELINE-00N | <baseline primary metric> | 
+          <!-- Always append it to the end if there are existing baselines. DO NOT override previous ones. -->
+
+          ## Key Changes
+
+          (none yet)
+
+          5. Create or update failure_patterns.md exactly in this Markdown format:
+          # Failure Patterns —— <project name>
+
+          ## Proven Failure Patterns
+
+          (none yet)
+
+          ## Promising Directions
+
+          (none yet)
+
+          Notes: 
+          1. Preserve existing optimization history if these files already exist, and adapt the formats mentioned above accordingly. 
+          2. You must re-benchmark if these files already exist, and append a new baseline row to optimization_results.tsv using the next sequential baseline id, such as BASELINE-002, with reason="new baseline".
+            DO NOT skip this step since the code/data may have changed outside optimization loops.
+          3. Split into two commits since baseline commit hash is not available before actually committed. Use these commit messages below:
+            xxx_opt(BASELINE-00N): baseline (or new baseline) profiling
+            xxx_opt(BASELINE-00N): update baseline (or new baseline) commit hash
+
+  # ── Task 2: Fixed Iterative Optimization Loop
   - id: 2
     name: "Run fixed optimization rounds"
     type: looping
-    repeat_count: 4
+    repeat_count: <round count>
     max_attempts_per_loop: 3
     completion_criteria: |
-      Each outer round generates a small batch of candidate ideas, then attempts
-      up to three pending ideas one by one. Every attempted idea is finalized as
-      kept, reverted, or rejected in doc/optimization_results.tsv,
-      doc/optimization_log.md, doc/optimization_report.md, and
-      doc/failure_patterns.md. After the final round, doc/optimization_report.md
-      is the final rolling summary.
+      Finish multiple complete cycles of hypothesis, implementation, anti-hack, benchmark and evaluation, 
+      each with exactly one finalized experiment status: kept/reverted/rejected.
     subtasks:
       - id: 2.1
-        name: "Analyze evidence and propose candidate ideas"
+        name: "Analyze and propose one hypothesis"
         type: simple
         system_prompt_prefix: |
-          You are a backend performance engineer specializing in Rust async services. Prefer focused, reversible experiments.
+          <system prompts for a <domain> performance analyst, including the primary metric, bottleneck signals, and project-specific optimization constraints>
         completion_criteria: |
-          1. doc/optimization_results.tsv, recent doc/optimization_log.md entries, doc/optimization_report.md, and doc/failure_patterns.md have been read.
-          2. Up to three new pending experiments are appended to doc/optimization_log.md using the recommended experiment format.
-          3. Matching pending rows are appended to doc/optimization_results.tsv with status=pending.
-          4. Each idea identifies the module, proposed changes, expected outcome, and risk.
-          5. No source code, tests, configs, benchmark scripts, benchmark outputs, or rolling summary files are modified.
-          6. The hypothesis documentation is committed separately before implementation starts.
+          1. optimization_results.tsv, recent optimization_log.md entries, optimization_report.md, and failure_patterns.md have been read.
+          2. Exactly one new pending experiment entry is appended to optimization_log.md with Date, Module, Status: pending, Hypothesis commit: pending, Hypothesis, Proposed Changes, Expected Outcome, Risk, Profiling Results, and Decision sections.
+          3. The 'Next experiment id' in 'Experiment Index' section in optimization_log.md is updated for the next round.
+          4. Exactly one pending row is appended to optimization_results.tsv with exp_id=EXP-xxx, status=pending, metric values set to NA, reason explaining the hypothesis, and commit_hash=pending.
+          5. No source code, tests, configs, benchmark scripts, benchmark outputs, rolling summary files, or failure-pattern files are modified.
+          6. The hypothesis documentation is committed with "xxx_opt(EXP-xxx): hypothesis —— <hypothesis>" separately before implementation starts.
         initial_hint: |
-          Read the required optimization state files first. Re-evaluate the
-          current bottleneck instead of assuming it is unchanged. Use
-          doc/failure_patterns.md to avoid repeated failed directions and
-          doc/optimization_report.md to understand the current best result.
+          Read optimization_results.tsv, recent optimization_log.md entries, optimization_report.md, and failure_patterns.md first.
+          Re-evaluate the current bottleneck instead of assuming it is unchanged, and use failure_patterns.md to avoid repeated failed directions.
 
-          Append at most three focused candidate ideas. Prefer diversity across
-          plausible bottlenecks instead of three variants of the same idea. If
-          fewer than three good ideas exist, write fewer. Keep each idea small
-          enough to implement and revert independently.
+          After proposing one hypothesis:
 
-          Commit only the documentation updates before implementation begins:
-          git add doc/optimization_results.tsv doc/optimization_log.md
-          git commit -m "doc: propose optimization ideas"
+          1. Append exactly one pending row to optimization_results.tsv in this TSV format:
+          exp_id  date  module  changes <metric columns...> status  reason  commit_hash
+          EXP-xxx <date>  <module>  <short changes summary> NA  pending <hypothesis reason> pending
+
+          Use the next experiment id from optimization_log.md.
+
+          2. Append exactly one matching experiment entry to optimization_log.md in this Markdown format:
+          ## Exp EXP-xxx: <short title>
+          Date: <date>
+          Module: <module>
+          Status: pending
+          Hypothesis commit: pending
+
+          ### Hypothesis
+
+          <hypothesis>
+
+          ### Proposed Changes
+
+          <proposed changes>
+
+          ### Expected Outcome
+
+          <expected outcome>
+
+          ### Risk
+
+          <risk>
+
+          ### Profiling Results
+
+          NA
+
+          ### Decision
+
+          pending
+
+          3. Update the Experiment Index / Next experiment id in optimization_log.md for the next round. Do not update optimization_report.md or failure_patterns.md in this task.
+
+          4. Commit only the documentation updates before implementation begins:
+            git commit -m "xxx_opt(EXP-xxx): hypothesis —— <hypothesis>"
 
       - id: 2.2
-        name: "Execute pending ideas one by one"
-        type: looping
-        repeat_count: 3
-        max_attempts_per_loop: 3
+        name: "Implement or reject the proposed experiment"
+        type: simple
         completion_criteria: |
-          One pending idea is either implemented, benchmarked, and finalized, or
-          rejected with a concrete reason. The standard optimization state files
-          are updated after the decision.
-        subtasks:
-          - id: 2.2.1
-            name: "Implement or reject the next pending idea"
-            type: simple
-            completion_criteria: |
-              1. Exactly one pending experiment from doc/optimization_log.md is selected.
-              2. If earlier kept changes make the idea obsolete, unsafe, or no longer meaningful, it is marked rejected in doc/optimization_results.tsv and doc/optimization_log.md with a reason.
-              3. If implemented, the code change is focused on the selected module and cargo build --release exits 0.
-              4. If a fast validation mode exists for the touched subsystem, it exits 0 before the full benchmark subtask runs.
-              5. Public schemas, tests, configs, benchmark scripts, and unrelated modules are not modified.
-              6. No code is committed; the evaluation subtask decides whether to keep or revert the change.
-            initial_hint: |
-              Read the next pending experiment from doc/optimization_log.md and
-              compare it with the current best state in doc/optimization_report.md.
-              If the idea is stale after earlier kept changes, reject it in the
-              standard optimization state files and do not edit source code.
+          1. Exactly one pending experiment from optimization_log.md is selected.
+          2. If current state makes the idea obsolete, unsafe, or no longer meaningful, it is marked `rejected` in optimization_results.tsv and optimization_log.md with a reason.
+          3. If implemented, the code change is focused on the selected module, <build command> and <test command> exits 0.
+          4. <completion_criteria on what should not be changed>
+          5. If implemented, the implementation is committed with: xxx_opt(EXP-xxx): implementation —— <implementation>.
+        system_prompt_prefix: |
+          <system prompts for a <domain> optimization engineer, including implementation boundaries, performance goals, and constraints that must not be weakened>
+        initial_hint: |
+          Read the pending experiment from optimization_log.md and compare it with the current best state in optimization_report.md.
+          
+          If the idea is stale after earlier kept changes, unsafe under current constraints, duplicate, or no longer meaningful, do not edit source code. Instead, reject the selected experiment this way:
+          - In optimization_results.tsv, update the selected EXP-xxx row in place: status=rejected, reason=<rejection reason>, commit_hash=<hypothesis commit hash>. Keep metric values as NA.
+          - In optimization_log.md, update the selected EXP-xxx entry with "Status: rejected and Decision: rejected: <rejection reason>"
+          - Do not create an implementation commit. The evaluation task will create the final documentation commit.
 
-              Before editing, inspect git status and git diff for residual state
-              from a failed retry. Implement only the selected idea. Search for a
-              fast validation mode relevant to the touched subsystem before
-              relying on the full benchmark step. Do not modify tests, public
-              schemas, configs, or benchmark scripts.
+          If the idea is still valid:
+          
+          1. inspect git status first: if a previous commit exists from a failed retry, use git reset --soft and amend fix on residual state.
+          
+          2. Implement only the selected idea. 
 
-          - id: 2.2.2
-            name: "Anti-hack verification"
-            type: simple
-            max_attempts: 1
-            system_prompt_prefix: |
-              You are an anti-hack verifier. Your sole job is to detect constraint violations. Do NOT modify source code, tests, configs, benchmark scripts, generated data, or documentation.
-            completion_criteria: |
-              1. If no implementation is pending because the selected idea was rejected, verification reports that no code verification is required.
-              2. If code was implemented, cargo test --all exits 0.
-              3. git diff confirms no public schemas, tests, configs, benchmark scripts, generated benchmark outputs, or unrelated modules were modified.
-              4. Tests are not weakened: no skipped assertions, relaxed tolerances, removed test cases, or conditional bypasses.
-              5. Benchmark integrity is preserved: load shape, benchmark duration, thresholds, and result JSON are not changed to hide regressions.
-            initial_hint: |
-              This is an execution-only verification subtask. Inspect git diff
-              and run cargo test --all when code changes are pending. If tests
-              fail, forbidden files changed, or benchmark/test integrity is
-              violated, output `not completed: <reason>` so the parent failure
-              analysis can retry the correct implementation boundary. Do not fix
-              code in this subtask.
+          3. <rules on what should not be changed>
 
-          - id: 2.2.3
-            name: "Run benchmark for the pending implementation"
-            type: long_running
-            max_attempts: 1
-            model: lite
-            system_prompt_prefix: |
-              You are a benchmark runner. Do NOT modify source code, tests, configs, benchmark scripts, or documentation except for writing raw benchmark output produced by the benchmark command.
-            completion_criteria: |
-              1. If the selected idea was rejected before implementation, benchmark is skipped and no files are modified.
-              2. If code was implemented, k6 benchmark exits 0 and writes results.json.
-              3. The benchmark uses the checked-in benchmarks/load_test.js and checked-in config/server.yaml.
-              4. No source code, tests, configs, benchmark scripts, or documentation are modified by this subtask.
-            initial_hint: |
-              If the selected experiment was already rejected, do nothing and
-              report that no benchmark is required. Otherwise run:
-              k6 run benchmarks/load_test.js --out json=results.json
+          4. <rules on how to build and test. Search fast validation mode by yourself (todo-generating AI) and provide deterministic commands, instead of writing 'search for fast validation mode' and let this task's AI search by itself>
 
-              This is an execution-only subtask. If prerequisites are broken or
-              the benchmark fails, output `not completed: <reason>` and do not
-              edit files to compensate.
+          5. Commit the implementation with:
+            git commit -m "xxx_opt(EXP-xxx): implementation —— <implementation>"
 
-          - id: 2.2.4
-            name: "Evaluate result, keep or revert, and update optimization state"
-            type: simple
-            max_attempts: 1
-            system_prompt_prefix: |
-              You are a strict experiment evaluator. Apply the decision rules consistently and preserve benchmark integrity.
-            completion_criteria: |
-              1. The selected experiment has final status=kept, status=reverted, or status=rejected in doc/optimization_results.tsv and doc/optimization_log.md.
-              2. If rejected before implementation, no benchmark result is required and the rejection reason is recorded.
-              3. If implemented, results.json is parsed and compared with the previous best kept result.
-              4. If tests failed, benchmark failed, or p95_ms regressed by more than 5% versus the previous best kept row, only the latest implementation is reverted and status=reverted is recorded.
-              5. If p95_ms improves by at least 5% and no secondary metric regresses by more than 3%, the change is kept and status=kept is recorded.
-              6. If results are within noise or mixed outside the decision rules, the implementation is reverted and status=reverted is recorded.
-              7. doc/optimization_report.md is updated as the rolling summary and final report for the current state.
-              8. doc/failure_patterns.md is updated with proven failures or promising directions.
-              9. Documentation updates and any kept code changes are committed; reverted code changes are not left in the workspace.
-            initial_hint: |
-              Read doc/optimization_results.tsv, the selected experiment entry in
-              doc/optimization_log.md, doc/optimization_report.md, and
-              doc/failure_patterns.md. If the experiment was rejected before
-              implementation, record the rejection across the state files and
-              commit the documentation updates.
+      - id: 2.3
+        name: "Anti-hack verification"
+        type: simple
+        max_attempts: 1
+        system_prompt_prefix: |
+          You are an anti-hack verifier. Your sole job is to detect constraint violations. Do NOT modify source code, tests, configs, benchmark scripts, generated data, or documentation.
+        completion_criteria: |
+          1. If the selected idea was marked as 'rejected', skip this step.
+          2. If verification result is 'FAIL', output `❌ not completed: Anti-hack verification failed. Implementation task should be retried` so that the implementation task can be retried.
+          3. No public contracts, tests, configs, benchmark scripts, generated benchmark outputs, or unrelated modules were modified.
+        initial_hint: |
+          Read the current experiment from optimization_log.md and inspect git to find implementation code changes.
+          If the selected idea was marked as 'rejected', skip this anti-hack step and directly output ✅ completed to proceed to the next task. If not:
 
-              If code was implemented, parse results.json and compare against the
-              previous best kept result. First identify the current primary
-              bottleneck from the previous best kept row, not from the new
-              experiment's metrics. Then apply this decision matrix:
+          1. Check if the implementation code matches the experiment idea;
+          2. <write all other anti-hack rules here based on global description and task-specific informations>
+          3. If verification result is 'FAIL', output `❌ not completed: Anti-hack verification failed. Implementation task should be retried`
+          so that the implementation task can be retried. Do not fix code by yourself.
 
-              ┌─────────────────────────────────────────────────────────────────┬──────────┐
-              │ Condition                                                       │ Decision │
-              ├─────────────────────────────────────────────────────────────────┼──────────┤
-              │ Pure bug fix (no optimization intent)                           │ keep     │
-              │ Primary bottleneck metric improved ≥5%                          │ keep     │
-              │   AND no other metric group worsened >3%                        │          │
-              │ Secondary bottleneck metric improved ≥5%                        │ keep     │
-              │   AND primary not worsened >3%                                  │          │
-              │ Multiple metrics improved (even if each <5%)                    │ keep     │
-              │   AND none worsened >3%                                         │          │
-              │ Primary bottleneck metric worsened >10%                         │ discard  │
-              │ Any metric worsened >5% with no bottleneck compensation         │ discard  │
-              │ All metrics within ±1% (no meaningful change)                   │ discard  │
-              │ Mixed results not covered above                                 │ discard  │
-              └─────────────────────────────────────────────────────────────────┴──────────┘
+      - id: 2.4
+        name: "Run benchmark for the implementation"
+        type: long_running
+        max_attempts: 1
+        model: lite
+        system_prompt_prefix: |
+          You are a benchmark runner. Do NOT modify source code, tests, configs, benchmark scripts, or documentation except for writing raw benchmark output produced by the benchmark command.
+        completion_criteria: |
+          1. If the selected idea was marked as 'rejected', skip this step.
+          2. If code was implemented, <benchmark command> exits 0; optimization_results.tsv has the selected EXP-xxx row updated in place with the measured metric values while keeping status=pending and commit_hash=pending; the 'Profiling Results' section in optimization_log.md records the observed metric values, metric notes, and benchmark reliability notes.
+          3. If the benchmark fails, immediately output `❌ not completed: Benchmark failed. Implementation task should be retried` so that the implementation task can be retried.
+        initial_hint: |
+          If the selected idea was marked as 'rejected', skip this benchmark step and directly output ✅ completed to proceed to the next task.
 
-              If the matrix says discard for an implemented change, revert only
-              the latest implementation and record status=reverted. Do not remove
-              the hypothesis documentation. If the matrix says keep, record
-              status=kept.
+          Otherwise run:
+          <benchmark command>
 
-              Update doc/optimization_report.md with current best vs baseline,
-              experiment summary, cumulative improvement, and key changes.
-              Update doc/failure_patterns.md: reverted/rejected experiments go
-              under Proven Failure Patterns; kept experiments go under Promising
-              Directions. Commit documentation updates and any kept code changes.
+          If the benchmark command fails, its output is incomplete, or the expected raw benchmark output is missing, 
+          immediately output `❌ not completed: Benchmark failed. Implementation task should be retried` so that the implementation task can be retried.
+          Do not update optimization_results.tsv or optimization_log.md on benchmark failure.
+
+          After a successful benchmark, update the selected EXP-xxx row in optimization_results.tsv in place: 
+          replace the metric columns' NA values with the measured metric values, and keep status=pending, commit_hash=pending.
+          Do not finalize the decision in this task.
+
+          Then update only 'Profiling Results' section in the selected EXP-xxx entry in optimization_log.md:
+
+          Metrics: <observed metric values>
+          Metric notes: <units, directionality, and any relevant interpretation notes>
+          Benchmark reliability: <known noise, repeated-run count if applicable, missing reliability information, or other caveats produced by the benchmark task>
+
+      - id: 2.5
+        name: "Evaluate result, keep or revert, and update optimization state"
+        type: simple
+        max_attempts: 1
+        system_prompt_prefix: |
+          You are a strict experiment evaluator. Apply the decision rules consistently and use the benchmark results already recorded by the benchmark subtask.
+        completion_criteria: |
+          1. If required benchmark evidence is missing, incomplete, or internally inconsistent for an implemented experiment, 
+          output `❌ not completed: benchmark incomplete` so that the benchmark task can be retried.
+          2. Otherwise, exactly one final decision is applied as status=kept/reverted in both optimization_results.tsv and optimization_log.md according to initial_hint, 
+          and the implementation commit is kept or removed with git reset, or absent because of 'rejected'.
+          3. The selected experiment row in optimization_results.tsv is finalized with measured metric values already written by the benchmark subtask, 
+          final reason and hypothesis commit hash.
+          4. optimization_log.md updates the selected experiment's Status, Decision, and Hypothesis commit fields according to the final outcome.
+          5. optimization_report.md is updated with Current Best vs Baseline, Experiment Summary, Cumulative Improvement, and Key Changes.
+          6. failure_patterns.md is updated with a Pattern entry for useful reverted/rejected lessons or a Direction entry for useful kept lessons.
+          7. Final documentation is committed with: xxx_opt(EXP-xxx): kept/reverted/rejected —— <reason>.
+        initial_hint: |
+          Read optimization_results.tsv, recent optimization_log.md entries, optimization_report.md, and failure_patterns.md first.
+          Then make an evidence-based 'kept' / 'reverted' decision using the metric definitions, metric priorities, benchmark reliability notes, and observed tradeoffs. 
+          DO NOT make 'rejected' decision by yourself: this decision can only be made by the implementation task.
+
+          1. Required benchmark evidence before decision (Skip if the experiment was marked as 'rejected')
+            - optimization_results.tsv contains the required metric values for EXP-xxx.
+            - The selected experiment's Profiling Results contains observed metrics, metric notes, and benchmark reliability notes.
+            - If required benchmark evidence is missing, incomplete, or internally inconsistent, output `❌ not completed: benchmark incomplete` 
+              so that the benchmark task can be retried.
+
+          2. Decision rules (Skip if the experiment was marked as 'rejected')
+            - Metrics: <project-specific metric names, units, directionality, and where each value is recorded in optimization_results.tsv>
+            - Metric priorities: <primary metric, secondary metrics, and how to reason about tradeoffs without fixed numeric keep/revert thresholds>
+            - <project-specific decision rules. Write only when user specifies —— DO NOT invent thresholds by yourself (todo generating AI), let AI itself decide>
+            
+          3. If the decision is 'reverted', use git reset to remove the implementation commit. Do not remove the hypothesis documentation commit.
+
+          4. Finalize state exactly as follows:
+          
+            (1) optimization_results.tsv
+              exp_id  date  module  changes <metric columns...> status  reason  commit_hash
+              EXP-xxx <date>  <module>  <short changes summary> <measured metric values, or NA if rejected> kept/reverted/rejected  <decision reason> <hypothesis commit hash>
+
+            (2) optimization_log.md
+
+              Keep this Markdown shape and replace <final status> with exactly one of kept, reverted, or rejected:
+              ## Exp EXP-xxx: <short title>
+              Date: <date>
+              Module: <module>
+              Status: <final status>
+              Hypothesis commit: <hypothesis commit hash>
+
+              ### Hypothesis
+
+              <existing hypothesis>
+
+              ### Proposed Changes
+
+              <existing proposed changes>
+
+              ### Expected Outcome
+
+              <existing expected outcome>
+
+              ### Risk
+
+              <existing risk>
+
+              ### Profiling Results
+
+              <preserve the benchmark subtask's raw evidence; NA if rejected>
+
+              ### Decision
+
+              <final status>: <decision reason>
+
+            (3) optimization_report.md
+            
+              Keep this Markdown shape and replace <final status> with exactly one of kept, reverted, or rejected:
+              # Optimization Report —— <project name>
+
+              ## Project Overview
+
+              <existing project overview>
+
+              ## Current Best vs Baseline
+
+              <current best result, baseline result, and overall delta using the project-specific primary metric>
+
+              ## Experiment Summary
+
+              | Exp | Date | Module | Changes | Module Delta | Total Delta | Status | Reason |
+              |-----|------|--------|---------|--------------|-------------|--------|--------|
+              | <BASELINE-00N> | <date> | all | baseline | 0 | 0 | baseline | baseline or new baseline |
+              | EXP-xxx | <date> | <module> | <short changes summary> | <module delta or NA> | <total delta or NA> | <final status> | <decision reason> |
+
+              ## Cumulative Improvement
+
+              | Experiment | Value |
+              |------------|-------|
+              | <BASELINE-00N> | <baseline primary metric value> |
+              | After EXP-xxx | <primary metric value and delta vs baseline. Only added if decision is kept> |
+
+              ## Key Changes
+
+              1. **EXP-xxx (<FINAL STATUS>)**: <short summary>.
+
+            (4) Update failure_patterns.md only when there is a reusable lesson. Keep this Markdown shape:
+              # Failure Patterns —— <project name>
+
+              ## Proven Failure Patterns
+
+              (existing entries)
+
+              ## Promising Directions
+
+              (existing entries)
+
+            If the experiment was reverted or rejected and has a useful lesson, append only this entry under Proven Failure Patterns:
+              ### Pattern 00N: <short name>
+              Experiment: EXP-xxx — <short title>
+              Result: <metric summary or rejection summary>
+              Root Cause: <root cause>
+              Lesson: <lesson>
+
+            If the experiment was kept and has a reusable lesson, append only this entry under Promising Directions:
+              ### Direction 00N: <short name>
+              Experiment: EXP-xxx — <short title>
+              Result: <metric summary>
+              Why it worked: <reason>
+              Lesson: <lesson>
+
+          5. Commit the final state documentation with:
+            git commit -m "xxx_opt(EXP-xxx): <final status> —— <reason>"
 ```

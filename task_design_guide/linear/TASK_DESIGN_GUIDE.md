@@ -13,7 +13,8 @@ Reference for AI agents that generate `todos.yaml` tasks for AutoAgent.
 1. **Root `description`** exists and:
 (1) Covers Goal, Architecture, Key file paths, Hard constraints, Rules;
 (2) Does not cover step-by-step instructions;
-(3) Does not include "potential/recommended approach" (unless the project requires) since AI can figure it out themselves. Doing this only narrows AI's creativity.
+(3) Does not include contents that are only specific to one task (which should belong to `initial_hint`) instead of shared context;
+(4) Does not include "potential/recommended approach" (unless the project requires) since AI can figure it out themselves. Doing this only narrows AI's creativity.
 See §3 for full guidance.
 2. **Every task** has `id`, `name`, `type`, `completion_criteria`, `initial_hint`.
 3. **ID assignment**: top-level IDs are sequential integers; subtask IDs use dot notation (e.g., 1.1, 1.2).
@@ -33,6 +34,7 @@ I. Task Decomposition
 8. **Search for fast-check training/profiling modes, if it is long-running**: 
 when merging implement + build + test into one subtask, search for fast validation mode in training/profiling framework (e.g. --validate, --doctor) when it is long-running.
 The key insight is to ensure correctness in implementation before the next task runs full time-consuming training/profiling, while significantly speed up self-correction in implementation task.
+If tests are not long-running, this rule should not be applied —— use full test mode.
 9. **Choose `nested` vs `looping` by evaluation behavior**: use `nested` to reach a target end state; use `looping` to run a fixed number of iterations. See §4.1 and §5.2.
 10. **State persistence**: write inter-task handoffs to files; never assume the next task can see prior conversation context. See §4.10.
 11. **Failure resilience**: tasks may inherit broken state from (a) their own failed retries, or (b) a predecessor task that failed and left partial changes. Include prerequisite checks in `initial_hint` and reports in `completion_criteria` for preceding failures. See §4.9.
@@ -66,6 +68,7 @@ Verification subtasks must (a) check for negative constraints in rule 20; (b) us
 24. Are completion criteria specific, measurable, and verifiable enough?
 25. Does `completion_criteria` include negative constraints, and is there a "verify" task after each "implement" task for complex implementations?
 26. Does `description` or `initial_hint` include step-by-step instructions or "potential/recommended approach" (unless the project requires)?
+27. Your todo file **shouldn't reference this design guide or subguides** —— **Executor AI cannot see this guide**.
 
 ---
 
@@ -106,6 +109,7 @@ Include:
 - **Goal**: final observable outcome and success threshold.
 - **Architecture**: key directories/modules and their responsibilities.
 - **Key file paths**: key source files/directories, configs, inputs, outputs, reports, and logs.
+TODO：加一节Environments，描述路径约定、虚拟环境等
 - **Key commands**: build/test/run/validate commands with required working directory, environment variables, and expected output locations.
 - **Hard constraints**: files, APIs, tests, data, or behavior that must not change.
 - **Rules**: project-wide behavior such as experiment discipline, allowed change size, or reporting format.
@@ -115,11 +119,13 @@ Include:
   - **P2 On Demand**: read only when debugging, stuck, or needing deeper historical/troubleshooting context.
 - **Optional**:
   - Architecture Coupling Notes: exact files/modules that must be updated together.
+TODO：加一节Key Configs：描述关键参数，比如超参、配置等
   - Naming Conventions: required file, branch, metric, or artifact naming patterns.
   - Historical Result Files: paths to prior attempt/iteration outputs that should be read to avoid repeated work.
 
 Do not include:
 - **step-by-step instructions**: AI can figure it out themselves.
+- **contents that are only specific to one task**: They should belong to `initial_hint`. `description` describes shared context between all tasks.
 - **potential/recommended approach** (unless the project requires): AI can figure it out themselves. Doing this only narrows AI's creativity.
 
 ---
@@ -311,6 +317,8 @@ Tasks and subtasks share files, not conversation memory.
 
 ### 5.3 Common Task Fields
 
+TODO：加一项Position，用于区分“是否可以出现在任何位置，还是不能出现在nested/looping task的parent fields里）
+
 | Field | Required | Notes |
 |-------|----------|-------|
 | `id` | Yes | Top-level positive integer; subtask dot notation matching parent. |
@@ -339,66 +347,76 @@ ID rules:
 
 ## 6. Minimal Skeleton Example
 
-Use this skeleton to understand the required `todos.yaml` structure. Replace every `<placeholder>` token with task-specific content; do not copy the placeholder wording into real tasks.
+Use this skeleton to understand the required `todos.yaml` structure. Replace every `<placeholder>` token with task-specific content; do not copy the placeholder wording into real tasks. `<!-- xxx -->` are comments that explain this example in detail, so do not include them into real tasks either.
 
 ```yaml
 description: |
-  # <project-name>
+  # <project name>
 
   ## Goal
   <goal>
 
   ## Architecture
-  - <component-or-path>: <responsibility>
+  - <component or module 1>: <its responsibility>
+  - <component or module 2>: <its responsibility>
+  ...
 
   ## Key file paths
-  - <path>: <purpose>
+  - <file path 1>: <its purpose>
+  - <file path 2>: <its purpose>
+  <!-- Only put relevant files here. -->
+  ...
+
+  ## Environments
+  <environments>
 
   ## Key commands
-  - <command-name>: <command>
+  - <command 1>: <command>
+  - <command 2>: <command>
+  ...
 
   ## Hard constraints
-  - <constraint>
+  - <constraints>
 
   ## Rules
-  - <rule>
+  <rules>
 
 tasks:
   - id: 1
-    name: "<task-name>"
+    name: "<task name>"
     type: simple
     completion_criteria: |
-      <measurable-condition>
+      <completion_criteria>
     initial_hint: |
-      <prerequisites-paths-commands-scope>
+      <initial_hint>
 
   - id: 2
-    name: "<task-name>"
-    type: nested
+    name: "<task name>"
+    type: nested 
     completion_criteria: |
-      <measurable-condition>
+      <overall completion_criteria>
     subtasks:
       - id: 2.1
-        name: "<subtask-name>"
+        name: "<subtask name>"
         type: simple
         completion_criteria: |
-          <measurable-condition>
+          <task-specific completion_criteria>
         initial_hint: |
-          <prerequisites-paths-commands-scope>
+          <initial_hint>
 
   - id: 3
-    name: "<task-name>"
+    name: "<task name>"
     type: looping
     completion_criteria: |
-      <measurable-condition>
+      <overall completion_criteria>
     subtasks:
       - id: 3.1
-        name: "<subtask-name>"
+        name: "<subtask name>"
         type: long_running
         completion_criteria: |
-          <measurable-condition>
+          <task-specific completion_criteria>
         initial_hint: |
-          <prerequisites-paths-commands-scope>    
+          <initial_hint>    
 ```
 
 ---

@@ -16,7 +16,8 @@ I. General Schema Rules
 (1) Covers Goal, Architecture, Key file paths, Hard constraints, Rules;
 (2) Does not cover step-by-step instructions;
 (3) Does not include "potential/recommended approach" (unless the project requires) since AI can figure it out themselves. Doing this only narrows AI's creativity.
-(4) Does not cover scheduler-only ordering rules (e.g. execute task 2 after 1, this is a two-phase optimization).
+(4) Does not include contents that are only specific to one task (which should belong to `initial_hint`) instead of shared context;
+(5) Does not cover scheduler-only ordering rules (e.g. execute task 2 after 1, this is a two-phase optimization).
 See §3 for full guidance.
 2. **Every task** has `id`, `name`, `type`, `description`, `completion_criteria`, `initial_hint`.
 3. **ID assignment**: top-level IDs are sequential integers; subtask IDs use dot notation (e.g., 1.1, 1.2).
@@ -42,6 +43,7 @@ I. General Rules for Task Decomposition
 10. **Search for fast-check training/profiling modes, if it is long-running**: 
 when merging implement + build + test into one subtask, search for fast validation mode in training/profiling framework (e.g. --validate, --doctor) when it is long-running.
 The key insight is to ensure correctness in implementation before the next task runs full time-consuming training/profiling, while significantly speed up self-correction in implementation task.
+If tests are not long-running, this rule should not be applied —— use full test mode.
 11. **State persistence**: write inter-task handoffs to files; never assume the next task can see prior conversation context. See §4.11.
 12. **Failure resilience**: tasks may inherit broken state from (a) their own failed retries, or (b) a predecessor task that failed and left partial changes. Scheduler's failure handling strategy is dominant, while task's prerequisite checks in `initial_hint` and reports in `completion_criteria` for preceding failures are still required as a fallback. See §4.10.
 
@@ -68,15 +70,15 @@ III. Type-specific Guide
 I. Fields under ai_orchestrator
 
 22. **`strategy`** references task IDs, encodes task dependencies, and includes failure recovery rules. See §5.2.
-23. **`last_result`** is configured for every task whose output is needed by scheduler. Use `${workspace}` for workspace-relative paths; it is expanded at runtime. See §5.3.
+23. **`last_result`** is configured for every task whose output is needed by scheduler. Prefer `type: response`; use `type: file` only when the scheduler must inspect specific file contents across rounds for complex scheduling strategy. Use `${workspace}` for workspace-relative `type: file` paths; it is expanded at runtime. See §5.3.
 24. **`stop_condition`** is specific, measurable, and includes a fallback (e.g. after 5 consecutive failures). See §5.4.
 
 II. AI Scheduling Rules for Task Decomposition
 
 25. **Max ~5-8 top-level tasks** —— more bloats the scheduler prompt.
 26. **Design for re-execution**: design tasks that can run 0, 1, or many times.
-27. **Scheduler observable**: Documentation task or subtask should provide enough information in `last_result` files for scheduler to make precise decisions. 
-28. **Designing tail-friendly `last_result`**: keep scheduler-critical status in small summary files (especially when scheduler needs cross-round analysis) or at the end of result files, because the last 5 lines of `last_result` is directly injected into scheduler's prompt.
+27. **Scheduler observable**: Tasks should expose a concise scheduler-facing result through `last_result`; default to `type: response` so the scheduler reads the task's final summary.
+28. **Designing tail-friendly `last_result`**: If using `type: file`, keep scheduler-critical status in the last 5 lines of the final response by default, because the last 5 lines are directly injected into the scheduler prompt.
 
 ### Anti-Hack Rules
 
@@ -91,8 +93,10 @@ Verification subtasks must (a) check for negative constraints in rule 29; (b) us
 33. Are completion criteria specific, measurable, and verifiable enough?
 34. Does `completion_criteria` include negative constraints, and is there a "verify" task after each "implement" task for complex implementations?
 35. Does `description` or `initial_hint` include step-by-step instructions or "potential/recommended approach" (unless the project requires)?
-36. Are `last_result` correctly set so that scheduler can see each task's execution results? Will files specified in `last_result` be created by tasks BEFORE scheduler wants to see them?
-37. Are `${workspace}` used in `last_result` to reference relative paths?
+36. Are `last_result` correctly set so that scheduler can see each task's execution results, preferably via `type: response`?
+37. If using `last_result: type: file`, is the file truly needed by a complex scheduling strategy, and will it be created before the scheduler wants to inspect it?
+38. Are `${workspace}` used in `last_result: type: file` to reference relative paths?
+39. Your todo file **shouldn't reference this design guide or subguides** —— **Executor AI cannot see this guide**.
 
 ---
 
@@ -134,15 +138,16 @@ In AI scheduling mode, an AI scheduler dynamically chooses **one top-level task 
 
 Scheduler only sees root `description`, scheduling rules and each top-level task's specific `description`, not inner task details (like `completion_criteria` and `initial_hint`) or subtask information (which is consistent with "not schedule subtask" design). `last_result` is the only way that scheduler can inspect task's execution results.
 **Implication**:
-- Persist task outputs needed for scheduling to files and use `last_result: type: file`, or expose original AI response for simple tasks via `last_result: type: response`.
+- Prefer `last_result: type: response` for most tasks. The task's final response should end with a concise scheduler-facing summary.
+- Use `last_result: type: file` only when the scheduling strategy is complex enough that the scheduler must inspect specific structured files across rounds, such as metric tables, cumulative status files, or artifacts explicitly referenced by `strategy`.
 
 3. **The last 5 lines of `last_result` are directly injected into the scheduler prompt**
 
-**Implication**: Put scheduler-critical state near the end of each result file, or maintain a small rolling summary/status file for scheduling decisions (especially when scheduler needs cross-round analysis). Do not bury it in the middle of a large log.
+**Implication**: If using `type: file`, put scheduler-critical state near the end of each result file, or maintain a small rolling summary/status file for scheduling decisions. Do not bury it in the middle of a large log.
 
 4. **`last_result` is not scheduler-only**
 
-File paths in `last_result` is shared between scheduler and executor, not scheduler-only.
+File paths in `last_result: type: file` are shared between scheduler and executor, not scheduler-only.
 **Implication**: Use `last_result` to inform the scheduler is enough. No need to state "Executor must copy results to a specified path for scheduler" or mention "persist scheduler-relevant outcomes" elsewhere.
 
 ---
@@ -170,6 +175,7 @@ Include:
 Do not include:
 - **scheduler-only ordering rules** (e.g. execute task 2 after 1, this is a two-phase optimization): put them in `ai_orchestrator.strategy`.
 - **step-by-step instructions**: AI can figure it out themselves.
+- **contents that are only specific to one task**: They should belong to `initial_hint`. `description` describes shared context between all tasks.
 - **potential/recommended approach**: AI can figure it out themselves. Doing this only narrows AI's creativity.
 
 Key insight:
@@ -347,8 +353,10 @@ Design for residual state: tasks may inherit broken filesystem state from their 
 
 Tasks and subtasks share files, not conversation memory.
 
-- **Producer**: write findings/results to named files with enough detail for a fresh session. Ensure that scheduler can obtain enough information for decision making via `last_result`.
+- **Producer**: write findings/results to named files with enough detail for a fresh session.
 - **Consumer**: read those files via `initial_hint`; if missing or incomplete, report prerequisite failure.
+- **Scheduler signal**: by default, summarize scheduler-relevant outcomes in the task's final response and expose it with `last_result: type: response`.
+- **Scheduler file inspection**: use `last_result: type: file` only when the scheduler must inspect specific file contents across rounds for complex scheduling strategy; otherwise keep files as executor-facing durable state.
 - **Scheduler**: reads only configured `last_result` plus execution history.
 
 ---
@@ -405,17 +413,19 @@ The scheduler cannot observe internal subtask state, task conversations, or file
 
 `last_result` exposes top-level task outcomes to the scheduler.
 
+**Default: prefer `type: response`.** The scheduler usually needs a concise outcome and next-action signal, not full logs. Use `type: file` only when the scheduling strategy must inspect specific file contents across rounds for complex scheduling strategy.
+
 | Type | Scheduler sees | Use for |
 |------|----------------|---------|
-| `file` | Contents/previews of specified files | Metrics, reports, logs, cumulative results, anything referenced by `strategy`. |
-| `response` | Auto-saved AI final response | Single `simple` tasks or `nested` tasks whose last subtask summarizes the result. |
+| `response` | Auto-saved AI final response | Default for most tasks, including `simple`, `long_running`, and `nested` tasks whose final response summarizes the outcome. |
+| `file` | Contents/previews of specified files | Complex scheduling state: structured metrics, cumulative status files, or artifacts explicitly referenced by `strategy`. |
 | `none` | Success/failure history only | Setup tasks with no meaningful scheduler-visible output. |
 
 Rules:
 - keys are top-level task IDs, not subtask IDs;
-- use `${workspace}` for workspace-relative paths; it is expanded at runtime;
+- use `${workspace}` for workspace-relative `type: file` paths; it is expanded at runtime;
 - `type: file` may use a single path or a list of paths;
-- if `strategy` references a task's output, configure `last_result` for that task.
+- if `strategy` references a task's output, configure `last_result` for that task, preferably as `type: response` unless the strategy explicitly needs file contents.
 
 ### 5.4 `stop_condition`
 
@@ -425,15 +435,16 @@ Good:
 
 ```yaml
 stop_condition: |
-  Stop when p95 latency is below 50ms and correctness is 100/100 as reported
-  in doc/optimization_results.tsv, or after 3 consecutive optimization failures
-  with doc/diagnosis.md written.
+  Stop when Task 5 (Evaluation) response reports 'target reached' with p95 latency below
+  50ms and correctness 100/100, 
+  or Task 6 (Diagnose repeated execution failures) response outputs "❌ not completed: external blocker".
 ```
 
 Bad: `Stop when done` or `Stop when code is clean`.
 
 Tips:
-- reference metrics in result files;
+- prefer stopping signals in concise task response summaries;
+- reference metrics in result files only when using `last_result: type: file` for a complex scheduling strategy;
 - include a fallback such as consecutive failures or diagnosis complete;
 - be explicit about AND/OR logic.
 
@@ -495,67 +506,77 @@ Use this skeleton to understand the required `todos.yaml` structure. Replace eve
 
 ```yaml
 description: |
-  # <project-name>
+  # <project name>
 
   ## Goal
   <goal>
 
   ## Architecture
-  - <component-or-path>: <responsibility>
+  - <component or module 1>: <its responsibility>
+  - <component or module 2>: <its responsibility>
+  ...
 
   ## Key file paths
-  - <path>: <purpose>
+  - <file path 1>: <its purpose>
+  - <file path 2>: <its purpose>
+  <!-- Only put relevant files here. -->
+  ...
+
+  ## Environments
+  <environments>
 
   ## Key commands
-  - <command-name>: <command>
+  - <command 1>: <command>
+  - <command 2>: <command>
+  ...
 
   ## Hard constraints
-  - <constraint>
+  - <constraints>
 
   ## Rules
-  - <rule>
+  <rules>
 
 ai_orchestrator:
   strategy: |
-    <scheduling-rule>
-    <failure-recovery-rule>
+    <scheduling rules>
+    <failure recovery rules>
   stop_condition: |
-    <observable-stop-condition>
+    <stop_condition>
   last_result:
     1:
-      type: file
-      path: ${workspace}/<path-to-result>
+      type: response  # Default: scheduler reads the task's final summary.
     2:
-      type: response
+      type: response  # Prefer response unless strategy must inspect a file.
+    3:
+      type: file      # Exception: only when strategy needs this file's content.
+      path: ${workspace}/<path-to-result>
 
 tasks:
   - id: 1
-    name: "<task-name>"
+    name: "<task name>"
     type: simple
     description: |
-      <scheduler-facing-summary>
+      <task-specific description, scheduler-facing>
     completion_criteria: |
-      <measurable-condition>
+      <completion_criteria>
     initial_hint: |
-      <prerequisites-paths-commands-scope>
+      <initial_hint>
 
   - id: 2
-    name: "<task-name>"
+    name: "<task name>"
     type: nested
     description: |
-      <scheduler-facing-summary>
+      <task-specific description, scheduler-facing>
     completion_criteria: |
-      <measurable-condition>
+      <overall completion_criteria>
     subtasks:
       - id: 2.1
-        name: "<subtask-name>"
+        name: "<subtask name>"
         type: long_running
-        description: |
-          <scheduler-facing-summary>
         completion_criteria: |
-          <measurable-condition>
+          <task-specific completion_criteria>
         initial_hint: |
-          <prerequisites-paths-commands-scope>
+          <initial_hint>
 ```
 
 ---
