@@ -109,7 +109,6 @@ Include:
 - **Goal**: final observable outcome and success threshold.
 - **Architecture**: key directories/modules and their responsibilities.
 - **Key file paths**: key source files/directories, configs, inputs, outputs, reports, and logs.
-TODO：加一节Environments，描述路径约定、虚拟环境等
 - **Key commands**: build/test/run/validate commands with required working directory, environment variables, and expected output locations.
 - **Hard constraints**: files, APIs, tests, data, or behavior that must not change.
 - **Rules**: project-wide behavior such as experiment discipline, allowed change size, or reporting format.
@@ -119,7 +118,6 @@ TODO：加一节Environments，描述路径约定、虚拟环境等
   - **P2 On Demand**: read only when debugging, stuck, or needing deeper historical/troubleshooting context.
 - **Optional**:
   - Architecture Coupling Notes: exact files/modules that must be updated together.
-TODO：加一节Key Configs：描述关键参数，比如超参、配置等
   - Naming Conventions: required file, branch, metric, or artifact naming patterns.
   - Historical Result Files: paths to prior attempt/iteration outputs that should be read to avoid repeated work.
 
@@ -317,8 +315,6 @@ Tasks and subtasks share files, not conversation memory.
 
 ### 5.3 Common Task Fields
 
-TODO：加一项Position，用于区分“是否可以出现在任何位置，还是不能出现在nested/looping task的parent fields里）
-
 | Field | Required | Notes |
 |-------|----------|-------|
 | `id` | Yes | Top-level positive integer; subtask dot notation matching parent. |
@@ -407,6 +403,7 @@ tasks:
   - id: 3
     name: "<task name>"
     type: looping
+    repeat_count: 3
     completion_criteria: |
       <overall completion_criteria>
     subtasks:
