@@ -150,14 +150,8 @@ All the other roles use the same coding agent as Executor AIs. Evaluator AI and 
 
 | Field | Required | Notes |
 |-------|----------|-------|
-| `description` | Yes | Shared project context. `description` or the latest applicable `description@N` is injected into every role's prompt |
-| `description@N` | Optional | Scoped description used for tasks with top-level ID >= N. Only used when you need to append new tasks to existing todos, and the existing `description` cannot match the new tasks' context |
+| `description` | Yes | Shared project context. `description` is injected into every role's prompt |
 | `tasks` | Yes | List of normal top-level tasks, plus optional reserved tasks such as `fatal_analysis` |
-
-**More on `description@N`**: 
-- A new `description@N` replaces the entire older descriptions for subsequent tasks.
-- `@N` is top-level only, not subtask-level.
-- Existing `description` and `description@N` should not be modified.
 
 **More on `tasks`**:
 - Task ID are executed and should be written in ascending ID order (AutoAgent has a ID ascending order check).
@@ -169,14 +163,16 @@ All the other roles use the same coding agent as Executor AIs. Evaluator AI and 
 |------|-----------|---------|---------|
 | `simple` | Yes | Yes | General AI sessions |
 | `long_running` | Yes | Yes | Generally the same as `simple`; must be used when containing commands that may run >1 minute. See §2.4 for **why `long_running` must be used**. |
-| `nested` | Yes | **No** | A list of ordered subtasks with overall AI evaluation. Do not use recursive `nested` / `looping` in your todo. |
+| `nested` | Yes | **No** | A list of ordered subtasks with overall AI evaluation |
 | `looping` | Yes | **No** | Fixed number of iterations |
+
+Do not use recursive `nested` / `looping` in your todo.
 
 ### 1.4 Common Task Fields
 
 | Field | Required | Notes | Can be a top-level `nested`/`looping` parent field? |
 |-------|----------|-------|-----------------------------------------------------|
-| `id` | Yes | Normal top-level tasks use positive integers; subtasks use dot notation (e.g. 2.1, 2.2). Reserved tasks may use special ids such as `fatal_analysis` / `fatal_analysis@N` (See §2.2). DO NOT add double quotes for numeric subtasks. | Yes |
+| `id` | Yes | Normal top-level tasks use positive integers; subtasks use dot notation (e.g. 2.1, 2.2). Reserved tasks may use special ids such as `fatal_analysis` (See §2.2). DO NOT add double quotes for numeric subtasks. | Yes |
 | `name` | Yes | Title of this task. | Yes |
 | `type` | Yes | One of the task types in §1.3. | Yes |
 | `completion_criteria` | Yes | Specific and verifiable completion criteria (See §5.2). | Yes |
@@ -198,7 +194,7 @@ Top-level `nested` and `looping` tasks are orchestration containers, not executa
 
 #### 2.1.1 Session Management
 
-AutoAgent creates separate AI sessions for each executor or evaluator to keep context growth under control. This has direct consequences for todo design.
+AutoAgent creates separate AI sessions for each role to keep context growth under control. This has direct consequences for todo design.
 
 The followings are exceptions (i.e. the same session is used):
 - Relaunch the session after `long_running` commands have finished;
@@ -209,7 +205,7 @@ The followings are exceptions (i.e. the same session is used):
 
 AI sessions are reset between tasks and subtasks —— almost no response or reasoning context is passed between executors. 
 
-The only response that is passed between sessions is a truncated raw response between subtasks (e.g. 2.1's truncated raw response is passed to 2.2).
+The only response that is passed between sessions is a truncated raw response between subtasks (e.g. last 5000 characters in 2.1's raw response is passed to 2.2).
 
 **Implication**: 
 
@@ -229,20 +225,22 @@ The only response that is passed between sessions is a truncated raw response be
 
 **What Every Session cannot See**:
 
-- `looping` task's iteration count —— An explicit file should be maintained to retrieve this information (e.g. EXP-001, EXP-002, ...), and each iteration's status should be explicitly recorded to correctly handle retry behaviour;
+- `looping` task's iteration count;
 - full `todos.yaml`;
 - AutoAgent's source code and key execution details;
 - This guide or subguides.
 
 **Implication**: 
 
-1. Each executor is a fresh AI session. You write more into `description` and `initial_hint`, AIs guess and explore less. However, you should only provide context, not step-by-step script. See §3 and §5.4 for more details.
+1. Each executor is a fresh AI session. You write more into `description` and `initial_hint`, AIs guess and explore less. However, you should act as a context provider, not a step-by-step instructor. See §3 and §5.4 for more details.
 
 2. Do not write `completion_criteria` or `initial_hint` that says things like "see the previous task in `todos.yaml`". 
 
 3. If you need to reference a previous task, you must explicitly state what the previous task are doing, what files it generate should be read by this task, etc. in `initial_hint`.
 
 4. If subsequent tasks depend on earlier task's judgement calls, earlier tasks should be instructed to write its decision, raw evidence, analysis, etc. into a file. Subsequent tasks should be instructed to read this file to do branching logic.
+
+5. An explicit file should be introduced to maintain looping count information (e.g. EXP-001, EXP-002, ...), and each iteration's status (e.g. pending, finished) should be explicitly recorded to correctly handle retry behaviour.
 
 ### 2.2 Fatal Analysis
 
@@ -272,7 +270,7 @@ Non-fatal examples:
 
 #### 2.2.2 Defining the `fatal_analysis` Task
 
-`todos.yaml` may define a special reserved task whose id is `fatal_analysis` or `fatal_analysis@N` (Behaves the same as `description@N` —— used for tasks with top-level ID >= N) (See §1 for schema).
+`todos.yaml` may define a special reserved task whose id is `fatal_analysis` (See §1 for schema).
 
 Fatal analysis task has the same field as normal tasks —— `name`, `type` (`simple` or `long_running` only), `completion_criteria`, `initial_hint`, `system_prompt_prefix`, `max_attempts` (Usually low, at most 2), `model`. What todo author should define in these fields are **authority boundaries** —— 
 
@@ -291,16 +289,20 @@ Examples:
 - Insufficient raw data evidence —— retry benchmark / data collection task
 
 **Inner retry**:
-When each execution unit outputs `❌ not completed: <reason>`, the same unit will be retried until its `max_attempts` are exhausted. `max_attempts` defaults to AutoAgent's global default if not set on the task.
+- When each execution unit outputs `❌ not completed: <reason>`, the same unit will be retried until its `max_attempts` are exhausted.  Only failed completion markers will be injected into next attempt's prompt.
+
+- Inner `max_attempts` are reset between failure analyses, evaluator actions or looping iterations.
+
+- `max_attempts` defaults to AutoAgent's global default if not set on the task.
 
 **Inter-task retry**:
 - Top-level tasks are generally independent. Subsequent top-level tasks will not trigger previous top-level tasks' retry (e.g. task 5 will not trigger task 4 retry).
 
 - Inter-task retry only happens between subtasks in `nested` / `looping`. When a subtask exhausts its `max_attempts`, failure analysis AI is triggered. It sees each subtask's `name` and `completion_criteria`, and choose a subtask ID. Chosen subtask and all subsequent subtasks are retried.
 
-Top-level `max_attempts` / `max_attempts_per_loop` inside `nested` / `looping`'s fields define the maximum attempts of failure analyses (per iteration for `looping`). You generally don't need to manually override the defaults. The whole `nested` / `looping` task will fail after its `max_attempts` are exhausted.
+Top-level `max_attempts` / `max_attempts_per_loop` inside `nested` / `looping`'s fields define the maximum attempts of failure analyses (per iteration for `looping`). You generally don't need to manually override the defaults.
 
-**When top-level `max_attempts` are exhausted, the entire `nested` / `looping` task will fail —— remaining subtasks will not be executed. Failed top-level task does not block subsequent top-level tasks either —— Subsequent top-level tasks still behave the same**.
+**When top-level `max_attempts` are exhausted, the entire top-level `simple` / `long_running` / `nested` / `looping` task will fail —— remaining subtasks will not be executed. Failed top-level task does not block subsequent top-level tasks either —— Subsequent top-level tasks still behave the same**.
 
 **Implication**:
 1. For top-level tasks, no inter-task retry is invoked. At least use `max_attempts: 2` for since subsequent tasks cannot retry it for accidental failures. Fatal analysis in §2.2 should be adopted to check failures from previous top-level tasks.
@@ -326,14 +328,16 @@ Top-level `max_attempts` / `max_attempts_per_loop` inside `nested` / `looping`'s
 
 For most AI coding agents, directly running time-consuming commands (e.g. training, large test suites, long builds, data preprocessing) will trigger native bash timeout. 
 
-When `long_running` is used, AutoAgent will instruct executors to launch a background command with internal tools and stop their sessions. AutoAgent will automatically relaunch the session when it detects that background commands have finished. Therefore, native bash timeout constraints are addressed.
+When `long_running` is used, AutoAgent will instruct executors to launch a background command with internal tools and stop their sessions. AutoAgent will automatically relaunch the session, and tell the AI stdout/stderr file path & exit code when it detects that background commands have finished. Therefore, native bash timeout constraints are addressed.
 
 **Implication**:
-1. You don't need to write extra prompts to reflect this —— AutoAgent internally instructs AI with these information. Just set the task type to `long_running`.
+1. You don't need to write extra prompts to reflect this ——  will internally inject system instructions. Just set the task type to `long_running`.
 
-2. The internal tool captures stdout/stderr automatically. Todo author should not instruct AI to run long-running commands with shell redirection such as `>`, `2>`, `&>`, or `| tee`, and make sure that your command does not include interactive flags. If command results must be written to a specific file, use natural language to instruct AI —— AutoAgent will provide instructions to handle this. If not, just remove your redirection.
+2. The internal tool captures stdout/stderr automatically. Todo author should not instruct AI to run long-running commands with shell redirection such as `>`, `2>`, `&>`, or `| tee`, and make sure that your command does not include interactive flags. If command results must be written to a specific file, use natural language to instruct AI —— AutoAgent will provide system instructions to handle this. If not, just remove your redirection.
 
-3. Multiple long-running commands are allowed to run inside one `long_running` task. You don't need to split because of this, but be aware of retry cost.
+3. Multiple long-running commands are allowed to run inside one `long_running` task. You don't need to split tasks because of this, but be aware of retry cost.
+
+4. Sessions are not reset when relaunching after `long_running` commands have finished.
 
 ### 2.5 Interacting with Internal Markers
 
@@ -348,7 +352,7 @@ AutoAgent will instruct the executor to output one of three markers below when i
 
 2. You should instruct executors to explicitly output `❌ not completed: <reason>` or `❌ FATAL: <reason>` (DO NOT omit the emoji) when it encounters hard-to-decide situations. In other words, what you should do is to guide executors to utilize this marker mechanism. 
 
-The `<reason>` text is visible when propagating errors to failure/fatal analysis, so instruct executors to provide meaningful `<reason>`.
+The `<reason>` text is visible and not truncated when propagating errors to failure/fatal analysis, so instruct executors to provide meaningful `<reason>`.
 
 See other sections for full guidance.
 
@@ -358,7 +362,7 @@ Evaluator AI is automatically triggered for `nested` tasks to check whether it h
 
 1. Top-level simple / long_running task: Not triggered —— executors themselves check its `completion_criteria`.
 
-2. Nested task: Triggered when all subtasks are completed —— if it finds that the top-level `completion_criteria` is not satisfied, it will choose a subtask and all subsequent subtasks to retry (See §2.3). Inner subtask `completion_criteria` are still evaluated by executors themselves.
+2. Nested task: Triggered when all subtasks are completed —— if it finds that the top-level `completion_criteria` is not satisfied, it will choose a subtask and all subsequent subtasks to retry (See §2.3). This retry does not count `max_attempts`. Inner subtask `completion_criteria` are still evaluated by executors themselves.
 
 3. Looping task: Not triggered —— A looping task's goal is to run a fixed number of iterations, so top-level `completion_criteria` will not be evaluated when one iteration finishes, and looping will not stop until it reaches the maximum number of iterations. However, top-level `completion_criteria` is still visible to subtask executors.
 
@@ -373,7 +377,7 @@ AutoAgent never invokes extra AI sessions to automatically maintain high-level p
 
 What AutoAgent DOES NOT control:
 - The entire filesystem, including residual states, cleanup, etc. —— All files must be maintained by inter-task coordination;
-- The entire `git` behaviour —— All `git` actions must be performed by executors themselves, including revert actions. AutoAgent will not use `git` for judgements either.
+- The entire `git` behaviour —— All `git` actions must be performed by executors themselves, including revert actions. AutoAgent will not control `git`, or use `git` for judgements either.
 - File reading —— AutoAgent will never inject file contents into executors' prompts. All files are accessed by their native read tools. If you want to ensure that a file must be read, enhance your prompts.
 
 ## 3. Guidance on Root `description`
@@ -414,16 +418,6 @@ See §5 for detailed field-writing rules.
 
 - **Step-by-step Instructions**: AI can figure it out themselves. Todo author should be a **context provider** that tells executors where to obtain information, not a step-by-step instructor.
 - **Potential/Recommended Approach** (unless the project requires): AI can figure out the best approach themselves. Locking them into one approach only narrows AI's creativity.
-
-### 3.4 `description@N`
-
-Use `description@N` when appending new top-level tasks to existing todos, and shared context is different enough that the original root `description` or `description@N-1` would mislead later tasks.
-
-Design rules:
-
-- **Choose the scope boundary carefully**: `description@N` should start exactly where the new shared context becomes valid. If one root `description` can support all tasks, do not introduce `description@N`.
-- **Make each scoped description self-contained**: `description@N` replaces the entire older applicable description, not a patch or merge.
-- **Do not modify or delete existing descriptions**.
 
 ## 4. Guidance on Task Decomposition
 
@@ -631,7 +625,7 @@ Design Rules:
 
 3. Anti-hack subtask's `system_prompt_prefix` should cover rules about "Do NOT modify source code, tests, configs, data, generated artifacts, etc.".
 
-4. DO NOT add anti-hacks extensively. Anti-hacks should not be added when they are actually doing repeated work (e.g. anti-hacking benchmark is generally re-benchmark, anti-hacking report is generally useless), or anti-hack itself is not trustable either. Executors are AIs that are not intrinsically prone to hack when they are not encountering difficulties and with reasonable workload.
+4. DO NOT add anti-hacks extensively. Anti-hacks should not be added when they are actually doing repeated work (e.g. anti-hacking benchmark is generally re-benchmark, anti-hacking report is generally useless), or anti-hack itself is not trustworthy either. Executors are AIs that are not intrinsically prone to hack when they are not encountering difficulties and with reasonable workload.
 
 5. Anti-hack subtask can be lighter when the change is small and low-risk, or the user explicitly prioritizes brevity over robustness.
 
@@ -677,11 +671,12 @@ Read only the guide relevant to the task domain:
 ### 8.1 Overview
 
 [ ] `todos.yaml` does not reference AutoAgent's source code, execution details, this guide or subguides.
-[ ] `todos.yaml` does not restate AutoAgent's system instructions (fully autonomous, long-running and marker instructions).
-[ ] `todos.yaml` is fully autonomous without potential of asking user.
-[ ] `description` and `tasks` exist in root fields; `description@N` is used when scoped descriptions are necessary, and should be self-contained. Existing `description` and `tasks` are not removed.
-[ ] Every task has `id`, `name`, `type`, `completion_criteria`; every execution unit has `initial_hint`. Top-level `nested` and `looping` does not have `initial_hint`, `system_prompt_prefix`, `model` and `fatal`.
-[ ] Top-level IDs are sequential integers or reserved IDs like `fatal_analysis` / `fatal_analysis@N`; subtask IDs use dot notation without double quotes. Numeric IDs are written in ascending order.
+[ ] `todos.yaml` does not restate AutoAgent's system instructions (fully autonomous, long-running mechanism and marker instructions).
+[ ] `todos.yaml` is fully autonomous and does not ask the user to confirm plans, choices, implementation, validation, or next steps.
+[ ] Root fields include `description` and `tasks`.
+[ ] Every task has `id`, `name`, `type`, `completion_criteria`; every executable task has `initial_hint`. Top-level `nested` and `looping` task does not have `initial_hint`, `system_prompt_prefix`, `model` or `fatal`.
+[ ] Top-level task IDs are sequential integers or reserved IDs like `fatal_analysis`; subtask IDs use dot notation without double quotes. Numeric IDs are written in ascending order.
+[ ] No recursive `nested` / `looping` tasks are used.
 
 ### 8.2 AutoAgent's Key Execution Details
 
@@ -689,32 +684,33 @@ Read only the guide relevant to the task domain:
 
 [ ] Top-level tasks are generally independent.
 [ ] Important intermediate results are written to files; never assume the next task can see prior conversation or reasoning context.
-[ ] Act as a context provider, not a step-by-step instructor in `description` and `initial_hint` so that executors guess and explore less.
+[ ] Cross-task consumers are told exactly which files to read, what information to extract, and what to do if those files are missing or incomplete.
+[ ] `description` and `initial_hint` act as context providers, not step-by-step scripts unless the project requires exact procedural control.
 [ ] If cross-task communication is required, prior tasks must write information to files. Subsequent task's `initial_hint` must explicitly state what prior tasks are doing, what files it generate should be read by this task. Does not say things like "see the previous task in `todos.yaml`". 
 
 #### 8.2.2 Fatal Analysis
 
 [ ] Reserved `fatal_analysis` task are added when fatal prerequisite checks are required. `fatal: true` are added if a task detects prerequisite failures, and these tasks are instructed with `❌ FATAL: <reason>`.
 [ ] `fatal_analysis` task uses only `simple` / `long_running`, and has a low retry budget.
-[ ] `fatal_analysis` task describes authority boundaries; `fatal_analysis@N` is used for scoped fatal analysis when needed.
+[ ] `fatal_analysis` task should describe authority boundaries.
 [ ] Minor prerequisite missing issues and retryable normal failures should not be included in Fatal Analysis, nor instructed with `❌ FATAL: <reason>`.
 [ ] Omit Fatal Analysis if user explicitly states that.
 
 #### 8.2.3 Retry Strategy & Failure Handling
 
-[ ] Normal retryable failures should be explicitly instructed with `❌ not completed: <reason>`.
+[ ] Normal retryable failures should be explicitly instructed with `❌ not completed: <reason>`. The `<reason>` text is meaningful enough for retry decisions.
 [ ] Executor AIs should be instructed to be aware of residual states from previous attempts.
 [ ] An explicit failure record file should be maintained and written in root `description`'s Reference Doc P1. Executors should be instructed to write an entry when output `❌ not completed: <reason>` or `❌ FATAL: <reason>`.
 [ ] Simplify retry handling if user explicitly states that, but do not entirely delete it.
 
 #### 8.2.4 `long_running` Mechanism
 
-[ ] `long_running` is used for commands that may run >1 minute.
-[ ] No output redirection is used for long-running commands; use natural language to instruct explicit output paths instead.
+[ ] `long_running` is used for tasks containing commands that may run >1 minute.
+[ ] No output redirection or interactive flags are used for long-running commands; use natural language to instruct explicit output paths instead.
 
 #### 8.2.5 Interacting with Internal Markers
 
-[ ] `❌ not completed: <reason>` are explicitly instructed when:
+[ ] `❌ not completed: <reason>` are explicitly instructed for hard-to-decide cases when:
 - Anti-hack subtask states 'fail';
 - Training / testing / benchmarking / profiling failed because of implementation errors;
 - Insufficient raw data evidence that can be replenished by retrying previous subtasks.
@@ -722,6 +718,7 @@ Read only the guide relevant to the task domain:
 - Prerequisities fail;
 - Previous top-level tasks failed and subsequent tasks cannot recover.
 [ ] Errors that belong to current task's responsibility should be self-corrected instead of outputing markers (e.g. implementation task should fix compilation bugs introduced by itself).
+[ ] Marker instructions do not restate AutoAgent's internal system instructions; they only guide when the executor should use `❌ not completed: <reason>` or `❌ FATAL: <reason>`.
 
 #### 8.2.6 Other Details
 
@@ -737,21 +734,21 @@ Read only the guide relevant to the task domain:
 
 [ ] Use `nested` when the goal is to reach a final state. Use `looping` when the goal is to run a fixed number of iterations.
 [ ] Tasks are not under-split —— split at expensive checkpoints and trust boundaries.
-[ ] Split into multiple top-level `nested` tasks, each with two subtasks called "implement" and "anti-hack", when implementations are extensive.
+[ ] Extensive implementation is split into module-level top-level `nested` tasks with sibling implementation and anti-hack subtasks when appropriate.
 [ ] Tasks are not over-split —— merge when reducing unnecessary sessions or retries.
 [ ] When full validation is long-running, fast validation modes are detected and used in implementation tasks if present, while full validation tasks are still instructed with `❌ not completed: <reason>`. 
-[ ] If fast validation modes are not present and full validation is long-running, warn the user if you can.
+[ ] If fast validation modes are not present and full validation is long-running, warn the user when possible.
 [ ] Typically 2-5 substasks for one `nested` or `looping` task.
 
 ### 8.5 Guidance on Common Task Fields
 
-[ ] Every field including `description`, `completion_criteria`, `initial_hint`, `system_prompt_prefix`, etc. is specific, measurable, and verifiable, not vague or subjective.
-[ ] `completion_criteria` are specific, measurable, and verifiable task success conditions, with both positive and negative conditions, not implementation steps.
+[ ] Every field is clear, specific, measurable, and verifiable, not vague or subjective.
+[ ] `completion_criteria` are specific, measurable, and verifiable task success conditions, including positive and negative conditions, not implementation steps.
 [ ] Top-level `completion_criteria` for `nested` tasks should cover all subtask's `completion_criteria` so that evaluator AIs have full decision context.
 [ ] `initial_hint` covers task-local context, with prerequisite checks, residual state awareness, task-specific information, and handoff file handling.
 [ ] `initial_hint` does not cover project-wide context, success conditions, step-by-step scripts or potential/recommended approach unless the project requires.
 [ ] `system_prompt_prefix` sets the executor's persona, expertise, style, role, or hard behavior constraints, not a duplicate of `completion_criteria` or `initial_hint`.
-[ ] Use `max_attempts: 1` for execution-only subtasks, tasks that not benefit from inner retries, and with explicitly `❌ not completed: <reason>` instructions.
+[ ] Use `max_attempts: 1` for execution-only subtasks, tasks that not benefit from inner retries, and with explicit `❌ not completed: <reason>` instructions.
 [ ] Use `max_attempts: 2-3` for top-level tasks and targeted uncertain work. Use more for active implementation tasks.
 [ ] Use `model: default` for reasoning-heavy tasks; use `model: lite` for deterministic execution tasks.
 
@@ -760,39 +757,40 @@ Read only the guide relevant to the task domain:
 #### 8.6.1 Anti-Hack Patterns
 
 [ ] `completion_criteria` and `initial_hint` should define negative constraints.
-[ ] A separate anti-hack subtask must be introduced for complex implementations; implement and anti-hack should be sibling subtasks.
-[ ] Anti-hack subtasks are instructed with "Do NOT modify source code, etc." in `system_prompt_prefix`.
-[ ] Anti-hack subtasks are not used extensively, and should not be added when they are actually doing repeated work or themselves not trustable. 
-[ ] Anti-hack subtasks can be lighter when the change is small and low-risk, or the user explicitly states that.
+[ ] Complex implementations include a separate sibling anti-hack subtask after implementation.
+[ ] Anti-hack subtasks use `system_prompt_prefix` to forbid modifying source code, tests, configs, data, generated artifacts, or other protected files.
+[ ] Anti-hack subtasks are not used extensively, and should not be added when they are actually doing repeated work or themselves not trustworthy. 
+[ ] Anti-hack subtasks can be lighter when the change is small and low-risk, or the user explicitly prioritizes brevity.
 
 #### 8.6.2 `git` Usage
 
-[ ] `git` are used as evidence of each task's work, informative and split by task boundaries.
+[ ] `git` is used as a durable ledger of task progress and evidence when the project uses git.
 [ ] Tasks should inspect `git status` for residual states from previous attempts, and identify related changes.
 [ ] Multiple branches are used for isolated experiments, ablations, or risky alternatives.
-[ ] Destructive git operations are forbidden unless intentionally allowed by user.
-[ ] Revert code only and preserve documentations for iterative optimization or experiments.
+[ ] Destructive git operations are forbidden unless intentionally allowed by the user or project rules.
+[ ] Reverts preserve decision evidence for experiments or optimization work even when implementation code is removed.
 
 ### 8.7 Task-Specific Subguides
 
-[ ] Task-specific Subguides are read for domain-specific knowledge.
+[ ] The relevant task-specific subguide is read before writing domain-specific tasks.
+[ ] Only relevant subguides are read; do not force unrelated domain guidance into `todos.yaml`.
 
 ### ⚠️ 8.8 Critical Pitfalls —— Double Check
 
 ⚠️ Double check these rules —— They are not only runtime-fatal issues, but also high-cost design mistakes that can waste a whole day's work:
 
-[ ] Are `todos.yaml` reference AutoAgent's source code, execution details, this guide or subguides? —— Executors cannot see them
-[ ] Are `todos.yaml` fully autonomous without potential of asking user? —— May cause unexpected stops or confusions
+[ ] Does `todos.yaml` avoid referencing AutoAgent's source code, execution details, this guide or subguides? —— Executors cannot see them
+[ ] Is `todos.yaml` fully autonomous asking the user to confirm plans, choices, or next steps? —— May cause unexpected stops or confusions
 [ ] Are important intermediate results written to files instead of relying on conversation and reasoning context? —— Without this, subsequent tasks will never finish their work
 [ ] Does `initial_hint` explicitly state what prior tasks are doing, what files it generate should be read by this task, when cross-task communication is required? —— Otherwise they cannot obtain prior task's information
 [ ] Are minor prerequisite missing issues and retryable normal failures treated as "prerequisite fails"? —— Otherwise AutoAgent may unexpectedly stop
 [ ] Are `long_running` used for commands that may run >1 minute without redirections or interactive flags? —— Otherwise long-running commands will never succeed
 [ ] Are internal markers explicitly instructed for hard-to-decide situations? —— Otherwise failures cannot be correctly identified and confusions will be introduced
 [ ] Are you assuming that AutoAgent will internally maintain filesystem, `git`, read behaviour, etc? —— May cause AI confusion since AutoAgent doesn't maintain them
-[ ] Are fast validation mode used if present for long-running full validations? —— Otherwise efficiency will be significantly degraded 
-[ ] Does `completion_criteria` specific, measurable, and verifiable enough? —— May largely degrade AI's output quality
+[ ] Are fast validation mode used if present before expensive full validation runs? —— Otherwise efficiency will be significantly degraded 
+[ ] Are `completion_criteria` specific, measurable, and verifiable enough? —— May largely degrade AI's output quality
 [ ] Does `completion_criteria` and `initial_hint` include negative constraints, and are anti-hack sibling subtask introduced for complex implementations? —— Otherwise AI may hack when encountering difficulty
 [ ] Does `description` or `initial_hint` include potential/recommended approach unless the project requires? —— May largely degrade AI's creativity
-[ ] Are `git` used to track each task's work? —— Otherwise work cannot be traced or audited when finished
-[ ] Are there any potential destructive `git` operations without user's grant? —— May accidentally break project state
+[ ] Are `git` used to track each task's work if the project uses `git`? —— Otherwise work cannot be traced or audited when finished
+[ ] Are destructive `git` operations forbidden unless the user or project rules explicitly allow them? —— May accidentally break project state
 [ ] Are documentations preserved when reverting code for iterative optimization or experiments? —— May largely degrade AI's output quality since they may do repeated failed work
