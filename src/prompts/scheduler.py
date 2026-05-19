@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 
 SCHEDULER_SYSTEM_PROMPT = (
     "You are an AI task scheduler. Your job is to decide which task to "
-    "execute next, or whether to stop execution.\n\n"
+    "execute next, or whether to stop execution.\n"
+    "DO NOT modifying source code, tests, configs, data, generated files, etc.\n\n"
     "You must respond with a JSON object in one of these formats:\n"
     '1. Execute a task: {"action": "execute", "task_id": <id>, "reasoning": "<why>"}\n'
     '2. Stop execution: {"action": "stop", "reasoning": "<why>"}\n\n'
@@ -103,6 +104,8 @@ def build_scheduler_prompt(
     task_lines = []
     for task in tasks:
         tid = str(task['id'])
+        if tid == 'fatal_analysis':
+            continue
         tname = task.get('name', '')
         ttype = task.get('type', '')
         tdesc = task.get('description', '')
@@ -158,13 +161,13 @@ def build_scheduler_prompt(
             result = entry.get('result', '')
 
             if result == 'success':
-                status = 'COMPLETED'
+                status = '✅ completed'
             elif result == 'failed':
-                status = 'FAILED'
+                status = '❌ not completed'
             elif result == 'stopped':
-                status = 'STOPPED'
+                status = 'stopped'
             else:
-                status = 'IN_PROGRESS'
+                status = 'in progress'
 
             hist_lines.append(f"        Task {etid} | {ename} | {status}")
 
@@ -310,23 +313,18 @@ def save_response_result(
 ) -> str:
     """Save a task's AI response to the result file for scheduler consumption.
 
-    The response is truncated to *max_length* characters.  When
-    *max_length* is ``None`` (the default), the value is read from
-    ``config.yaml`` → ``truncation_limits.previous_subtask_summary``.
+    By default the full response is saved. If *max_length* is provided,
+    the response is truncated to that many trailing characters.
 
     Args:
         task_id: Task ID string.
         response_text: The AI response text to save.
         session_dir: Session directory path.
-        max_length: Maximum characters to save.  Defaults to the
-            ``previous_subtask_summary`` truncation limit from config.
+        max_length: Optional maximum characters to save.
 
     Returns:
         The absolute path to the saved result file.
     """
-    if max_length is None:
-        max_length = limits.get('previous_subtask_summary')
-
     result_dir = os.path.join(session_dir, "task_results")
     os.makedirs(result_dir, exist_ok=True)
 
@@ -334,7 +332,7 @@ def save_response_result(
 
     # Truncate if needed
     text = response_text or ""
-    if len(text) > max_length:
+    if max_length is not None and len(text) > max_length:
         text = "...(truncated)\n" + text[-max_length:]
 
     try:

@@ -46,6 +46,8 @@ class SimpleTaskExecutor:
         self.session_dir = session_dir
         self.default_max_attempts = default_max_attempts if default_max_attempts is not None else DEFAULTS['default_max_attempts']
         self.last_response_text = ""
+        self.last_error_type = None
+        self.last_fatal_reason = ""
 
     def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None, parent_task_id: str = None, parent_context: dict = None, project_description: str = "", **kwargs) -> bool:
         """
@@ -65,6 +67,8 @@ class SimpleTaskExecutor:
         """
         task_id = str(task['id'])
         max_attempts = task.get('max_attempts', self.default_max_attempts)
+        self.last_error_type = None
+        self.last_fatal_reason = ""
 
         # Compute round-scoped state key: when called as a subtask
         # (parent_context present), use @round_label suffix; when called
@@ -177,9 +181,21 @@ class SimpleTaskExecutor:
             should_reset = True
             try:
                 # Write prompt to log BEFORE calling AI (crash safety)
+                log_session_dir = self.session_dir
+                if not log_session_dir:
+                    subtask_exec = getattr(self, '_subtask_executor', None)
+                    if subtask_exec and subtask_exec.session_dir:
+                        log_session_dir = subtask_exec.session_dir
+                default_output_log = (
+                    os.path.join(log_session_dir, "lr_tasks", f"lr_{task_id}_output.log")
+                    if exec_script_path and log_session_dir
+                    else ""
+                )
                 system_prompt = build_system_prompt_coding_agent(
                     exec_script_path,
                     supports_system_prompt=client.provider.supports_system_prompt,
+                    output_log=default_output_log,
+                    fatal_enabled=bool(task.get('fatal')),
                 )
                 # Prepend system_prompt_prefix to user prompt — but skip for
                 # lightweight continuation prompts (the session already has
@@ -213,6 +229,26 @@ class SimpleTaskExecutor:
                         parent_task_id=parent_task_id,
                         attempt=_log_round,
                     )
+
+                fatal_reason = self._check_fatal(result) if task.get('fatal') else None
+                if fatal_reason:
+                    self.last_error_type = "fatal"
+                    self.last_fatal_reason = fatal_reason
+                    state_manager.add_task_history(sk, {
+                        "attempt": attempts,
+                        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "result": "fatal",
+                        "summary": fatal_reason,
+                    })
+                    state_manager.mark_task_status(
+                        sk, "failed",
+                        attempts=attempts,
+                        last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+                        error_type="fatal",
+                        ai_reasoning=f"FATAL: {fatal_reason}",
+                    )
+                    print(f"   ❌ FATAL: {fatal_reason}")
+                    return False
                 
                 # Check if AI reports LONG_RUNNING_IN_PROGRESS
                 # (AI has context and may use autoagent-exec even in a simple task)
@@ -242,6 +278,25 @@ class SimpleTaskExecutor:
                     )
                     if nudge_result is not None:
                         result = nudge_result
+                        fatal_reason = self._check_fatal(result) if task.get('fatal') else None
+                        if fatal_reason:
+                            self.last_error_type = "fatal"
+                            self.last_fatal_reason = fatal_reason
+                            state_manager.add_task_history(sk, {
+                                "attempt": attempts,
+                                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "result": "fatal",
+                                "summary": fatal_reason,
+                            })
+                            state_manager.mark_task_status(
+                                sk, "failed",
+                                attempts=attempts,
+                                last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+                                error_type="fatal",
+                                ai_reasoning=f"FATAL: {fatal_reason}",
+                            )
+                            print(f"   ❌ FATAL: {fatal_reason}")
+                            return False
                         # Check for LONG_RUNNING_IN_PROGRESS first (may come
                         # from signal-file detection or AI's nudge response)
                         if self._check_long_running_in_progress_static(result):
@@ -368,6 +423,7 @@ class SimpleTaskExecutor:
 
         # Max attempts reached
         print(f"   ❌ Task {task_id} failed after {max_attempts} attempts")
+        self.last_error_type = "max_attempts_exceeded"
         state_manager.mark_task_status(
             sk, "failed",
             attempts=attempts,
@@ -449,6 +505,25 @@ class SimpleTaskExecutor:
         
         # Fallback: just take the last 300 chars
         return ai_response.strip()[-limits.get('history_summary'):]
+
+    @staticmethod
+    def _check_fatal(response: str) -> Optional[str]:
+        """Extract a fatal-analysis reason from a final ``FATAL:`` marker."""
+        if not response:
+            return None
+
+        for line in reversed(response.strip().splitlines()):
+            stripped = line.strip()
+            if not stripped or ":" not in stripped:
+                continue
+            prefix, reason = stripped.split(":", 1)
+            if "FATAL" not in prefix.upper():
+                continue
+            if len(prefix) > 40:
+                continue
+            reason = reason.strip()
+            return reason or "Fatal prerequisite failure"
+        return None
 
     def _check_completion(self, response: str) -> Optional[bool]:
         """
@@ -592,6 +667,9 @@ class SimpleTaskExecutor:
                     )
 
                 # Check if the nudge response contains a marker
+                if task.get('fatal') and self._check_fatal(result):
+                    return result
+
                 status = self._check_completion(result)
                 if status is not None:
                     # Got a definitive answer (True or False)
@@ -787,6 +865,11 @@ class SimpleTaskExecutor:
             return True
 
         # Analysis says not completed — record and let the retry loop continue
+        if analyze_result.error_type == "fatal":
+            self.last_error_type = "fatal"
+            self.last_fatal_reason = analyze_result.output
+            return False
+
         state_manager.add_task_history(sk, {
             "attempt": attempt,
             "time": time.strftime("%Y-%m-%d %H:%M:%S"),

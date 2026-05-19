@@ -1,0 +1,106 @@
+# ---------------------------------------------------------------------------
+# AutoAgent — AI Provider Configuration
+#
+# This file defines the available AI providers for AutoAgent.
+#
+# Top-level keys:
+#   codebuddy_sdk_default_model  — model used by the CodeBuddy SDK when
+#                                   use_cli is false (SDK mode).
+#
+# providers:
+#   A list of CLI headless providers. Each entry describes how to invoke a
+#   CLI-based AI coding agent as a subprocess.
+#
+#   CLI fields:
+#     name                    — unique identifier; referenced by --provider CLI arg.
+#     default_executable      — command name or path used when --executable is empty.
+#     model                   — default model passed via model_argument.
+#     fixed_arguments         — space-separated flags always appended to the
+#                                command line.  Include "-" here if the CLI
+#                                requires it to read from stdin.
+#     resume_argument         — flag used to continue an existing session
+#                                (receives the session id as its value).
+#     model_argument          — flag used to specify the model.
+#     system_prompt_argument  — flag used to append system prompt text.
+#     bypass_argument         — flag that auto-approves permission prompts.
+#     tool_names              — optional dict mapping display categories to
+#                                semicolon-separated tool name patterns.
+#                                Valid categories (keys): read, write, glob, bash, list.
+#                                Example: {"read": "read", "write": "write; edit"}
+#
+#   stream_json:
+#     Filename of a Python script under ai_client/providers/ that implements
+#     the StreamJsonParser interface for this provider's stream-JSON format.
+#     The script must export a class named ``Parser`` inheriting from
+#     ``provider_base.StreamJsonParser``.
+#
+#     To add a new provider:
+#       1. Create ai_client/providers/<name>.py with a ``Parser`` class.
+#       2. Add a provider entry below with ``stream_json: <name>.py``.
+#     No changes to ai_client.py are needed.
+# ---------------------------------------------------------------------------
+
+codebuddy_sdk_default_model: "glm-5.1-ioa"
+
+providers:
+  # ── CodeBuddy ────────────────────────────────────────────────
+  - name: codebuddy
+    default_executable: codebuddy
+    model: glm-5.1
+    fixed_arguments: "--debug --verbose --print --output-format stream-json"
+    resume_argument: --resume
+    model_argument: --model
+    system_prompt_argument: --append-system-prompt
+    bypass_argument: -y
+    stream_json: codebuddy.py
+    tool_names:
+      read: read
+      write: write
+      glob: glob
+      bash: bash
+      list: ""
+
+  # ── Claude Code ──────────────────────────────────────────────
+  # Same stream-json format as CodeBuddy.
+  - name: claude
+    default_executable: claude
+    model: claude-opus-4-6
+    fixed_arguments: "--verbose --print --output-format stream-json"
+    resume_argument: --resume
+    model_argument: --model
+    system_prompt_argument: ""
+    bypass_argument: --dangerously-skip-permissions
+    stream_json: codebuddy.py
+
+  # ── Gemini CLI ───────────────────────────────────────────────
+  - name: gemini
+    default_executable: gemini
+    model: gemini-3.1-pro-preview
+    fixed_arguments: "--output-format stream-json --yolo -p -"
+    resume_argument: --resume
+    model_argument: --model
+    system_prompt_argument: ""
+    bypass_argument: ""
+    stream_json: gemini.py
+
+  # ── OpenCode ─────────────────────────────────────────────────
+  - name: opencode
+    default_executable: opencode
+    model: deepseek-ai/deepseek-v4-pro
+    fixed_arguments: "run --format json"
+    resume_argument: -s
+    model_argument: -m
+    system_prompt_argument: ""
+    bypass_argument: ""
+    stream_json: opencode.py
+
+  # ── Codex ────────────────────────────────────────────────────
+  - name: codex
+    default_executable: codex
+    model: gpt-5.5
+    fixed_arguments: "exec --json --dangerously-bypass-approvals-and-sandbox -s danger-full-access -"
+    resume_argument: ""
+    model_argument: -m
+    system_prompt_argument: ""
+    bypass_argument: ""
+    stream_json: codex.py

@@ -46,15 +46,24 @@ from ideas.ideas_reviewer import IdeasReviewerMixin
 from util.default_value import DEFAULTS
 
 
+def _parse_bool(value) -> bool:
+    """Parse bool-like config values without treating non-empty strings as true."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
 def _load_ideas_config() -> dict:
     """Load ideas-related settings from config registry or config.yaml.
 
     Returns:
-        dict with keys 'max_review_rounds', 'max_validation_retries',
-        and 'max_plan_retries'.
+        dict with ideas review settings, including adversarial review.
     """
     defaults = {
         'max_review_rounds': DEFAULTS['max_review_rounds'],
+        'adversarial_review': DEFAULTS['adversarial_review'],
         'max_adversarial_rounds': DEFAULTS['max_adversarial_rounds'],
         'max_validation_retries': DEFAULTS['max_validation_retries'],
         'max_plan_retries': DEFAULTS['max_plan_retries'],
@@ -66,7 +75,10 @@ def _load_ideas_config() -> dict:
         for key in defaults:
             val = cfg.get(key)
             if val is not None:
-                defaults[key] = int(val)
+                if key == 'adversarial_review':
+                    defaults[key] = _parse_bool(val)
+                else:
+                    defaults[key] = int(val)
         return defaults
 
     # Fallback: load from disk
@@ -80,7 +92,10 @@ def _load_ideas_config() -> dict:
             for key in defaults:
                 val = config.get(key)
                 if val is not None:
-                    defaults[key] = int(val)
+                    if key == 'adversarial_review':
+                        defaults[key] = _parse_bool(val)
+                    else:
+                        defaults[key] = int(val)
         except Exception as e:
             logger.warning(f"Failed to load ideas config from config.yaml: {e}")
     return defaults
@@ -140,6 +155,7 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
         # Load configurable review/validation limits from config.yaml
         ideas_cfg = _load_ideas_config()
         self.max_review_rounds = ideas_cfg['max_review_rounds']
+        self.adversarial_review = ideas_cfg['adversarial_review']
         self.max_adversarial_rounds = ideas_cfg['max_adversarial_rounds']
         self.max_validation_retries = ideas_cfg['max_validation_retries']
         self.max_plan_retries = ideas_cfg['max_plan_retries']
@@ -386,6 +402,13 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
             self.TEMP_TASKS_FILE,
         )
 
+    def _get_adversarial_review_path(self) -> str:
+        """Return the absolute path to the adversarial review findings file."""
+        return os.path.join(
+            os.path.dirname(os.path.abspath(self.plans_state_file)) or os.getcwd(),
+            ".adversarial_review.md",
+        )
+
     # ── Temp file watcher ─────────────────────────────────────────────
     #
     # Some AI CLI tools (e.g. Claude Code ``--print`` mode) clean up files
@@ -572,6 +595,11 @@ class IdeasWatcher(IdeasDecomposerMixin, IdeasReviewerMixin):
         raw_id = task.get('id')
         if raw_id is not None:
             str_id = str(raw_id)
+            if not is_subtask and str_id == "fatal_analysis":
+                task_type = task.get('type')
+                if task_type not in ('simple', 'long_running'):
+                    errors.append("Reserved task 'fatal_analysis' must use type 'simple' or 'long_running'")
+                return errors
             parts = str_id.split('.')
             if is_subtask:
                 # Subtask ID must be X.Y (or deeper, e.g. X.Y.Z)

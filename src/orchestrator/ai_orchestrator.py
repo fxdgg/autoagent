@@ -46,6 +46,8 @@ from util.default_value import DEFAULTS
 
 logger = logging.getLogger(__name__)
 
+FATAL_ANALYSIS_ID = "fatal_analysis"
+
 
 class AISchedulerMixin:
     """Mixin that provides AI-driven task scheduling logic.
@@ -108,7 +110,7 @@ class AISchedulerMixin:
             raise ConfigError("'ai_orchestrator.last_result' must be a dict")
 
         # Build set of valid task IDs
-        valid_task_ids = {str(t['id']) for t in tasks}
+        valid_task_ids = {str(t['id']) for t in tasks if str(t.get('id')) != FATAL_ANALYSIS_ID}
 
         normalized_last_result = {}
         for tid_key, lr_config in last_result.items():
@@ -172,6 +174,8 @@ class AISchedulerMixin:
         # Ensure all tasks have a description for AI scheduling prompts.
         # If missing, fall back to the task name.
         for task in tasks:
+            if str(task.get('id')) == FATAL_ANALYSIS_ID:
+                continue
             if not task.get('description'):
                 task['description'] = task.get('name', f"Task {task.get('id', '?')}")
 
@@ -204,7 +208,10 @@ class AISchedulerMixin:
         # knows the task order for auto-generated scheduler decisions.
         from ai_client.ai_providers import TestProvider
         if isinstance(self.provider, TestProvider) and self.provider.ai_strategy:
-            self.provider.ai_task_ids = [str(t['id']) for t in self.todos]
+            self.provider.ai_task_ids = [
+                str(t['id']) for t in self.todos
+                if str(t.get('id')) != FATAL_ANALYSIS_ID
+            ]
             logger.info(
                 f"Set TestProvider.ai_task_ids = {self.provider.ai_task_ids} "
                 f"(ai_strategy={self.provider.ai_strategy})"
@@ -260,7 +267,10 @@ class AISchedulerMixin:
             if orch_state.get('status') in ('completed', 'stopped'):
                 # Check if new tasks were added (Ideas Watcher restart)
                 existing_ids = set(orch_state.get('task_execution_counts', {}).keys())
-                current_ids = {str(t['id']) for t in self.todos}
+                current_ids = {
+                    str(t['id']) for t in self.todos
+                    if str(t.get('id')) != FATAL_ANALYSIS_ID
+                }
                 new_ids = current_ids - existing_ids
                 if new_ids:
                     print(f"🔄 New tasks detected ({', '.join(sorted(new_ids))}), restarting scheduler...")
@@ -279,6 +289,8 @@ class AISchedulerMixin:
 
         # Ensure all task IDs are in the counts dict
         for task in self.todos:
+            if str(task.get('id')) == FATAL_ANALYSIS_ID:
+                continue
             tid = str(task['id'])
             if tid not in task_execution_counts:
                 task_execution_counts[tid] = 0
@@ -289,7 +301,14 @@ class AISchedulerMixin:
             if last_entry.get('result') is None:
                 # Last round's task was not completed — check if we need to resume it
                 last_task_id = str(last_entry.get('task_id', ''))
-                last_task = next((t for t in self.todos if str(t['id']) == last_task_id), None)
+                last_task = next(
+                    (
+                        t for t in self.todos
+                        if str(t['id']) == last_task_id
+                        and str(t.get('id')) != FATAL_ANALYSIS_ID
+                    ),
+                    None,
+                )
                 if last_task:
                     # Check the task's state key for this schedule round
                     sched_round = last_entry.get('round', current_round)
@@ -319,7 +338,12 @@ class AISchedulerMixin:
             if orphan_round is not None:
                 orphan_sched_round, orphan_task_id = orphan_round
                 orphan_task = next(
-                    (t for t in self.todos if str(t['id']) == orphan_task_id), None
+                    (
+                        t for t in self.todos
+                        if str(t['id']) == orphan_task_id
+                        and str(t.get('id')) != FATAL_ANALYSIS_ID
+                    ),
+                    None,
                 )
                 if orphan_task:
                     print(f"\n🔄 Detected running background task from schedule round {orphan_sched_round}, resuming...")
@@ -349,7 +373,7 @@ class AISchedulerMixin:
 
         print(f"{'=' * 60}")
         print(f"  AutoAgent (AI Orchestrator Mode)")
-        print(f"  Tasks available: {len(self.todos)}")
+        print(f"  Tasks available: {len([t for t in self.todos if str(t.get('id')) != FATAL_ANALYSIS_ID])}")
         print(f"  Max rounds: {max_rounds}")
         print(f"  Config: {self.todos_file}")
         print(f"  Provider: {self.provider.name}")
@@ -359,6 +383,8 @@ class AISchedulerMixin:
 
         # ── Main scheduling loop ──────────────────────────────────
         results = {}
+        forced_retry_task_id = None
+        forced_retry_reasoning = ""
 
         while current_round < max_rounds + scheduler_overtime_rounds:
             current_round += 1
@@ -374,6 +400,8 @@ class AISchedulerMixin:
                 last_result_config = self.ai_orchestrator['last_result']
             # Ensure new tasks are in counts
             for task in self.todos:
+                if str(task.get('id')) == FATAL_ANALYSIS_ID:
+                    continue
                 tid = str(task['id'])
                 if tid not in task_execution_counts:
                     task_execution_counts[tid] = 0
@@ -381,20 +409,29 @@ class AISchedulerMixin:
             # ── Get AI scheduling decision ────────────────────────
             project_desc = self._get_latest_description()
 
-            decision = self._get_scheduler_decision(
-                current_round=current_round,
-                max_rounds=max_rounds,
-                project_description=project_desc,
-                strategy=strategy,
-                stop_condition=stop_condition,
-                last_result_config=last_result_config,
-                task_execution_counts=task_execution_counts,
-                schedule_history=schedule_history,
-                scheduler_history_limit=scheduler_history_limit,
-                max_retries=scheduler_decision_max_retries,
-                max_session_retries=scheduler_max_session_retries,
-                orch_state=orch_state,
-            )
+            if forced_retry_task_id:
+                decision = {
+                    "action": "execute",
+                    "task_id": forced_retry_task_id,
+                    "reasoning": forced_retry_reasoning or "Retry requested by Fatal Analysis",
+                }
+                forced_retry_task_id = None
+                forced_retry_reasoning = ""
+            else:
+                decision = self._get_scheduler_decision(
+                    current_round=current_round,
+                    max_rounds=max_rounds,
+                    project_description=project_desc,
+                    strategy=strategy,
+                    stop_condition=stop_condition,
+                    last_result_config=last_result_config,
+                    task_execution_counts=task_execution_counts,
+                    schedule_history=schedule_history,
+                    scheduler_history_limit=scheduler_history_limit,
+                    max_retries=scheduler_decision_max_retries,
+                    max_session_retries=scheduler_max_session_retries,
+                    orch_state=orch_state,
+                )
 
             if decision is None:
                 # Failed to get a valid decision after retries
@@ -428,7 +465,12 @@ class AISchedulerMixin:
             # action == 'execute'
             selected_task_id = str(decision.get('task_id'))
             selected_task = next(
-                (t for t in self.todos if str(t['id']) == selected_task_id), None
+                (
+                    t for t in self.todos
+                    if str(t['id']) == selected_task_id
+                    and str(t.get('id')) != FATAL_ANALYSIS_ID
+                ),
+                None,
             )
             if not selected_task:
                 print(f"\n❌ Scheduler selected non-existent task {selected_task_id}. Stopping.")
@@ -483,9 +525,29 @@ class AISchedulerMixin:
             results[f"round_{current_round}"] = success
 
             if success:
-                print(f"\n✅ Task {selected_task_id} completed successfully!")
+                print(f"\nTask {selected_task_id} completed successfully!")
             else:
-                print(f"\n❌ Task {selected_task_id} failed!")
+                if getattr(self, "_last_fatal_event", None):
+                    fatal_decision = self._run_fatal_analysis(
+                        self._last_fatal_event,
+                        project_description=project_desc,
+                    )
+                    retry_from = fatal_decision.get("retry_from")
+                    history_entry["fatal_analysis"] = fatal_decision
+                    self._last_fatal_event = None
+                    if retry_from == "stop":
+                        orch_state['status'] = 'stopped'
+                        self.state_manager.save_orchestrator_state(orch_state)
+                        print(f"\nFatal analysis stopped AutoAgent.")
+                        break
+                    print(f"\nFatal analysis retry_from = {retry_from}")
+                    forced_retry_task_id = str(retry_from).split(".", 1)[0]
+                    forced_retry_reasoning = (
+                        f"Fatal Analysis requested retry_from={retry_from}: "
+                        f"{fatal_decision.get('suggested_fix', '')}"
+                    )
+                else:
+                    print(f"\nTask {selected_task_id} failed!")
 
         else:
             # Reached hard limit (max_rounds + overtime)
@@ -604,7 +666,10 @@ class AISchedulerMixin:
         original_model = self.provider.model
         self.provider.set_model(scheduler_model)
 
-        valid_task_ids = {str(t['id']) for t in self.todos}
+        valid_task_ids = {
+            str(t['id']) for t in self.todos
+            if str(t.get('id')) != FATAL_ANALYSIS_ID
+        }
 
         # Build the scheduler prompt (reused across session resets)
         prompt = build_scheduler_prompt(
@@ -613,7 +678,10 @@ class AISchedulerMixin:
             project_description=project_description,
             strategy=strategy,
             stop_condition=stop_condition,
-            tasks=self.todos,
+            tasks=[
+                t for t in self.todos
+                if str(t.get('id')) != FATAL_ANALYSIS_ID
+            ],
             task_execution_counts=task_execution_counts,
             schedule_history=schedule_history,
             last_result_config=last_result_config,
@@ -918,6 +986,7 @@ class AISchedulerMixin:
             context_id=context_id,
             context_created_at=time.strftime("%Y-%m-%d %H:%M:%S"),
         )
+        self._last_fatal_event = None
 
         # Create a modified task dict with schedule-round-prefixed IDs
         # for subtasks (if nested/looping)
@@ -937,18 +1006,46 @@ class AISchedulerMixin:
                     conv_logger=sched_conv_logger,
                     project_description=task_description,
                 )
+                if not success and self.simple_executor.last_error_type == "fatal":
+                    self._last_fatal_event = self._build_fatal_event(
+                        current_task=task,
+                        failed_task=task,
+                        reason=self.simple_executor.last_fatal_reason,
+                        response_text=self.simple_executor.last_response_text,
+                        schedule_round=schedule_round,
+                    )
             elif task_type == 'nested':
                 success = self.nested_executor.execute(
                     scheduled_task, client, self.state_manager,
                     conv_logger=sched_conv_logger,
                     project_description=task_description,
                 )
+                if not success and self.nested_executor.last_fatal_event:
+                    event = self.nested_executor.last_fatal_event
+                    self._last_fatal_event = self._build_fatal_event(
+                        current_task=task,
+                        failed_task=event["failed_task"],
+                        reason=event.get("reason", ""),
+                        response_text=event.get("response_text", ""),
+                        round_label=event.get("round_label", ""),
+                        schedule_round=schedule_round,
+                    )
             elif task_type == 'looping':
                 success = self.looping_executor.execute(
                     scheduled_task, client, self.state_manager,
                     conv_logger=sched_conv_logger,
                     project_description=task_description,
                 )
+                if not success and self.looping_executor.last_fatal_event:
+                    event = self.looping_executor.last_fatal_event
+                    self._last_fatal_event = self._build_fatal_event(
+                        current_task=task,
+                        failed_task=event["failed_task"],
+                        reason=event.get("reason", ""),
+                        response_text=event.get("response_text", ""),
+                        round_label=event.get("round_label", ""),
+                        schedule_round=schedule_round,
+                    )
             elif task_type == 'long_running':
                 lr_executor = SubtaskExecutor(
                     session_dir=self.session_dir,
@@ -964,6 +1061,15 @@ class AISchedulerMixin:
                     },
                 )
                 success = result.success
+                if not result.success and result.error_type == "fatal":
+                    fatal_payload = result.fatal_event or {}
+                    self._last_fatal_event = self._build_fatal_event(
+                        current_task=task,
+                        failed_task=task,
+                        reason=fatal_payload.get("reason") or result.output,
+                        response_text=fatal_payload.get("response_text") or result.response_text,
+                        schedule_round=schedule_round,
+                    )
                 # Store response_text for _save_task_response_result
                 self._last_lr_response_text = getattr(result, 'response_text', '') or ''
             else:
@@ -1082,12 +1188,10 @@ class AISchedulerMixin:
             self._last_lr_response_text = ''  # Consume after use
 
         if response_text:
-            from util.truncation_limits import limits
             save_response_result(
                 task_id=task_id,
                 response_text=response_text,
                 session_dir=self.session_dir,
-                max_length=limits.get('previous_subtask_summary'),
             )
 
     def _detect_orphan_signal_file(

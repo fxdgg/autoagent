@@ -44,6 +44,7 @@ class LoopingTaskExecutor:
         self.session_dir = session_dir
         self.model_roles = model_roles or {}
         self.default_max_attempts = default_max_attempts
+        self.last_fatal_event = None
 
     def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None, project_description: str = "", **kwargs) -> bool:
         """
@@ -60,6 +61,7 @@ class LoopingTaskExecutor:
             bool: True if all iterations completed successfully
         """
         task_id = str(task['id'])
+        self.last_fatal_event = None
         repeat_count = task.get('repeat_count', 1)
         max_attempts_per_loop = task.get('max_attempts_per_loop', self.default_max_attempts)
         subtasks = task.get('subtasks', [])
@@ -167,6 +169,16 @@ class LoopingTaskExecutor:
             loop_decisions = [d for d in ai_decisions if d.get('loop') == loop_idx]
             latest_fix = loop_decisions[-1].get('suggested_fix', '') if loop_decisions else ''
             fix_target_id = loop_decisions[-1].get('retry_from', '') if loop_decisions else ''
+
+            # Fatal analysis carry-forward: when the orchestrator retried this
+            # task via fatal_analysis, carry forward completed subtasks from the
+            # previous sub-round so they are skipped.
+            if loop_decisions and loop_decisions[-1].get('source') == 'fatal_analysis':
+                prev_sub_round = _failure_sub_round - 1
+                if prev_sub_round >= 1:
+                    old_rl = f"{loop_idx}.{prev_sub_round}"
+                    new_rl = f"{loop_idx}.{_failure_sub_round}"
+                    self._carry_forward_completed(fix_target_id, subtasks, state_manager, old_rl, new_rl)
             # Cap fix context to avoid oversized prompts
             if latest_fix and len(latest_fix) > limits.get('max'):
                 latest_fix = "(truncated)\n..." + latest_fix[-limits.get('max'):]
@@ -243,6 +255,27 @@ class LoopingTaskExecutor:
                     all_completed = False
                     print(f"\n   ❌ Subtask {subtask_id} failed!")
 
+                    if result.error_type == "fatal":
+                        fatal_payload = result.fatal_event or {}
+                        self.last_fatal_event = {
+                            "task": task,
+                            "failed_task": subtask,
+                            "failed_task_id": subtask_id,
+                            "reason": fatal_payload.get("reason") or result.output,
+                            "response_text": fatal_payload.get("response_text") or result.response_text,
+                            "round_label": parent_context.get('round_label'),
+                            "loop_idx": loop_idx,
+                        }
+                        state_manager.mark_task_status(
+                            task_id,
+                            "failed",
+                            error_type="fatal",
+                            failed_at=subtask_id,
+                            failed_at_loop=loop_idx,
+                            last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+                        )
+                        return False
+
                     # AI analyzes failure and decides retry_from
                     round_label = f"{loop_idx}.{_failure_sub_round}"
                     ai_decision = self._ai_analyze_failure(
@@ -251,6 +284,7 @@ class LoopingTaskExecutor:
                         round_label=round_label,
                         previous_context=previous_subtask_summary,
                         previous_subtask_id=previous_subtask_id,
+                        project_description=project_description,
                     )
 
                     retry_from = _resolve_retry_from(
@@ -296,7 +330,7 @@ class LoopingTaskExecutor:
     def _ai_analyze_failure(
         self, client, task, failed_subtask, all_subtasks, result, state_manager,
         conv_logger=None, loop_idx=1, round_label=None, previous_context="",
-        previous_subtask_id="",
+        previous_subtask_id="", project_description="",
     ) -> dict:
         """
         AI analyzes subtask failure and decides retry strategy.
@@ -366,6 +400,7 @@ class LoopingTaskExecutor:
             failed_subtask_history=failed_subtask_history,
             previous_subtask_id=previous_subtask_id,
             subtasks_with_status=task_history,
+            project_description=project_description,
         )
 
         print(f"\n   🤖 [AI: Failure Analysis (loop {loop_idx})]")

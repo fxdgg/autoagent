@@ -6,7 +6,7 @@ in ideas_watcher.py.
 """
 
 from util.truncation_limits import limits
-from prompts.shared import load_task_design_guide, indent_block
+from prompts.shared import get_task_design_guide_path, indent_block
 
 # Indentation constants (same as other prompt builders)
 I4 = 4
@@ -28,7 +28,7 @@ def build_ideas_decompose_prompt(
         existing_todos_yaml: Serialized YAML of existing todos (read-only context).
         mode: Execution mode — ``"linear"`` or ``"ai"``.
     """
-    task_design_guide = load_task_design_guide(mode)
+    task_design_guide_path = get_task_design_guide_path(mode)
 
     # Truncate idea content if necessary
     if len(idea_content) > limits.get('max'):
@@ -74,7 +74,9 @@ commands, and analyze code and outputs.
 </idea>
 
 <task_design_guide>
-{indent_block(task_design_guide, I4)}
+    Read this guide before generating `todos.yaml`:
+
+    {task_design_guide_path}
 </task_design_guide>
 {existing_todos_block}
 <instructions>

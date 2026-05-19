@@ -426,6 +426,17 @@ def main():
             except (json.JSONDecodeError, OSError):
                 pass  # Corrupted or unreadable — proceed normally
 
+        # Clear the default output log for every accepted launch.
+        try:
+            with open(output_log, "wb"):
+                pass
+        except OSError as e:
+            print(
+                f"[ERROR] Failed to clear output log for task-id '{task_id}': {e}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
         # Write the "starting" signal (PID unknown yet — filled in after Popen).
         signal_data = {
             "task_id": task_id,

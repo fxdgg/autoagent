@@ -113,6 +113,11 @@ def prepend_system_prompt_prefix(prompt: str, task: dict = None) -> str:
     return prompt
 
 
+def get_effective_stdout_log(output_log: str, stdout_log: str = "") -> str:
+    """Return the stdout path shown to agents for autoagent-exec output."""
+    return (stdout_log or output_log).replace("\\", "/")
+
+
 # ---------------------------------------------------------------------------
 # Task Design Guide loader (cached)
 # ---------------------------------------------------------------------------
@@ -149,6 +154,22 @@ def _get_mode_guide_dir(mode: str) -> str:
     return os.path.join(_GUIDE_ROOT_DIR, guide_subdir)
 
 
+def get_task_design_guide_path(mode: str = "linear") -> str:
+    """Return the absolute task design guide path for the given mode."""
+    guide_dir = _get_mode_guide_dir(mode)
+    guide_filename = _GUIDE_FILENAMES.get(mode, _GUIDE_FILENAMES["linear"])
+    return os.path.join(guide_dir, guide_filename)
+
+
+def get_adversarial_review_guide_path(mode: str = "linear") -> str:
+    """Return the absolute adversarial review guide path for the given mode."""
+    guide_dir = _get_mode_guide_dir(mode)
+    guide_filename = _ADVERSARIAL_GUIDE_FILENAMES.get(
+        mode, _ADVERSARIAL_GUIDE_FILENAMES["linear"]
+    )
+    return os.path.join(guide_dir, guide_filename)
+
+
 def load_task_design_guide(mode: str = "linear") -> str:
     """Load and cache the content of the task design guide for the given mode.
 
@@ -175,7 +196,7 @@ def load_task_design_guide(mode: str = "linear") -> str:
 
     guide_dir = _get_mode_guide_dir(mode)
     guide_filename = _GUIDE_FILENAMES.get(mode, _GUIDE_FILENAMES["linear"])
-    guide_path = os.path.join(guide_dir, guide_filename)
+    guide_path = get_task_design_guide_path(mode)
     try:
         with open(guide_path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -215,9 +236,7 @@ def load_adversarial_review_guide(mode: str = "linear") -> str:
     if mode in _adversarial_guide_cache:
         return _adversarial_guide_cache[mode]
 
-    guide_dir = _get_mode_guide_dir(mode)
-    guide_filename = _ADVERSARIAL_GUIDE_FILENAMES.get(mode, _ADVERSARIAL_GUIDE_FILENAMES["linear"])
-    guide_path = os.path.join(guide_dir, guide_filename)
+    guide_path = get_adversarial_review_guide_path(mode)
     try:
         with open(guide_path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -244,6 +263,10 @@ ROLE_CODING_AGENT = (
 def build_system_prompt_coding_agent(
     exec_script_path: str = "",
     supports_system_prompt: bool = True,
+    output_log: str = "",
+    stdout_log: str = "",
+    fatal_enabled: bool = False,
+    is_subtask: bool = False,
 ) -> str:
     """Build the system prompt for coding-agent tasks.
 
@@ -272,6 +295,11 @@ def build_system_prompt_coding_agent(
             dedicated ``--append-system-prompt`` CLI parameter.  When
             *False*, the returned text is appended (not prepended) to
             the user prompt, with section headings for clarity.
+        output_log: Path to the default autoagent-exec output log.
+        stdout_log: Path where stdout is captured when known.  When empty,
+            falls back to *output_log*.
+        fatal_enabled: Whether the task may intentionally trigger Fatal
+            Analysis by ending with ``❌ FATAL: <reason>``.
     """
     parts = []
 
@@ -286,15 +314,31 @@ def build_system_prompt_coding_agent(
         "NEVER ask the user questions or wait for confirmation.\n",
     ]
 
+    if fatal_enabled:
+        fatal_rule = (
+            "If you detect a prerequisite blocker and needs a specialized analysis task to diagnose, end your response with EXACTLY:\n"
+            "  ❌ FATAL: <reason>\n"
+        )
+        if is_subtask:
+            fatal_rule += "If this blocker can be resolved by retrying a previous subtask in `workflow` section, output `❌ not completed: <reason>` instead.\n"
+        fatal_rule += "Prioritize user-defined completion marker rules in `initial_hint` and `completion_criteria` section over this rule."
+        rules.append(fatal_rule)
+
     if exec_script_path:
+        effective_stdout = get_effective_stdout_log(output_log, stdout_log)
+        output_hint = (
+            f' in redirected files or "{effective_stdout}"'
+            if effective_stdout
+            else " in redirected files"
+        )
         rules.append(
             "For any command that may run longer than a few minutes,\n"
             "you MUST use autoagent-exec instead of running it directly in Bash (which may cause **session timeout**):\n"
             f'  "{exec_script_path}" "<your entire command>"\n'
             "Always wrap the command in double quotes so that shell operators are passed correctly.\n\n"
             "How does this work:\n"
-            "You are not executing commands using autoagent-exec; instead you are SUBMITTING the command to the background by using it.\n"
-            "So DO NOT manually wait for the command to finish.\n\n"
+            "You are SUBMITTING the command to the background, instead of executing commands using autoagent-exec.\n"
+            "So DO NOT manually wait for the command to finish —— Just output ⏳ LONG_RUNNING_IN_PROGRESS after it shows \"TASK SUBMITTED\".\n\n"
             "autoagent-exec has three possible outcomes:\n"
             "  - \"TASK SUBMITTED\" → the command is submitted to background. "
             "Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.\n"
@@ -302,19 +346,26 @@ def build_system_prompt_coding_agent(
             "Continue working — treat it as a normal completed command.\n"
             "  - \"[FAST-FAIL]\" → the command failed quickly. Read the error output, fix the issue, and retry.\n\n"
             "⚠️ CRITICAL — No Output Redirection:\n"
-            "autoagent-exec already captures ALL stdout/stderr to a log file automatically.\n"
+            "autoagent-exec automatically captures ALL stdout/stderr to a log file.\n"
             "If you add output redirection (>, >>, 2>, &>, | tee, etc.), you may NOT see any of the three outcomes above.\n"
-            "If the task hint's command already includes redirection, strip the redirection and use --stdout / --stderr instead:\n"
+            "If commands in `initial_hint` already includes redirection, strip the redirection and use --stdout / --stderr instead:\n"
             f'  "{exec_script_path}" --stdout build.log --stderr build_err.log "make"\n\n'
-            "Pass --help to autoagent-exec for further troubleshooting.\n"
+            "⚠️ If you can't see autoagent-exec's any of the three outcomes:\n"
+            "The output may have been already redirected. DO NOT run autoagent-exec again before checking the process by PID.\n"
+            "Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately if it's still running.\n"
+            f"Check the command outputs{output_hint} and continue working if it has already finished.\n"
+            "DO NOT use `sleep` or any wait command in your session.\n"
         )
 
-    rules.append(
+    status_text = (
         "When you are done, end your response with EXACTLY one of:\n"
         "  ✅ completed\n"
         "  ❌ not completed: <reason>\n"
-        "  ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints \"TASK SUBMITTED\")"
     )
+    if fatal_enabled:
+        status_text += "  ❌ FATAL: <reason>\n"
+    status_text += "  ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints \"TASK SUBMITTED\")"
+    rules.append(status_text)
 
     if not supports_system_prompt:
         str_unindent = "\n".join(f"{i}. {r}" for i, r in enumerate(rules, 1))

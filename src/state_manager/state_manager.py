@@ -225,6 +225,50 @@ class StateManager:
         self.save_state()
         logger.info("State reset")
 
+    def reset_task(self, task_id: str):
+        """Reset a specific task and all its related state entries.
+
+        This removes:
+        - The task's main state entry
+        - All round-scoped entries for this task (e.g., "1.2@3.1")
+        - All subtask entries if this is a parent task (e.g., "1.1", "1.2" for task "1")
+
+        Args:
+            task_id: Task identifier to reset (e.g., "1", "1.2", "3")
+        """
+        task_id = str(task_id)
+        keys_to_remove = []
+
+        # Find all keys related to this task
+        for key in self.state["tasks"].keys():
+            # Direct match
+            if key == task_id:
+                keys_to_remove.append(key)
+                continue
+
+            # Round-scoped entries for this task (e.g., "1.2@3.1" when task_id="1.2")
+            if self.ROUND_SEP in key:
+                base_id = key.split(self.ROUND_SEP)[0]
+                if base_id == task_id:
+                    keys_to_remove.append(key)
+                    continue
+
+            # Subtask entries (e.g., "1.1", "1.2" when task_id="1")
+            # Check if key starts with "task_id."
+            if key.startswith(task_id + "."):
+                keys_to_remove.append(key)
+                continue
+
+        # Remove all identified keys
+        for key in keys_to_remove:
+            del self.state["tasks"][key]
+
+        if keys_to_remove:
+            self.save_state()
+            logger.info(f"Reset task {task_id} and {len(keys_to_remove)} related entries")
+        else:
+            logger.info(f"Task {task_id} had no state to reset")
+
     def get_orchestrator_state(self) -> dict | None:
         """Get the orchestrator state (AI scheduling mode).
 

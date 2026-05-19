@@ -22,11 +22,6 @@ DEFAULTS = {
         "commands, and analyze outputs. Complete the following task."
     ),
     "default_model": "deepseek-v3.2",
-    "default_model_provider": {
-        "claude": "claude-opus-4.6",
-        "gemini": "gemini-3.1-pro-preview",
-        "codex": "gpt-5.4"
-    },
     "truncation_limits": {
         "previous_subtask_summary": 4000,
         "history_summary": 300,
@@ -48,6 +43,7 @@ DEFAULTS = {
     # max rounds & retries
     "max_plan_retries": 3,
     "max_review_rounds": 5,
+    "adversarial_review": False,
     "max_adversarial_rounds": 2,
     "max_validation_retries": 3,
     "default_max_attempts": 5,
@@ -152,10 +148,14 @@ max_plan_retries: {max_plan_retries}
 # If the reviewer keeps rejecting, tasks are accepted after this many rounds.
 max_review_rounds: {max_review_rounds}
 
+# Enable adversarial (red-team) review when processing ideas into TODO tasks.
+# When false, only positive review and schema validation run.
+adversarial_review: {adversarial_review}
+
 # Maximum number of adversarial (red-team) review rounds per review iteration
 # when processing ideas into TODO tasks. In each review iteration, after the
 # positive reviewer passes, an adversarial reviewer checks for loopholes,
-# ambiguities, and destructive potential. Set to 0 to disable adversarial review.
+# ambiguities, and destructive potential.
 max_adversarial_rounds: {max_adversarial_rounds}
 
 # Maximum number of schema-validation retries when processing ideas.
@@ -248,6 +248,7 @@ def _build_config_yaml() -> str:
         "tl_history_summary": tl["history_summary"],
         "tl_max": tl["max"],
         # Boolean → YAML lowercase
+        "adversarial_review": str(DEFAULTS["adversarial_review"]).lower(),
         "autoagent_exec_show_console": str(DEFAULTS["autoagent_exec_show_console"]).lower(),
     }
     return _CONFIG_TEMPLATE.format_map(values)

@@ -21,7 +21,6 @@ from ai_client.ai_providers import (
     get_provider,
     list_providers,
     parse_model_spec,
-    PROVIDER_ALIASES,
     CodeBuddyProvider,
     MODEL_ROLES,
 )
@@ -161,6 +160,7 @@ def _merge_preset_with_args(args, preset):
         'use_cli': 'use_cli',
         'ideas_only': 'ideas_only',
         'human_review': 'human_review',
+        'adversarial_review': 'adversarial_review',
         'mode': 'mode',
     }
     
@@ -176,6 +176,7 @@ def _merge_preset_with_args(args, preset):
         'use_cli': False,
         'ideas_only': False,
         'human_review': False,
+        'adversarial_review': False,
     }
     
     for preset_key, arg_key in preset_to_arg_map.items():
@@ -213,8 +214,7 @@ def _warn_unsupported_model_roles(
     if allow_unsupported:
         return
 
-    resolved = PROVIDER_ALIASES.get(provider_name.lower(), provider_name.lower())
-    if resolved != "codebuddy":
+    if provider_name.lower() != "codebuddy":
         return
 
     supported = CodeBuddyProvider.get_supported_models(executable)
@@ -366,6 +366,12 @@ Examples:
              'feedback for revision. (default: disabled)',
     )
     idea.add_argument(
+        '--adversarial-review',
+        action='store_true',
+        help='Enable adversarial red-team review for ideas processing. '
+             'This overrides config.yaml adversarial_review for this run.',
+    )
+    idea.add_argument(
         '--no-idle',
         action='store_true',
         help='Disable idle mode. By default, when --ideas is set, the orchestrator '
@@ -397,6 +403,18 @@ Examples:
         default=None,
         help='Rename workspace path in sessions.csv. Updates all entries '
              'whose workspace matches OLD_DIR to NEW_DIR, then exits.',
+    )
+    session.add_argument(
+        '--redo',
+        action='store_true',
+        help='Force reset the current top-level task or subtask and re-execute it. '
+             'Clears the task state and restarts from the beginning.',
+    )
+    session.add_argument(
+        '--back',
+        action='store_true',
+        help='Roll back to the previous top-level task or subtask. '
+             'For subtask X.1, rolls back to task X-1. Resets the target task state.',
     )
 
     # ── Provider & Model ──────────────────────────────
@@ -441,8 +459,7 @@ Examples:
     provider_group.add_argument(
         '--include-directories',
         default=None,
-        help='Comma-separated list of additional directories the AI tool is allowed '
-             'to access outside the workspace (Gemini only). '
+        help='Reserved for future use. Currently accepted but not applied by providers. '
              'Example: --include-directories /path/to/dir1,/path/to/dir2',
     )
     provider_group.add_argument(
@@ -542,16 +559,6 @@ Examples:
             print(f"❌ Failed to load settings file: {e}")
             sys.exit(1)
 
-    # Register merged config globally so all modules can access it
-    from util.config_registry import set_config
-    set_config(config)
-
-    # Extract config values (after --settings merge)
-    default_session_timeout = config.get('session_timeout', DEFAULTS['session_timeout'])
-    default_bash_timeout = config.get('bash_timeout', DEFAULTS['bash_timeout'])
-    default_idle_interval = config.get('idle_interval', DEFAULTS['idle_interval'])
-    default_max_attempts = config.get('default_max_attempts', DEFAULTS['default_max_attempts'])
-
     # Resolve workspace early for preset loading
     _workspace_abs = os.path.abspath(args.workspace)
     
@@ -560,6 +567,24 @@ Examples:
     if preset:
         print(f"✓ Loaded preset: {args.preset}")
         args = _merge_preset_with_args(args, preset)
+
+    # Register the effective config globally so all modules can access it.
+    effective_config = dict(config)
+    if preset:
+        effective_config.update(preset)
+    if getattr(args, 'adversarial_review', False):
+        effective_config['adversarial_review'] = True
+    elif 'adversarial_review' not in effective_config:
+        effective_config['adversarial_review'] = DEFAULTS['adversarial_review']
+
+    from util.config_registry import set_config
+    set_config(effective_config)
+
+    # Extract config values (after --settings / preset / CLI merge)
+    default_session_timeout = effective_config.get('session_timeout', DEFAULTS['session_timeout'])
+    default_bash_timeout = effective_config.get('bash_timeout', DEFAULTS['bash_timeout'])
+    default_idle_interval = effective_config.get('idle_interval', DEFAULTS['idle_interval'])
+    default_max_attempts = effective_config.get('default_max_attempts', DEFAULTS['default_max_attempts'])
     
     # Resolve key file paths to absolute paths early, so all downstream
     # code (IdeasWatcher, TodoOrchestrator, empty-file creation, etc.)
@@ -666,10 +691,7 @@ Examples:
         
         # Validate non-codebuddy providers always use CLI (SDK is codebuddy-only)
         if not args.use_cli:
-            resolved_provider = args.provider.lower()
-            # Resolve aliases
-            resolved_provider = PROVIDER_ALIASES.get(resolved_provider, resolved_provider)
-            if resolved_provider not in ('codebuddy', 'test'):
+            if args.provider.lower() not in ('codebuddy', 'test'):
                 # Non-codebuddy providers don't support SDK, force CLI mode
                 args.use_cli = True
         
@@ -729,9 +751,7 @@ Examples:
         
         # When using Gemini with ideas, auto-include the todos.yaml parent directory
         # so that Gemini's sandbox allows writing the temp tasks file there.
-        resolved_provider_name = args.provider.lower()
-        resolved_provider_name = PROVIDER_ALIASES.get(resolved_provider_name, resolved_provider_name)
-        if resolved_provider_name == 'gemini' and args.ideas:
+        if args.provider.lower() == 'gemini' and args.ideas:
             todos_parent = os.path.dirname(os.path.abspath(args.config))
             workspace_abs = os.path.abspath(args.workspace)
             if os.path.normcase(todos_parent) != os.path.normcase(workspace_abs):
@@ -761,7 +781,7 @@ Examples:
         effective_session_timeout = default_session_timeout
         effective_bash_timeout = default_bash_timeout
         effective_idle_interval = default_idle_interval
-        backoff_max = config.get('backoff_max_wait', DEFAULTS['backoff_max_wait'])
+        backoff_max = effective_config.get('backoff_max_wait', DEFAULTS['backoff_max_wait'])
 
         orchestrator = TodoOrchestrator(
             todos_file=args.config,
@@ -791,7 +811,15 @@ Examples:
         if args.reset:
             orchestrator.reset()
             return
-        
+
+        if args.redo:
+            orchestrator.handle_redo()
+            return
+
+        if args.back:
+            orchestrator.handle_back()
+            return
+
         
         # Process ideas before running tasks (if ideas file is configured)
         if orchestrator.ideas_watcher:

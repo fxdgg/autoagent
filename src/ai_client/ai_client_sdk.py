@@ -382,60 +382,138 @@ class AIClientSDK:
         return response, full_log
 
     def _display_tool_use(self, tool_name: str, tool_input: dict):
-        """Display a tool use event with a readable summary."""
-        tool_name_lower = tool_name.lower()
-        if tool_name_lower in ("bash", "run_shell_command"):
-            cmd = tool_input.get("command", "")
-            sys.stdout.write(f"\n🔧 [{tool_name}] {cmd}\n")
-        elif tool_name_lower in ("edit", "write", "multiedit", "write_file"):
+        """Display a tool use event with a readable summary.
+
+        Uses the provider's tool_names configuration to categorize tools.
+        """
+        tool_names_config = {}
+        if self.provider.config and self.provider.config.tool_names:
+            tool_names_config = self.provider.config.tool_names
+
+        # Valid categories
+        VALID_CATEGORIES = {"read", "write", "glob", "bash", "list"}
+
+        name_lower = tool_name.lower()
+
+        # Build reverse lookup: tool_name_pattern -> category
+        category = None
+        for cat, patterns_str in tool_names_config.items():
+            if cat not in VALID_CATEGORIES:
+                continue
+            if not patterns_str:
+                continue
+            patterns = [p.strip().lower() for p in patterns_str.split(";") if p.strip()]
+            if name_lower in patterns:
+                category = cat
+                break
+
+        # Default categories if not configured
+        if category is None:
+            if name_lower in ("read", "read_file"):
+                category = "read"
+            elif name_lower in ("write", "write_file", "edit", "multiedit", "replace"):
+                category = "write"
+            elif name_lower in ("glob", "grep", "grep_search"):
+                category = "glob"
+            elif name_lower in ("bash", "run_shell_command"):
+                category = "bash"
+            elif name_lower in ("ls", "list_dir", "list_directory"):
+                category = "list"
+
+        # Display based on category
+        if category == "read":
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
-            sys.stdout.write(f"\n📝 [{tool_name}] {path}\n")
-        elif tool_name_lower in ("read", "read_file"):
+            sys.stdout.write(f"\n📖 [Read] {path}\n")
+        elif category == "write":
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
-            sys.stdout.write(f"\n📖 [{tool_name}] {path}\n")
-        elif tool_name_lower in ("glob", "grep"):
+            sys.stdout.write(f"\n📝 [Write] {path}\n")
+        elif category == "glob":
             pattern = tool_input.get("pattern", tool_input.get("regex", ""))
-            sys.stdout.write(f"\n🔍 [{tool_name}] {pattern}\n")
+            sys.stdout.write(f"\n🔍 [Glob] {pattern}\n")
+        elif category == "bash":
+            cmd = tool_input.get("command", "")
+            sys.stdout.write(f"\n🔧 [Bash] {cmd}\n")
+        elif category == "list":
+            path = tool_input.get("path", ".")
+            sys.stdout.write(f"\n📂 [List] {path}\n")
         else:
             sys.stdout.write(f"\n🔧 [{tool_name}]\n")
         sys.stdout.flush()
 
     def _format_tool_use_for_log(self, tool_name: str, tool_input: dict) -> str:
-        """Format a tool use event as a Markdown string for the conversation log."""
-        tool_name_lower = tool_name.lower()
-        if tool_name_lower in ("bash", "run_shell_command"):
+        """Format a tool use event as a Markdown string for the conversation log.
+
+        Uses the provider's tool_names configuration to categorize tools.
+        """
+        tool_names_config = {}
+        if self.provider.config and self.provider.config.tool_names:
+            tool_names_config = self.provider.config.tool_names
+
+        # Valid categories
+        VALID_CATEGORIES = {"read", "write", "glob", "bash", "list"}
+
+        name_lower = tool_name.lower()
+
+        # Build reverse lookup: tool_name_pattern -> category
+        category = None
+        for cat, patterns_str in tool_names_config.items():
+            if cat not in VALID_CATEGORIES:
+                continue
+            if not patterns_str:
+                continue
+            patterns = [p.strip().lower() for p in patterns_str.split(";") if p.strip()]
+            if name_lower in patterns:
+                category = cat
+                break
+
+        # Default categories if not configured
+        if category is None:
+            if name_lower in ("read", "read_file"):
+                category = "read"
+            elif name_lower in ("write", "write_file", "edit", "multiedit"):
+                category = "write"
+            elif name_lower in ("glob", "grep", "grep_search"):
+                category = "glob"
+            elif name_lower in ("bash", "run_shell_command"):
+                category = "bash"
+            elif name_lower in ("ls", "list_dir"):
+                category = "list"
+
+        # Format based on category
+        if category == "bash":
             cmd = tool_input.get("command", "")
             return f"\n🔧 **[Bash]**\n```bash\n{cmd}\n```\n"
-        elif tool_name_lower in ("edit", "write"):
+        elif category == "write":
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             content = tool_input.get("content", tool_input.get("new_string", ""))
-            result = f"\n📝 **[{tool_name}]** `{path}`\n"
+            result = f"\n📝 **[Write]** `{path}`\n"
             if content:
                 preview = content[:limits.get('log_tool_result')]
                 if len(content) > limits.get('log_tool_result'):
                     preview += f"\n... ({len(content)} chars total)"
                 result += f"```\n{preview}\n```\n"
             return result
-        elif tool_name_lower == "multiedit":
-            path = tool_input.get("file_path", tool_input.get("filePath", ""))
-            edits = tool_input.get("edits", [])
-            return f"\n📝 **[MultiEdit]** `{path}` ({len(edits)} edits)\n"
-        elif tool_name_lower in ("read", "read_file"):
+        elif category == "read":
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             return f"\n📖 **[Read]** `{path}`\n"
-        elif tool_name_lower in ("glob", "grep"):
+        elif category == "glob":
             pattern = tool_input.get("pattern", tool_input.get("regex", ""))
             return f"\n🔍 **[{tool_name}]** `{pattern}`\n"
-        elif tool_name_lower == "todoread":
-            return f"\n📋 **[TodoRead]**\n"
-        elif tool_name_lower in ("taskcreate", "taskupdate"):
-            task_desc = tool_input.get("description", tool_input.get("task", ""))
-            if isinstance(task_desc, str) and task_desc:
-                return f"\n🔧 **[{tool_name}]** {task_desc[:limits.get('log_tool_result')]}\n"
-            return f"\n🔧 **[{tool_name}]**\n"
+        elif category == "list":
+            path = tool_input.get("path", ".")
+            return f"\n📂 **[List]** `{path}`\n"
         else:
-            summary = json.dumps(tool_input, ensure_ascii=False)[:limits.get('log_tool_result')]
-            return f"\n🔧 **[{tool_name}]** {summary}\n"
+            # Generic tool - check for special cases
+            if name_lower == "todoread":
+                return f"\n📋 **[TodoRead]**\n"
+            elif name_lower in ("taskcreate", "taskupdate"):
+                task_desc = tool_input.get("description", tool_input.get("task", ""))
+                if isinstance(task_desc, str) and task_desc:
+                    return f"\n🔧 **[{tool_name}]** {task_desc[:limits.get('log_tool_result')]}\n"
+                return f"\n🔧 **[{tool_name}]**\n"
+            else:
+                summary = json.dumps(tool_input, ensure_ascii=False)[:limits.get('log_tool_result')]
+                return f"\n🔧 **[{tool_name}]** {summary}\n"
 
     def _parse_json_response(self, response: str) -> dict:
         """Extract and parse JSON from AI response (same logic as AIClient)."""

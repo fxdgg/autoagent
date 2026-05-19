@@ -38,6 +38,7 @@ class NestedTaskExecutor:
         self.session_dir = session_dir
         self.model_roles = model_roles or {}
         self.default_max_attempts = default_max_attempts
+        self.last_fatal_event = None
 
     def execute(self, task: dict, client: AIClient, state_manager, conv_logger=None, project_description: str = "", **kwargs) -> bool:
         """
@@ -54,6 +55,7 @@ class NestedTaskExecutor:
             bool: True if main task completed
         """
         task_id = str(task['id'])
+        self.last_fatal_event = None
         max_attempts = task.get('max_attempts', self.default_max_attempts)
         subtasks = task.get('subtasks', [])
         
@@ -119,6 +121,16 @@ class NestedTaskExecutor:
             ]
             latest_fix = current_round_decisions[-1].get('suggested_fix', '') if current_round_decisions else ''
             fix_target_id = current_round_decisions[-1].get('retry_from', '') if current_round_decisions else ''
+
+            # Fatal analysis carry-forward: when the orchestrator retried this
+            # task via fatal_analysis, carry forward completed subtasks from the
+            # previous sub-round so they are skipped.
+            if current_round_decisions and current_round_decisions[-1].get('source') == 'fatal_analysis':
+                prev_sub_round = _failure_sub_round - 1
+                if prev_sub_round >= 1:
+                    old_rl = f"{_main_round}.{prev_sub_round}"
+                    new_rl = f"{_main_round}.{_failure_sub_round}"
+                    self._carry_forward_completed(fix_target_id, subtasks, state_manager, old_rl, new_rl)
             # Also check main_task_evaluations for next_strategy
             evaluations = parent_state.get('main_task_evaluations', [])
             next_strategy = ""
@@ -209,6 +221,25 @@ class NestedTaskExecutor:
                     all_completed = False
                     print(f"\n   ❌ Subtask {subtask_id} failed!")
 
+                    if result.error_type == "fatal":
+                        fatal_payload = result.fatal_event or {}
+                        self.last_fatal_event = {
+                            "task": task,
+                            "failed_task": subtask,
+                            "failed_task_id": subtask_id,
+                            "reason": fatal_payload.get("reason") or result.output,
+                            "response_text": fatal_payload.get("response_text") or result.response_text,
+                            "round_label": parent_context.get('round_label'),
+                        }
+                        state_manager.mark_task_status(
+                            task_id,
+                            "failed",
+                            error_type="fatal",
+                            failed_at=subtask_id,
+                            last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+                        )
+                        return False
+
                     # AI Decision Point 1: Analyze failure
                     round_label = f"{_main_round}.{_failure_sub_round}"
                     ai_decision = self._ai_analyze_failure(
@@ -217,6 +248,7 @@ class NestedTaskExecutor:
                         round_label=round_label,
                         previous_context=previous_subtask_summary,
                         previous_subtask_id=previous_subtask_id,
+                        project_description=project_description,
                     )
 
                     # Reset subtasks based on AI decision
@@ -266,6 +298,7 @@ class NestedTaskExecutor:
                 client, task, subtasks, state_manager,
                 conv_logger=conv_logger, round_num=_main_round,
                 round_label=f"{_main_round}.{_failure_sub_round}",
+                project_description=project_description,
             )
             
             if ai_evaluation.get('main_task_completed', False):
@@ -321,7 +354,7 @@ class NestedTaskExecutor:
     def _ai_analyze_failure(
         self, client, task, failed_subtask, all_subtasks, result, state_manager,
         conv_logger=None, round_num=1, round_label=None, previous_context="",
-        previous_subtask_id="",
+        previous_subtask_id="", project_description="",
     ) -> dict:
         """
         AI Decision Point 1: Analyze subtask failure.
@@ -405,6 +438,7 @@ class NestedTaskExecutor:
             failed_subtask_history=failed_subtask_history,
             previous_subtask_id=previous_subtask_id,
             subtasks_with_status=task_history,
+            project_description=project_description,
         )
         print(f"\n   🤖 [AI Decision Point 1: Failure Analysis]")
 
@@ -463,6 +497,7 @@ class NestedTaskExecutor:
     def _ai_evaluate_main_task(
         self, client, task, subtasks, state_manager,
         conv_logger=None, round_num=1, round_label=None,
+        project_description="",
     ) -> dict:
         """
         AI Decision Point 2: Evaluate main task completion.
@@ -506,6 +541,7 @@ class NestedTaskExecutor:
                 eval_lines.append(
                     f"  - Round {ev.get('round', '?')}: {'completed' if ev.get('completed') else 'not completed'}\n"
                     f"    Analysis: {ev.get('analysis', 'N/A')[:limits.get('max')]}\n"
+                    f"    Retry From: {ev.get('retry_from', 'N/A')[:limits.get('max')]}\n"
                     f"    Strategy: {ev.get('next_strategy', 'N/A')[:limits.get('max')]}"
                 )
             prev_eval_section = "\n".join(eval_lines)
@@ -515,6 +551,7 @@ class NestedTaskExecutor:
             subtasks=subtasks,
             prev_eval_section=prev_eval_section,
             subtasks_with_status=execution_results,
+            project_description=project_description,
         )
         
         print(f"\n   🤖 [AI Decision Point 2: Main Task Evaluation]")

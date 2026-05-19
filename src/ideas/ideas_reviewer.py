@@ -13,11 +13,12 @@ It relies on attributes and helper methods defined on the host class
 ``_start_temp_file_watcher``, ``_stop_temp_file_watcher``,
 ``_read_tasks_from_temp_file``, ``_extract_yaml_tasks``,
 ``_validate_tasks_schema``, ``max_review_rounds``, ``max_validation_retries``,
-``max_adversarial_rounds``.
+``adversarial_review``, ``max_adversarial_rounds``.
 """
 
 import hashlib
 import logging
+import os
 import re
 import yaml
 from typing import Optional, List
@@ -61,6 +62,7 @@ class IdeasReviewerMixin:
     - ``_extract_yaml_tasks(response: str) -> dict``
     - ``_validate_tasks_schema(parsed_data, next_id) -> tuple``
     - ``max_review_rounds: int``
+    - ``adversarial_review: bool``
     - ``max_adversarial_rounds: int``
     - ``max_validation_retries: int``
     """
@@ -122,7 +124,7 @@ class IdeasReviewerMixin:
                             print(f"   🔄 Review rejected (round {review_round}), reviewer did not modify the file.")
 
                     # -- Adversarial review (only if enabled) --
-                    if self.max_adversarial_rounds > 0:
+                    if self.adversarial_review and self.max_adversarial_rounds > 0:
                         adv_passed, adv_feedback, _ = self._adversarial_review_tasks(
                             review_client, idea, parsed_data, result,
                             conv_logger=conv_logger,
@@ -361,7 +363,13 @@ class IdeasReviewerMixin:
         )
 
         temp_tasks_path = self._get_temp_tasks_path()
+        adversarial_feedback_path = self._get_adversarial_review_path()
         self._cleanup_temp_file()
+        try:
+            if os.path.exists(adversarial_feedback_path):
+                os.remove(adversarial_feedback_path)
+        except OSError as e:
+            logger.warning(f"Failed to remove stale adversarial review file: {e}")
         try:
             with open(temp_tasks_path, 'w', encoding='utf-8') as f:
                 f.write(tasks_yaml)
@@ -373,6 +381,7 @@ class IdeasReviewerMixin:
             temp_tasks_path=temp_tasks_path,
             next_id=next_id,
             mode=self._detect_mode(),
+            adversarial_feedback_path=adversarial_feedback_path,
         )
 
         try:
@@ -386,10 +395,15 @@ class IdeasReviewerMixin:
                 conv_logger.log_ideas_adversarial_response(review_result)
 
             passed = self._check_review_passed(review_result)
+            if not passed:
+                self._ensure_adversarial_feedback_file(
+                    adversarial_feedback_path,
+                    review_result,
+                )
 
             self._cleanup_temp_file()
 
-            return passed, review_result, None
+            return passed, adversarial_feedback_path, None
 
         except AICallError as e:
             logger.error(f"AI call failed for adversarial review: {e}")
@@ -425,7 +439,7 @@ class IdeasReviewerMixin:
 
         worker_prompt = build_adversarial_worker_prompt(
             temp_tasks_path=temp_tasks_path,
-            adversarial_feedback=adversarial_feedback,
+            adversarial_feedback_path=adversarial_feedback,
             next_id=next_id,
             mode=self._detect_mode(),
         )
@@ -464,6 +478,21 @@ class IdeasReviewerMixin:
             logger.error(f"AI call failed for adversarial worker revision: {e}")
             self._cleanup_temp_file()
             return None
+
+    @staticmethod
+    def _ensure_adversarial_feedback_file(path: str, fallback_text: str) -> None:
+        """Ensure adversarial findings are available at *path* for the worker."""
+        try:
+            needs_write = True
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    needs_write = not bool(f.read().strip())
+            if needs_write:
+                os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(fallback_text or "")
+        except OSError as e:
+            logger.warning(f"Failed to write adversarial review fallback file: {e}")
 
     @staticmethod
     def _check_review_passed(review_response: str) -> bool:

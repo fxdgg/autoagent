@@ -10,9 +10,11 @@ from prompts.shared import (
     build_workflow_section,
     build_history_section,
     build_previous_subtask_section,
+    build_previous_attempt_output_section,
     build_suggested_fix_section,
     build_timeout_guidance,
     build_long_running_reminder,
+    get_effective_stdout_log,
 )
 
 
@@ -26,12 +28,13 @@ def build_long_running_prompt(
     timeout_feedback: str = None,
     timeout_type: str = None,
     project_description: str = "",
+    previous_attempt_output: str = None,
 ) -> str:
     """Build the prompt that tells AI to use autoagent-exec for long-running tasks.
 
     Structure mirrors ``build_simple_task_prompt`` with these differences:
 
-    - ``<previous_attempts>`` has no ``<previous_attempt_output>`` sub-tag.
+    - ``<previous_attempts>`` can include previous attempt output.
     - ``<constraints>`` always present (long-running reminder or timeout warning).
     """
     parts = []
@@ -70,6 +73,10 @@ def build_long_running_prompt(
     # ── Section 3: Previous Attempts (retry only) ────────────────────
     if attempt > 1:
         retry_inner = []
+
+        prev_output = build_previous_attempt_output_section(previous_attempt_output)
+        if prev_output:
+            retry_inner.append(f"    <previous_attempt_output>\n{indent_block(prev_output, I8)}\n    </previous_attempt_output>")
 
         history = state.get('history', [])
         history_text = build_history_section(history, extract_summary_fn)
@@ -136,7 +143,7 @@ def build_long_running_analysis_prompt(
     command_line = command_info.strip()
 
     # Determine which output paths to show
-    effective_stdout = (stdout_log or output_log).replace("\\", "/")
+    effective_stdout = get_effective_stdout_log(output_log, stdout_log)
     effective_stderr = (stderr_log or "").replace("\\", "/")
 
     if effective_stderr and effective_stderr != effective_stdout:

@@ -16,7 +16,6 @@ from ai_client.ai_providers import (
     list_providers,
     parse_model_spec,
     MODEL_ROLES,
-    PROVIDER_ALIASES,
 )
 from ai_client.ai_client import AIClient
 from ai_client.ai_client_sdk import AIClientSDK

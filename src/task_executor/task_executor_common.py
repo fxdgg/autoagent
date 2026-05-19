@@ -321,12 +321,21 @@ class ExecutionError(Exception):
 class SubtaskResult:
     """Result of a subtask execution."""
     
-    def __init__(self, success: bool, output: str = "", logs: str = "", error_type: str = None, response_text: str = ""):
+    def __init__(
+        self,
+        success: bool,
+        output: str = "",
+        logs: str = "",
+        error_type: str = None,
+        response_text: str = "",
+        fatal_event: dict | None = None,
+    ):
         self.success = success
         self.output = output
         self.logs = logs
         self.error_type = error_type
         self.response_text = response_text
+        self.fatal_event = fatal_event
 
 
 def _resolve_retry_from(retry_from: str, subtasks: list) -> str:

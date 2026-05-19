@@ -20,7 +20,6 @@ import sys
 import tempfile
 import threading
 import time
-import asyncio
 from typing import Union, Optional, List
 
 from ai_client.ai_providers import AIProvider, CodeBuddyProvider, get_provider
@@ -350,37 +349,7 @@ class AIClient:
         """
         Parse a single line of stream-json output and display relevant info in real-time.
 
-        Supports four stream-json dialects:
-
-        **CodeBuddy / Claude Code format:**
-          - "assistant": AI message with message.content[] array (text blocks and/or tool_use)
-          - "user": Contains tool_result in message.content[] array
-          - "result": Final result with "result", "is_error", "duration_ms", "num_turns"
-
-        **Gemini CLI format:**
-          - "message" + role="assistant": AI text in "content" string, with "delta":true
-          - "tool_use": Top-level event with "tool_name" and "parameters"
-          - "tool_result": Top-level event with "status", "output", "error"
-          - "result": Final result with "status", "stats.duration_ms", "stats.tool_calls"
-          - "init": Session init (ignored)
-          - "message" + role="user": Echo of user prompt (ignored)
-
-        **OpenCode format:**
-          - "step_start": Session start, contains "sessionID" (at top level or in data)
-          - "text": AI text in data.text
-          - "tool_call": Tool invocation with data.name (tool name) and data.input (JSON string)
-          - "tool_result": Tool result (handled by existing tool_result branch)
-          - "step_finish": Step finished with data.reason (and optional data.tokens, data.cost)
-
-        **Codex format:**
-          - "thread.started": Session start with "thread_id"
-          - "turn.started" / "turn.completed": Turn boundaries
-          - "item.started": Item in progress (ignored — wait for completed)
-          - "item.completed": Completed item:
-            - "agent_message": AI text in item.text
-            - "command_execution": Tool call with item.command, item.aggregated_output, item.exit_code
-            - "reasoning": Thinking (ignored)
-            - "tool_call" / "tool_call_output": Generic tool call/result (fallback)
+        Uses the provider's pluggable parser to handle different stream-JSON formats.
 
         Args:
             line: A single line of stream-json output
@@ -393,367 +362,162 @@ class AIClient:
         if not line.strip():
             return
 
+        # Parse JSON
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
             # Not valid JSON - print raw line as fallback
             sys.stdout.write(line + "\n")
             sys.stdout.flush()
+            full_log_parts.append(line)
             return
 
-        event_type = event.get("type", "")
-        # DEBUG: Log the stream json (disabled currently)
-        # logger.debug(f"[{self.context_id}] Event content: {json.dumps(event, ensure_ascii=False)}")
+        # If provider has no parser, just output raw line
+        if not self.provider.parser:
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+            full_log_parts.append(line)
+            return
 
-        # Capture session_id as early as possible from any event that
-        # carries it (system/init, assistant, result, step_start).
-        # This is critical for Ctrl+C recovery: if the user interrupts
-        # before the final "result" event, we still have the session_id.
-        early_sid = event.get("session_id", "")
-        if early_sid and early_sid != self._session_id:
-            self._session_id = early_sid
+        parser = self.provider.parser
+
+        # 1. Capture session_id
+        session_id = parser.parse_session_id(event)
+        if session_id and session_id != self._session_id:
+            self._session_id = session_id
             if self._on_session_id_changed:
-                self._on_session_id_changed(early_sid)
+                self._on_session_id_changed(session_id)
 
-        if event_type == "system":
-            # CodeBuddy CLI: system/init event — session_id already
-            # captured above via the generic early-capture block.
-            #
-            # Claude Code also emits "system" events with subtype
-            # "api_retry" when an API request fails with a retryable
-            # error (rate_limit, server_error, etc.).  The CLI handles
-            # retries internally; we just display progress.
-            subtype = event.get("subtype", "")
-            if subtype == "api_retry":
-                error_cat = event.get("error", "unknown")
-                attempt = event.get("attempt", "?")
-                max_retries = event.get("max_retries", "?")
-                delay_ms = event.get("retry_delay_ms", 0)
-                http_status = event.get("error_status")
-                status_str = f" (HTTP {http_status})" if http_status else ""
-                msg = (
-                    f"   ⚠️  API retry {attempt}/{max_retries}: "
-                    f"{error_cat}{status_str}, "
-                    f"waiting {delay_ms / 1000:.1f}s..."
-                )
-                sys.stdout.write(f"\033[31m{msg}\033[0m\n")
-                sys.stdout.flush()
-                full_log_parts.append(msg)
+        # 2. Get semantic types
+        types = parser.get_json_type(event)
+        if not types:
+            return
 
-        elif event_type == "assistant":
-            # CodeBuddy/Claude format: AI message with content[] array
-            # Ensure newline between separate assistant messages
-            if assistant_text_parts and not assistant_text_parts[-1].endswith("\n"):
-                assistant_text_parts.append("\n")
-            message = event.get("message", {})
-            content_blocks = message.get("content", [])
-            for block in content_blocks:
-                block_type = block.get("type", "")
-                if block_type == "text":
-                    text = block.get("text", "")
-                    if text:
-                        assistant_text_parts.append(text)
-                        full_log_parts.append(text)
-                        sys.stdout.write(text)
-                        sys.stdout.flush()
-                elif block_type == "thinking":
-                    thinking = block.get("thinking", "")
-                    if thinking:
-                        sys.stdout.write(f"\n💭 [Thinking] {thinking}\n")
-                        sys.stdout.flush()
-                        full_log_parts.append(
-                            f"\n<details><summary>💭 Thinking</summary>\n\n{thinking}\n\n</details>\n"
-                        )
-                elif block_type == "tool_use":
-                    tool_name = block.get("name", "unknown")
-                    tool_input = block.get("input", {})
-                    self._display_tool_use(tool_name, tool_input)
-                    tool_log = self._format_tool_use_for_log(tool_name, tool_input)
-                    full_log_parts.append(tool_log)
-
-        elif event_type == "message":
-            # Gemini format: "message" event with "role" field
-            role = event.get("role", "")
-            if role == "assistant":
-                # Ensure newline between separate assistant messages
+        # 3. Parse text
+        if "text" in types:
+            for text in parser.parse_text(event):
                 if assistant_text_parts and not assistant_text_parts[-1].endswith("\n"):
                     assistant_text_parts.append("\n")
-                content = event.get("content", "")
-                if isinstance(content, str) and content:
-                    assistant_text_parts.append(content)
-                    full_log_parts.append(content)
-                    sys.stdout.write(content)
-                    sys.stdout.flush()
-            # role="user" is just an echo of the prompt — ignore it
-
-        elif event_type == "tool_use":
-            # Handle both Gemini and OpenCode formats
-            if "part" in event:
-                # OpenCode format: tool info in part.tool and part.state.input
-                part = event.get("part", {})
-                tool_name = part.get("tool", part.get("name", "unknown"))
-                state = part.get("state", {})
-                tool_input_raw = state.get("input", part.get("input", {}))
-                if isinstance(tool_input_raw, str):
-                    try:
-                        tool_input = json.loads(tool_input_raw)
-                    except json.JSONDecodeError:
-                        tool_input = {"raw": tool_input_raw}
-                else:
-                    tool_input = (
-                        tool_input_raw if isinstance(tool_input_raw, dict) else {}
-                    )
-            else:
-                # Gemini format: top-level tool_name and parameters
-                tool_name = event.get("tool_name", event.get("name", "unknown"))
-                tool_input = event.get("parameters", event.get("input", {}))
-            self._display_tool_use(tool_name, tool_input)
-            tool_log = self._format_tool_use_for_log(tool_name, tool_input)
-            full_log_parts.append(tool_log)
-
-        elif event_type == "tool_result":
-            # Gemini format: top-level tool_result event
-            status = event.get("status", "")
-            output = event.get("output", "")
-            error_info = event.get("error", {})
-            is_error = status == "error"
-            content = (
-                output
-                if output
-                else (
-                    error_info.get("message", "")
-                    if isinstance(error_info, dict)
-                    else str(error_info)
-                )
-            )
-            if content:
-                error_marker = " ❌" if is_error else ""
-                log_content = content[:limits.get('log_tool_result')]
-                if len(content) > limits.get('log_tool_result'):
-                    log_content += f"\n... ({len(content)} chars total)"
-                full_log_parts.append(
-                    f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
-                )
-
-        elif event_type == "user":
-            # CodeBuddy/Claude format: user message containing tool_result
-            message = event.get("message", {})
-            content_blocks = message.get("content", [])
-            if isinstance(content_blocks, list):
-                for block in content_blocks:
-                    if isinstance(block, dict) and block.get("type") == "tool_result":
-                        content = block.get("content", "")
-                        is_error = block.get("is_error", False)
-                        if isinstance(content, str) and content:
-                            error_marker = " ❌" if is_error else ""
-                            log_content = content[:limits.get('log_tool_result')]
-                            if len(content) > limits.get('log_tool_result'):
-                                log_content += f"\n... ({len(content)} chars total)"
-                            full_log_parts.append(
-                                f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
-                            )
-
-        elif event_type == "result":
-            # Final result — supports both CodeBuddy/Claude and Gemini formats
-            result_text = event.get("result", "")
-            # Only use result_text as fallback when no text was collected
-            # from streaming assistant events, to avoid duplicating content.
-            if result_text and not assistant_text_parts:
-                assistant_text_parts.append(result_text)
-
-            # Extract session_id from result event (Claude Code / CodeBuddy)
-            session_id = event.get("session_id", "")
-            if session_id and session_id != self._session_id:
-                self._session_id = session_id
-                if self._on_session_id_changed:
-                    self._on_session_id_changed(session_id)
-
-            # CodeBuddy/Claude fields
-            is_error = event.get("is_error", False)
-            duration_ms = event.get("duration_ms", 0)
-            num_turns = event.get("num_turns", 0)
-
-            # Gemini fields (fallback)
-            if not is_error and event.get("status") == "error":
-                is_error = True
-            stats = event.get("stats", {})
-            if duration_ms == 0 and isinstance(stats, dict):
-                duration_ms = stats.get("duration_ms", 0)
-            if num_turns == 0 and isinstance(stats, dict):
-                num_turns = stats.get("tool_calls", 0)
-
-            status = "❌ Error" if is_error else "✅ Done"
-            summary = (
-                f"\n--- {status} ({num_turns} turns, {duration_ms / 1000:.1f}s) ---\n"
-            )
-            if is_error:
-                sys.stdout.write(f"\033[31m{summary}\033[0m")
-            else:
-                sys.stdout.write(summary)
-            sys.stdout.flush()
-            full_log_parts.append(f"\n{summary}")
-
-            # When is_error is True and no assistant text was collected,
-            # the caller would only see "empty response".  Attach error
-            # details so the AICallError message is informative.
-            if is_error and not assistant_text_parts:
-                error_detail = event.get("error", result_text or "unknown error")
-                if isinstance(error_detail, dict):
-                    error_detail = error_detail.get("message", str(error_detail))
-                assistant_text_parts.append(f"[ERROR] {error_detail}")
-
-        elif event_type == "step_start":
-            # OpenCode format: session start event — extract session ID
-            # sessionID may be at top level or in data
-            session_id = event.get("sessionID", "")
-            if not session_id:
-                data = event.get("data", {})
-                if isinstance(data, dict):
-                    session_id = data.get("sessionID", data.get("sessionId", ""))
-            if session_id:
-                self._session_id = session_id
-                # Notify external listener for state persistence
-                if self._on_session_id_changed:
-                    self._on_session_id_changed(session_id)
-
-        elif event_type == "text":
-            # OpenCode format: text event with part.text
-            part = event.get("part", {})
-            text = part.get("text", "")
-            if text:
                 assistant_text_parts.append(text)
                 full_log_parts.append(text)
                 sys.stdout.write(text)
                 sys.stdout.flush()
 
-        elif event_type == "step_finish":
-            # OpenCode format: step finished — extract token info from part
-            part = event.get("part", {})
-            tokens = part.get("tokens", {})
-            total_tokens = tokens.get("total", 0) if isinstance(tokens, dict) else 0
-            cost = part.get("cost", 0)
-            reason = part.get("reason", "stop")
-            status = "❌ Error" if reason == "error" else "✅ Done"
-            summary = (
-                f"\n--- {status} (tokens: {total_tokens}, cost: ${cost:.4f}) ---\n"
-            )
-            sys.stdout.write(summary)
-            sys.stdout.flush()
-            full_log_parts.append(f"\n{summary}")
+        # 4. Parse thinking
+        if "thinking" in types:
+            for thinking in parser.parse_thinking(event):
+                sys.stdout.write(f"\n💭 [Thinking] {thinking}\n")
+                sys.stdout.flush()
+                full_log_parts.append(
+                    f"\n<details><summary>💭 Thinking</summary>\n\n{thinking}\n\n</details>\n"
+                )
 
-        elif event_type == "thread.started":
-            # Codex format: session/thread start — capture thread_id as session_id
-            thread_id = event.get("thread_id", "")
-            if thread_id and thread_id != self._session_id:
-                self._session_id = thread_id
-                if self._on_session_id_changed:
-                    self._on_session_id_changed(thread_id)
-
-        elif event_type == "item.completed":
-            # Codex format: completed item (message, tool call, tool result)
-            item = event.get("item", {})
-            item_type = item.get("type", "")
-
-            if item_type == "agent_message":
-                # AI assistant text response
-                text = item.get("text", "")
-                if text:
-                    if assistant_text_parts and not assistant_text_parts[-1].endswith(
-                        "\n"
-                    ):
-                        assistant_text_parts.append("\n")
-                    assistant_text_parts.append(text)
-                    full_log_parts.append(text)
-                    sys.stdout.write(text)
-                    if not text.endswith("\n"):
-                        sys.stdout.write("\n")
-                    sys.stdout.flush()
-
-            elif item_type == "command_execution":
-                # Codex runs tools as "command_execution" items.
-                # item.started has status="in_progress" (no output yet);
-                # item.completed has the full aggregated_output + exit_code.
-                status = item.get("status", "")
-                command = item.get("command", "")
-                output = item.get("aggregated_output", "")
-                exit_code = item.get("exit_code")
-
-                if status == "completed" and command:
-                    # Display tool call
-                    self._display_tool_use("Bash", {"command": command})
-                    tool_log = self._format_tool_use_for_log("Bash", {"command": command})
-                    full_log_parts.append(tool_log)
-
-                    # Display/log tool result
-                    if output:
-                        is_error = exit_code is not None and exit_code != 0
-                        sys.stdout.flush()
-                        error_marker = " ❌" if is_error else ""
-                        log_content = output[:limits.get('log_tool_result')]
-                        if len(output) > limits.get('log_tool_result'):
-                            log_content += f"\n... ({len(output)} chars total)"
-                        full_log_parts.append(
-                            f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
-                        )
-
-            elif item_type == "tool_call":
-                # Generic tool invocation (non-command_execution)
-                tool_name = item.get("name", item.get("tool_name", "unknown"))
-                tool_input = item.get("arguments", item.get("input", {}))
-                if isinstance(tool_input, str):
-                    try:
-                        tool_input = json.loads(tool_input)
-                    except json.JSONDecodeError:
-                        tool_input = {"raw": tool_input}
-                self._display_tool_use(tool_name, tool_input)
-                tool_log = self._format_tool_use_for_log(tool_name, tool_input)
+        # 5. Parse tool use
+        if "tool_use" in types:
+            for tool in parser.parse_tool_use(event):
+                self._display_tool_use(tool.name, tool.input)
+                tool_log = self._format_tool_use_for_log(tool.name, tool.input)
                 full_log_parts.append(tool_log)
 
-            elif item_type == "tool_call_output":
-                # Tool result
-                output = item.get("output", item.get("result", ""))
-                is_error = item.get("is_error", False)
-                if isinstance(output, str) and output:
-                    error_marker = " ❌" if is_error else ""
-                    log_content = output[:limits.get('log_tool_result')]
-                    if len(output) > limits.get('log_tool_result'):
-                        log_content += f"\n... ({len(output)} chars total)"
+        # 6. Parse tool result
+        if "tool_result" in types:
+            for content in parser.parse_tool_result(event):
+                if content:
+                    log_content = content[:limits.get('log_tool_result')]
+                    if len(content) > limits.get('log_tool_result'):
+                        log_content += f"\n... ({len(content)} chars total)"
                     full_log_parts.append(
-                        f"\n<details><summary>Tool Result{error_marker}</summary>\n\n```\n{log_content}\n```\n</details>\n"
+                        f"\n<details><summary>Tool Result</summary>\n\n```\n{log_content}\n```\n</details>\n"
                     )
 
-            # Silently ignore: "reasoning" (thinking), etc.
+        # 7. Parse result
+        if "result" in types:
+            info = parser.parse_result(event)
+            if info:
+                # Only use result_text as fallback when no text was collected
+                if info.result_text and not assistant_text_parts:
+                    assistant_text_parts.append(info.result_text)
 
-        elif event_type == "turn.completed":
-            # Codex format: turn finished — display summary
-            usage = event.get("usage", {})
-            input_tokens = usage.get("input_tokens", 0)
-            output_tokens = usage.get("output_tokens", 0)
-            total_tokens = input_tokens + output_tokens
-            status = "✅ Done"
-            summary = f"\n--- {status} (tokens: {total_tokens}) ---\n"
-            sys.stdout.write(summary)
-            sys.stdout.flush()
-            full_log_parts.append(f"\n{summary}")
+                # Format summary
+                status = "❌ Error" if info.is_error else "✅ Done"
+                if info.num_turns > 0 and info.duration_ms > 0:
+                    summary = f"\n--- {status} ({info.num_turns} turns, {info.duration_ms / 1000:.1f}s) ---\n"
+                elif info.tokens:
+                    total_tokens = info.tokens.get("total", 0) if isinstance(info.tokens, dict) else 0
+                    if total_tokens == 0 and isinstance(info.tokens, dict):
+                        total_tokens = info.tokens.get("input_tokens", 0) + info.tokens.get("output_tokens", 0)
+                    summary = f"\n--- {status} (tokens: {total_tokens}) ---\n"
+                else:
+                    summary = f"\n--- {status} ---\n"
 
-        # Silently ignore: "init", "system", "topic", "item.started",
-        # "turn.started", etc.
+                if info.is_error:
+                    sys.stdout.write(f"\033[31m{summary}\033[0m")
+                else:
+                    sys.stdout.write(summary)
+                sys.stdout.flush()
+                full_log_parts.append(f"\n{summary}")
+
+                # When is_error is True and no assistant text was collected,
+                # attach error details
+                if info.is_error and not assistant_text_parts:
+                    error_detail = info.reason or "unknown error"
+                    assistant_text_parts.append(f"[ERROR] {error_detail}")
 
     def _display_tool_use(self, tool_name: str, tool_input: dict):
-        """Display a tool use event with a readable summary."""
-        tool_name_lower = tool_name.lower()
-        if tool_name_lower in ("bash", "run_shell_command"):
-            cmd = tool_input.get("command", "")
-            sys.stdout.write(f"\n🔧 [{tool_name}] {cmd}\n")
-        elif tool_name_lower in ("edit", "write", "multiedit", "write_file"):
+        """Display a tool use event with a readable summary.
+
+        Uses the provider's tool_names configuration to categorize tools.
+        """
+        tool_names_config = {}
+        if self.provider.config and self.provider.config.tool_names:
+            tool_names_config = self.provider.config.tool_names
+
+        # Valid categories
+        VALID_CATEGORIES = {"read", "write", "glob", "bash", "list"}
+
+        name_lower = tool_name.lower()
+
+        # Build reverse lookup: tool_name_pattern -> category
+        category = None
+        for cat, patterns_str in tool_names_config.items():
+            if cat not in VALID_CATEGORIES:
+                continue  # Skip invalid categories
+            if not patterns_str:
+                continue
+            patterns = [p.strip().lower() for p in patterns_str.split(";") if p.strip()]
+            if name_lower in patterns:
+                category = cat
+                break
+
+        # Default categories if not configured
+        if category is None:
+            if name_lower in ("read", "read_file"):
+                category = "read"
+            elif name_lower in ("write", "write_file", "edit", "multiedit", "replace"):
+                category = "write"
+            elif name_lower in ("glob", "grep", "grep_search"):
+                category = "glob"
+            elif name_lower in ("bash", "run_shell_command"):
+                category = "bash"
+            elif name_lower in ("ls", "list_dir", "list_directory"):
+                category = "list"
+
+        # Display based on category
+        if category == "read":
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
-            sys.stdout.write(f"\n📝 [{tool_name}] {path}\n")
-        elif tool_name_lower in ("read", "read_file"):
+            sys.stdout.write(f"\n📖 [Read] {path}\n")
+        elif category == "write":
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
-            sys.stdout.write(f"\n📖 [{tool_name}] {path}\n")
-        elif tool_name_lower in ("glob", "grep"):
+            sys.stdout.write(f"\n📝 [Write] {path}\n")
+        elif category == "glob":
             pattern = tool_input.get("pattern", tool_input.get("regex", ""))
-            sys.stdout.write(f"\n🔍 [{tool_name}] {pattern}\n")
+            sys.stdout.write(f"\n🔍 [Glob] {pattern}\n")
+        elif category == "bash":
+            cmd = tool_input.get("command", "")
+            sys.stdout.write(f"\n🔧 [Bash] {cmd}\n")
+        elif category == "list":
+            path = tool_input.get("path", ".")
+            sys.stdout.write(f"\n📂 [List] {path}\n")
         else:
             sys.stdout.write(f"\n🔧 [{tool_name}]\n")
         sys.stdout.flush()
@@ -762,6 +526,8 @@ class AIClient:
         """
         Format a tool use event as a Markdown string for the conversation log.
 
+        Uses the provider's tool_names configuration to categorize tools.
+
         Args:
             tool_name: Tool name (e.g. "Bash", "Read", "Edit")
             tool_input: Tool input parameters
@@ -769,14 +535,48 @@ class AIClient:
         Returns:
             str: Formatted markdown string for the tool call
         """
-        tool_name_lower = tool_name.lower()
-        if tool_name_lower in ("bash", "run_shell_command"):
+        tool_names_config = {}
+        if self.provider.config and self.provider.config.tool_names:
+            tool_names_config = self.provider.config.tool_names
+
+        # Valid categories
+        VALID_CATEGORIES = {"read", "write", "glob", "bash", "list"}
+
+        name_lower = tool_name.lower()
+
+        # Build reverse lookup: tool_name_pattern -> category
+        category = None
+        for cat, patterns_str in tool_names_config.items():
+            if cat not in VALID_CATEGORIES:
+                continue
+            if not patterns_str:
+                continue
+            patterns = [p.strip().lower() for p in patterns_str.split(";") if p.strip()]
+            if name_lower in patterns:
+                category = cat
+                break
+
+        # Default categories if not configured
+        if category is None:
+            if name_lower in ("read", "read_file"):
+                category = "read"
+            elif name_lower in ("write", "write_file", "edit", "multiedit", "replace"):
+                category = "write"
+            elif name_lower in ("glob", "grep", "grep_search"):
+                category = "glob"
+            elif name_lower in ("bash", "run_shell_command"):
+                category = "bash"
+            elif name_lower in ("ls", "list_dir", "list_directory"):
+                category = "list"
+
+        # Format based on category
+        if category == "bash":
             cmd = tool_input.get("command", "")
             return f"\n🔧 **[Bash]**\n```bash\n{cmd}\n```\n"
-        elif tool_name_lower in ("edit", "write"):
+        elif category == "write":
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             content = tool_input.get("content", tool_input.get("new_string", ""))
-            result = f"\n📝 **[{tool_name}]** `{path}`\n"
+            result = f"\n📝 **[Write]** `{path}`\n"
             if content:
                 # Truncate very long edits for readability
                 preview = content[:limits.get('log_tool_result')]
@@ -784,27 +584,28 @@ class AIClient:
                     preview += f"\n... ({len(content)} chars total)"
                 result += f"```\n{preview}\n```\n"
             return result
-        elif tool_name_lower == "multiEdit":
-            path = tool_input.get("file_path", tool_input.get("filePath", ""))
-            edits = tool_input.get("edits", [])
-            return f"\n📝 **[MultiEdit]** `{path}` ({len(edits)} edits)\n"
-        elif tool_name_lower in ("read", "read_file"):
+        elif category == "read":
             path = tool_input.get("file_path", tool_input.get("filePath", ""))
             return f"\n📖 **[Read]** `{path}`\n"
-        elif tool_name_lower in ("glob", "grep"):
+        elif category == "glob":
             pattern = tool_input.get("pattern", tool_input.get("regex", ""))
             return f"\n🔍 **[{tool_name}]** `{pattern}`\n"
-        elif tool_name_lower == "todoread":
-            return f"\n📋 **[TodoRead]**\n"
-        elif tool_name_lower in ("taskcreate", "taskupdate"):
-            task_desc = tool_input.get("description", tool_input.get("task", ""))
-            if isinstance(task_desc, str) and task_desc:
-                return f"\n🔧 **[{tool_name}]** {task_desc[:limits.get('log_tool_result')]}\n"
-            return f"\n🔧 **[{tool_name}]**\n"
+        elif category == "list":
+            path = tool_input.get("path", ".")
+            return f"\n📂 **[List]** `{path}`\n"
         else:
-            # Generic tool
-            summary = json.dumps(tool_input, ensure_ascii=False)[:limits.get('log_tool_result')]
-            return f"\n🔧 **[{tool_name}]** {summary}\n"
+            # Generic tool - check for special cases
+            if name_lower == "todoread":
+                return f"\n📋 **[TodoRead]**\n"
+            elif name_lower in ("taskcreate", "taskupdate"):
+                task_desc = tool_input.get("description", tool_input.get("task", ""))
+                if isinstance(task_desc, str) and task_desc:
+                    return f"\n🔧 **[{tool_name}]** {task_desc[:limits.get('log_tool_result')]}\n"
+                return f"\n🔧 **[{tool_name}]**\n"
+            else:
+                # Generic tool
+                summary = json.dumps(tool_input, ensure_ascii=False)[:limits.get('log_tool_result')]
+                return f"\n🔧 **[{tool_name}]** {summary}\n"
 
     @staticmethod
     def _parse_cli_error(raw_error: str) -> tuple:

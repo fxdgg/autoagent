@@ -6,15 +6,14 @@ Covers both *nested* and *looping* task types.  Corresponds to
 ``LoopingTaskExecutor._ai_analyze_failure()`` in task_executor.py.
 """
 
-from typing import List, Optional, Tuple
-
 from prompts.shared import indent_block
 from util.truncation_limits import limits
 
 # Role definition for failure analysis prompts
 ROLE_FAILURE_ANALYST = (
     "You are a failure analysis expert. Analyze the subtask failure below "
-    "and decide the best retry strategy."
+    "and decide the best retry strategy.\n"
+    "DO NOT modifying source code, tests, configs, data, generated files, etc."
 )
 
 
@@ -22,17 +21,7 @@ def _build_workflow_with_status(
     failed_id: str,
     subtasks_with_status: list,
 ) -> str:
-    """Build the workflow section with status annotations.
-
-    Each subtask is shown with its status (COMPLETED / FAILED / pending).
-    The failed subtask is marked with ``→``.  Completed subtasks include
-    their criteria and summary.
-
-    Args:
-        failed_id: ID of the failed subtask.
-        subtasks_with_status: List of dicts with keys: subtask_id, name,
-            status, completion_criteria, ai_reasoning.
-    """
+    """Build the workflow section with status annotations."""
     lines = []
     for st in subtasks_with_status:
         st_id = str(st.get('display_subtask_id', st['subtask_id']))
@@ -40,23 +29,24 @@ def _build_workflow_with_status(
         status = st.get('status', 'pending')
 
         if st_id == failed_id:
-            lines.append(f"→ {st_id}. {name} (FAILED)")
+            failed_status = "❌ not completed"
+            status_detail = st.get('ai_reasoning', '')
+            if status_detail:
+                failed_status = f"{failed_status}: {status_detail[:limits.get('history_summary')]}"
+            lines.append(f"→ {st_id}. {name} ({failed_status})")
             if st.get('completion_criteria'):
-                lines.append(f"        Criteria:")
+                lines.append("        Criteria:")
                 lines.append(indent_block(st['completion_criteria'], 12))
         elif status == 'completed':
-            lines.append(f"  {st_id}. {name} (COMPLETED)")
+            lines.append(f"  {st_id}. {name} (✅ completed)")
             if st.get('completion_criteria'):
-                lines.append(f"        Criteria:")
+                lines.append("        Criteria:")
                 lines.append(indent_block(st['completion_criteria'], 12))
-            if st.get('ai_reasoning'):
-                lines.append(f"        Summary:")
-                lines.append(indent_block(
-                    st['ai_reasoning'][:limits.get('history_summary')], 12
-                ))
         else:
-            # pending / in_progress — just show name
             lines.append(f"  {st_id}. {name}")
+            if st.get('completion_criteria'):
+                lines.append("        Criteria:")
+                lines.append(indent_block(st['completion_criteria'], 12))
 
     return "\n".join(lines)
 
@@ -71,24 +61,9 @@ def build_failure_analysis_prompt(
     failed_subtask_history: str = "",
     previous_subtask_id: str = "",
     subtasks_with_status: list = None,
+    project_description: str = "",
 ) -> str:
-    """Build the failure-analysis prompt for both *nested* and *looping* tasks.
-
-    Args:
-        task: Parent task configuration dict.
-        failed_subtask: The subtask that failed.
-        all_subtasks: All sibling subtasks (used for available IDs).
-        error_text: The failed subtask's AI output (truncated).
-        prev_decisions_text: Pre-formatted previous AI decisions block
-            (may be empty).
-        previous_context: Summary from the previous (successful) subtask.
-        failed_subtask_history: Pre-formatted per-attempt history.
-        previous_subtask_id: ID of the previous subtask.
-        subtasks_with_status: List of dicts with keys: subtask_id, name,
-            status, completion_criteria, ai_reasoning.  When provided,
-            a ``<workflow>`` section is built from this list.  When
-            ``None``, the workflow section is omitted.
-    """
+    """Build the failure-analysis prompt for both *nested* and *looping* tasks."""
     failed_id = str(failed_subtask.get('_display_id', failed_subtask['id']))
     available_ids = [str(s.get('_display_id', s['id'])) for s in all_subtasks]
     I4 = 4
@@ -99,13 +74,25 @@ def build_failure_analysis_prompt(
     # -- <failed_subtask> --
     fs_inner = []
     fs_inner.append(f"    <task_name>\n{indent_block(task['name'], I8)}\n    </task_name>")
-    fs_inner.append(f"    <main_task_completion_criteria>\n{indent_block(task['completion_criteria'], I8)}\n    </main_task_completion_criteria>")
+    fs_inner.append(
+        "    <main_task_completion_criteria>\n"
+        f"{indent_block(task['completion_criteria'], I8)}\n"
+        "    </main_task_completion_criteria>"
+    )
 
     if subtasks_with_status:
         workflow_text = _build_workflow_with_status(failed_id, subtasks_with_status)
         fs_inner.append(f"    <workflow>\n{indent_block(workflow_text, I8)}\n    </workflow>")
 
     parts.append("<failed_subtask>\n" + "\n\n".join(fs_inner) + "\n</failed_subtask>")
+
+    # -- <context> --
+    if project_description:
+        parts.append(
+            "<context>\n"
+            f"    <project_description>\n{indent_block(project_description, I8)}\n    </project_description>\n"
+            "</context>"
+        )
 
     # -- <outputs> --
     outputs_inner = []
@@ -127,7 +114,11 @@ def build_failure_analysis_prompt(
 
     # -- <previous_failure_analyses> (conditional) --
     if prev_decisions_text:
-        parts.append(f"<previous_failure_analyses>\n{indent_block(prev_decisions_text, I4)}\n</previous_failure_analyses>")
+        parts.append(
+            f"<previous_failure_analyses>\n"
+            f"{indent_block(prev_decisions_text, I4)}\n"
+            f"</previous_failure_analyses>"
+        )
 
     # -- <instructions> --
     instructions = f"""\
@@ -143,7 +134,7 @@ Respond with a JSON object:
 ```
 
 - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
-- `suggested_fix`: Will be shown to the AI executing the retry — be specific.
+- `suggested_fix`: Will be shown to the AI executing the retry - be specific.
 - Available subtask IDs: {available_ids}"""
 
     parts.append(f"<instructions>\n{indent_block(instructions, I4)}\n</instructions>")

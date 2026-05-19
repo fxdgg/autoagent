@@ -39,6 +39,7 @@ from orchestrator.orchestrator_common import (
     load_orchestrator_config,
 )
 from orchestrator.ai_orchestrator import AISchedulerMixin
+from orchestrator.fatal_analysis import FatalAnalysisMixin, FATAL_ANALYSIS_ID
 from util.truncation_limits import limits
 from util.default_value import DEFAULTS
 
@@ -46,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 
 
-class TodoOrchestrator(AISchedulerMixin):
+class TodoOrchestrator(FatalAnalysisMixin, AISchedulerMixin):
     """
     Main orchestrator class that manages task loading, scheduling, and execution.
     
@@ -194,6 +195,7 @@ class TodoOrchestrator(AISchedulerMixin):
         self.project_description = ''
         self.scoped_descriptions = {}
         self.ai_orchestrator = None  # Populated by _load_todos if ai_orchestrator is present
+        self._last_fatal_event = None
         self.todos = self._load_todos(allow_empty=self.ideas_watcher is not None)
 
     def _load_todos(self, allow_empty: bool = False) -> list:
@@ -271,6 +273,8 @@ class TodoOrchestrator(AISchedulerMixin):
             prev_top_id: int | None = None
             for task in tasks:
                 raw = task.get('id')
+                if str(raw) == FATAL_ANALYSIS_ID:
+                    continue
                 if raw is not None:
                     str_id = str(raw)
                     if str_id.isdigit():
@@ -409,6 +413,12 @@ class TodoOrchestrator(AISchedulerMixin):
         raw_id = task.get('id')
         if raw_id is not None:
             str_id = str(raw_id)
+            if not is_subtask and str_id == FATAL_ANALYSIS_ID:
+                if task_type not in ('simple', 'long_running'):
+                    raise ConfigError(
+                        "Reserved task 'fatal_analysis' must use type 'simple' or 'long_running'"
+                    )
+                return
             parts = str_id.split('.')
             if is_subtask:
                 # Subtask ID must be X.Y (or deeper, e.g. X.Y.Z)
@@ -595,6 +605,56 @@ class TodoOrchestrator(AISchedulerMixin):
             print(f"❌ Configuration error: {e}")
             return False
 
+    def _find_task_index(self, task_id: str, tasks: list) -> int | None:
+        task_id = str(task_id)
+        for idx, task in enumerate(tasks):
+            if str(task.get('_display_id', task['id'])) == task_id or str(task['id']) == task_id:
+                return idx
+        return None
+
+    def _handle_linear_fatal_decision(self, decision: dict, tasks_to_run: list) -> int | None:
+        retry_from = str(decision.get("retry_from", "stop"))
+        if retry_from == "stop":
+            return None
+
+        suggested_fix = decision.get("suggested_fix", "")
+        failed_at = (self._last_fatal_event or {}).get("failed_task_id", retry_from)
+
+        if "." in retry_from:
+            parent_id = retry_from.split(".", 1)[0]
+            parent_index = self._find_task_index(parent_id, tasks_to_run)
+            if parent_index is None:
+                return None
+            parent_task = tasks_to_run[parent_index]
+            parent_state = self.state_manager.get_task_state(str(parent_task['id']))
+            self.state_manager.add_ai_decision(str(parent_task['id']), {
+                "attempt": parent_state.get('attempts', 0) + 1,
+                "_main_round": len(parent_state.get('main_task_evaluations', [])) + 1,
+                "loop": parent_state.get('current_loop', 1),
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "failed_at": failed_at,
+                "retry_from": retry_from,
+                "suggested_fix": suggested_fix,
+                "source": "fatal_analysis",
+            })
+            self.state_manager.mark_task_status(str(parent_task['id']), "in_progress")
+            return parent_index
+
+        retry_index = self._find_task_index(retry_from, tasks_to_run)
+        if retry_index is None:
+            return None
+        retry_task = tasks_to_run[retry_index]
+        self.state_manager.add_ai_decision(str(retry_task['id']), {
+            "attempt": self.state_manager.get_task_state(str(retry_task['id'])).get('attempts', 0) + 1,
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "failed_at": failed_at,
+            "retry_from": retry_from,
+            "suggested_fix": suggested_fix,
+            "source": "fatal_analysis",
+        })
+        self.state_manager.mark_task_status(str(retry_task['id']), "pending")
+        return retry_index
+
     def run(
         self,
         task_id: int = None,
@@ -621,12 +681,15 @@ class TodoOrchestrator(AISchedulerMixin):
         
         # Determine which tasks to run
         if task_id is not None:
-            tasks_to_run = [t for t in self.todos if str(t['id']) == str(task_id)]
+            tasks_to_run = [
+                t for t in self._normal_tasks()
+                if str(t['id']) == str(task_id)
+            ]
             if not tasks_to_run:
                 print(f"❌ Task {task_id} not found")
                 return {"total_tasks": 0, "successful_tasks": 0, "failed_tasks": 0, "results": {}}
         else:
-            tasks_to_run = self.todos
+            tasks_to_run = self._normal_tasks()
         
         print(f"{'=' * 60}")
         print(f"  AutoAgent")
@@ -636,7 +699,9 @@ class TodoOrchestrator(AISchedulerMixin):
         print(f"  Model: {self.provider.model}")
         print(f"{'=' * 60}")
         
-        for task in tasks_to_run:
+        idx = 0
+        while idx < len(tasks_to_run):
+            task = tasks_to_run[idx]
             tid = str(task['id'])
             
             # Check if task is already completed
@@ -644,6 +709,7 @@ class TodoOrchestrator(AISchedulerMixin):
             if task_state.get('status') == 'completed':
                 print(f"\n⏭️  Task {tid}: {task['name']} (already completed, skipping)")
                 results[tid] = True
+                idx += 1
                 continue
             
             print(f"\n{'─' * 60}")
@@ -657,14 +723,30 @@ class TodoOrchestrator(AISchedulerMixin):
                 results[tid] = success
                 
                 if success:
-                    print(f"\n✅ Task {tid} completed successfully!")
+                    print(f"\nTask {tid} completed successfully!")
+                    idx += 1
                 else:
-                    print(f"\n❌ Task {tid} failed!")
+                    if self._last_fatal_event:
+                        decision = self._run_fatal_analysis(
+                            self._last_fatal_event,
+                            project_description=self._get_description_for_task(tid),
+                        )
+                        retry_idx = self._handle_linear_fatal_decision(decision, tasks_to_run)
+                        self._last_fatal_event = None
+                        if retry_idx is None:
+                            print(f"\nFatal analysis stopped AutoAgent.")
+                            break
+                        print(f"\nFatal analysis retry_from = {decision.get('retry_from')}")
+                        idx = retry_idx
+                    else:
+                        print(f"\nTask {tid} failed!")
+                        idx += 1
                     
             except Exception as e:
                 logger.error(f"Unexpected error executing task {tid}: {e}", exc_info=True)
                 print(f"\n❌ Task {tid} error: {e}")
                 results[tid] = False
+                idx += 1
         
         duration = time.time() - start_time
         successful = sum(1 for v in results.values() if v)
@@ -751,27 +833,56 @@ class TodoOrchestrator(AISchedulerMixin):
             context_id=context_id,
             context_created_at=time.strftime("%Y-%m-%d %H:%M:%S"),
         )
+        self._last_fatal_event = None
         
         try:
             task_description = self._get_description_for_task(task_id)
             if task_type == 'simple':
-                return self.simple_executor.execute(
+                success = self.simple_executor.execute(
                     task, client, self.state_manager, is_subtask=False,
                     conv_logger=self.conv_logger,
                     project_description=task_description,
                 )
+                if not success and self.simple_executor.last_error_type == "fatal":
+                    self._last_fatal_event = self._build_fatal_event(
+                        current_task=task,
+                        failed_task=task,
+                        reason=self.simple_executor.last_fatal_reason,
+                        response_text=self.simple_executor.last_response_text,
+                    )
+                return success
             elif task_type == 'nested':
-                return self.nested_executor.execute(
+                success = self.nested_executor.execute(
                     task, client, self.state_manager,
                     conv_logger=self.conv_logger,
                     project_description=task_description,
                 )
+                if not success and self.nested_executor.last_fatal_event:
+                    event = self.nested_executor.last_fatal_event
+                    self._last_fatal_event = self._build_fatal_event(
+                        current_task=task,
+                        failed_task=event["failed_task"],
+                        reason=event.get("reason", ""),
+                        response_text=event.get("response_text", ""),
+                        round_label=event.get("round_label", ""),
+                    )
+                return success
             elif task_type == 'looping':
-                return self.looping_executor.execute(
+                success = self.looping_executor.execute(
                     task, client, self.state_manager,
                     conv_logger=self.conv_logger,
                     project_description=task_description,
                 )
+                if not success and self.looping_executor.last_fatal_event:
+                    event = self.looping_executor.last_fatal_event
+                    self._last_fatal_event = self._build_fatal_event(
+                        current_task=task,
+                        failed_task=event["failed_task"],
+                        reason=event.get("reason", ""),
+                        response_text=event.get("response_text", ""),
+                        round_label=event.get("round_label", ""),
+                    )
+                return success
             elif task_type == 'long_running':
                 lr_executor = SubtaskExecutor(
                     session_dir=self.session_dir,
@@ -786,6 +897,14 @@ class TodoOrchestrator(AISchedulerMixin):
                         'project_description': task_description,
                     },
                 )
+                if not result.success and result.error_type == "fatal":
+                    fatal_payload = result.fatal_event or {}
+                    self._last_fatal_event = self._build_fatal_event(
+                        current_task=task,
+                        failed_task=task,
+                        reason=fatal_payload.get("reason") or result.output,
+                        response_text=fatal_payload.get("response_text") or result.response_text,
+                    )
                 return result.success
             else:
                 raise ConfigError(f"Unknown task type: {task_type}")
@@ -818,6 +937,93 @@ class TodoOrchestrator(AISchedulerMixin):
             print(f"   ❌ AI call error: {e}")
             self.state_manager.mark_task_status(task_id, "failed", error=str(e))
             return False
+
+    def _find_current_task(self) -> Optional[str]:
+        """Find the current task (first non-completed task in order).
+
+        For nested tasks, returns the current subtask ID if the parent is in_progress.
+        Otherwise returns the top-level task ID.
+
+        Returns:
+            str: Task ID of the current task, or None if all tasks are completed.
+        """
+        for task in self._normal_tasks():
+            tid = str(task['id'])
+            state = self.state_manager.get_task_state(tid)
+            status = state.get('status')
+
+            if status == 'completed':
+                continue
+
+            # If this is a nested task in progress, find the current subtask
+            if status == 'in_progress' and task.get('type') == 'nested':
+                subtasks = task.get('subtasks', [])
+                for subtask in subtasks:
+                    stid = str(subtask['id'])
+                    sstate = self.state_manager.get_task_state(stid)
+                    if sstate.get('status') != 'completed':
+                        return stid
+
+            return tid
+        return None
+
+    def _find_previous_task(self, current_task_id: str) -> Optional[str]:
+        """Find the previous task relative to the given task ID.
+
+        For subtask X.1, returns task X-1 (the previous top-level task).
+        For other tasks, returns the task immediately before in the list.
+
+        Args:
+            current_task_id: The current task ID (e.g., "3", "3.2")
+
+        Returns:
+            str: Previous task ID, or None if this is the first task.
+        """
+        # Handle subtask X.1 → task X-1
+        if '.' in current_task_id:
+            parts = current_task_id.split('.')
+            if len(parts) == 2 and parts[1] == '1':
+                # Subtask X.1 → task X-1
+                parent_id = int(parts[0])
+                if parent_id > 1:
+                    return str(parent_id - 1)
+                return None
+
+        # For top-level tasks or other subtasks, find the previous task in the list
+        tasks = self._normal_tasks()
+        for i, task in enumerate(tasks):
+            if str(task['id']) == current_task_id:
+                if i > 0:
+                    return str(tasks[i - 1]['id'])
+                return None
+        return None
+
+    def handle_redo(self):
+        """Handle --redo: reset the current task and prepare to re-execute it."""
+        current = self._find_current_task()
+        if not current:
+            print("✅ All tasks are completed. Nothing to redo.")
+            return
+
+        print(f"🔄 Resetting task {current}...")
+        self.state_manager.reset_task(current)
+        print(f"✅ Task {current} has been reset. Run again to re-execute it.")
+
+    def handle_back(self):
+        """Handle --back: roll back to the previous task."""
+        current = self._find_current_task()
+        if not current:
+            print("✅ All tasks are completed. Nothing to roll back.")
+            return
+
+        previous = self._find_previous_task(current)
+        if not previous:
+            print(f"⚠️  Task {current} is the first task. Cannot roll back further.")
+            return
+
+        print(f"⏪ Rolling back from task {current} to task {previous}...")
+        self.state_manager.reset_task(previous)
+        print(f"✅ Rolled back to task {previous}. Run again to re-execute it.")
 
     def reset(self):
         """Reset all task states by removing the entire session directory."""

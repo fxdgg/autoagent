@@ -1,48 +1,41 @@
 """
 Prompt builder for main-task completion evaluation.
 
-Corresponds to ``NestedTaskExecutor._ai_evaluate_main_task()``
-in task_executor.py.
+Corresponds to ``NestedTaskExecutor._ai_evaluate_main_task()`` in
+task_executor.py.
 """
 
-from typing import List
-
 from prompts.shared import indent_block
-from util.truncation_limits import limits
 
 # Role definition for main-task evaluation prompts
 ROLE_MAIN_EVALUATOR = (
     "You are a task evaluation expert. Evaluate whether the main task's "
-    "completion criteria have been fully met based on the execution results."
+    "completion criteria have been fully met based on the execution results.\n"
+    "DO NOT modifying source code, tests, configs, data, generated files, etc."
 )
 
 
+def _format_status(status: str) -> str:
+    """Format workflow status labels the same way as documented prompts."""
+    if status == "completed":
+        return "✅ completed"
+    if status == "failed":
+        return "❌ not completed"
+    return status or "unknown"
+
+
 def _build_workflow_with_results(subtasks_with_status: list) -> str:
-    """Build the workflow section for main-task evaluation.
-
-    All subtasks are expected to be completed at this point, so each
-    entry shows ``(COMPLETED)`` with its criteria and result summary.
-
-    Args:
-        subtasks_with_status: List of dicts with keys: subtask_id, name,
-            status, completion_criteria, ai_reasoning.
-    """
+    """Build the workflow section for main-task evaluation."""
     lines = []
     for st in subtasks_with_status:
         st_id = str(st.get('display_subtask_id', st['subtask_id']))
         name = st['name']
-        status = st.get('status', 'unknown')
+        status = _format_status(st.get('status', 'unknown'))
 
-        tag = "COMPLETED" if status == "completed" else status.upper()
-        lines.append(f"  {st_id}. {name} ({tag})")
+        lines.append(f"  {st_id}. {name} ({status})")
         if st.get('completion_criteria'):
             lines.append("        Criteria:")
             lines.append(indent_block(st['completion_criteria'], 12))
-        if st.get('ai_reasoning'):
-            lines.append("        Result:")
-            lines.append(indent_block(
-                st['ai_reasoning'][:limits.get('history_summary')], 12
-            ))
 
     return "\n".join(lines)
 
@@ -52,18 +45,9 @@ def build_main_evaluation_prompt(
     subtasks: list,
     prev_eval_section: str,
     subtasks_with_status: list = None,
+    project_description: str = "",
 ) -> str:
-    """Build the prompt that asks AI to evaluate main-task completion.
-
-    Args:
-        task: Parent task configuration dict.
-        subtasks: All subtask dicts (used for available IDs).
-        prev_eval_section: Pre-formatted previous evaluations section
-            (may be empty).
-        subtasks_with_status: List of dicts with keys: subtask_id, name,
-            status, completion_criteria, ai_reasoning.  When provided,
-            a ``<workflow>`` section is built.
-    """
+    """Build the prompt that asks AI to evaluate main-task completion."""
     available_ids = [str(s.get('_display_id', s['id'])) for s in subtasks]
     I4 = 4
     I8 = 8
@@ -72,8 +56,17 @@ def build_main_evaluation_prompt(
 
     # -- <context> --
     ctx_inner = []
+    if project_description:
+        ctx_inner.append(
+            f"    <project_description>\n{indent_block(project_description, I8)}\n"
+            f"    </project_description>"
+        )
     ctx_inner.append(f"    <main_task>\n{indent_block(task['name'], I8)}\n    </main_task>")
-    ctx_inner.append(f"    <completion_criteria>\n{indent_block(task['completion_criteria'], I8)}\n    </completion_criteria>")
+    ctx_inner.append(
+        f"    <completion_criteria>\n"
+        f"{indent_block(task['completion_criteria'], I8)}\n"
+        f"    </completion_criteria>"
+    )
     parts.append("<context>\n" + "\n\n".join(ctx_inner) + "\n</context>")
 
     # -- <workflow> --
@@ -100,7 +93,7 @@ Respond with a JSON object:
 ```
 
 - `retry_from` and `next_strategy`: Only required when `main_task_completed` is false.
-- `next_strategy`: Will be passed to the AI executing the next round — be specific and actionable.
+- `next_strategy`: Will be passed to the AI executing the next round - be specific and actionable.
 - Available subtask IDs: {available_ids}"""
 
     parts.append(f"<instructions>\n{indent_block(instructions, I4)}\n</instructions>")

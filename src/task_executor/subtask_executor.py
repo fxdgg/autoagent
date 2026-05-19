@@ -140,8 +140,14 @@ class SubtaskExecutor:
             success=success,
             output=state.get('ai_reasoning', ''),
             logs="",
-            error_type=None if success else "ai_failed",
+            error_type=None if success else (
+                "fatal" if self.simple_executor.last_error_type == "fatal" else "ai_failed"
+            ),
             response_text=self.simple_executor.last_response_text,
+            fatal_event={
+                "reason": self.simple_executor.last_fatal_reason,
+                "response_text": self.simple_executor.last_response_text,
+            } if self.simple_executor.last_error_type == "fatal" else None,
         )
 
     def _execute_nested_subtask(
@@ -236,9 +242,11 @@ class SubtaskExecutor:
         logger.info(f"Executing long-running subtask {subtask_id}: {subtask['name']}")
         logger.info(f"  autoagent-exec script: {exec_script_path}")
         logger.info(f"  log session dir: {log_session_dir}")
+        default_output_log = os.path.join(log_session_dir, "lr_tasks", f"lr_{subtask_id}_output.log")
 
         should_reset = True   # Whether to reset session before next retry
         last_timeout_type = None  # "bash", "stream", or "interrupt"
+        last_ai_output = None
 
         # Check if the task was interrupted by user (Ctrl+C) in a previous
         # run.  If the session was preserved, use in-session continuation.
@@ -371,9 +379,12 @@ class SubtaskExecutor:
 
                 if analyze_result.success:
                     return analyze_result
+                if analyze_result.error_type == "fatal":
+                    return analyze_result
 
                 # Analysis says not completed — fall through to normal retry
                 print(f"      ⏳ Long-running callback analysis failed, retrying...")
+                last_ai_output = analyze_result.response_text or analyze_result.output
                 state_manager.add_task_history(sk, {
                     "attempt": attempt,
                     "time": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -404,6 +415,7 @@ class SubtaskExecutor:
                 prompt = self._build_long_running_prompt(
                     subtask, exec_script_path, attempt, state_manager,
                     parent_context=parent_context,
+                    previous_attempt_output=last_ai_output,
                 )
             last_timeout_type = None
             should_reset = True  # Default: next retry will reset
@@ -413,6 +425,9 @@ class SubtaskExecutor:
                 system_prompt = build_system_prompt_coding_agent(
                     exec_script_path,
                     supports_system_prompt=client.provider.supports_system_prompt,
+                    output_log=default_output_log,
+                    fatal_enabled=bool(subtask.get('fatal')),
+                    is_subtask=True,
                 )
                 # Prepend system_prompt_prefix — skip for continuation prompts
                 if _is_continuation:
@@ -434,6 +449,7 @@ class SubtaskExecutor:
                     effective_prompt,
                     system_prompt=system_prompt,
                 )
+                last_ai_output = result
 
                 # Append response to log AFTER AI returns
                 if conv_logger:
@@ -442,6 +458,34 @@ class SubtaskExecutor:
                         response=client.last_full_log or result,
                         parent_task_id=parent_task_id,
                         attempt=_log_round,
+                    )
+
+                fatal_reason = self.simple_executor._check_fatal(result) if subtask.get('fatal') else None
+                if fatal_reason:
+                    state_manager.add_task_history(sk, {
+                        "attempt": attempt,
+                        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "result": "fatal",
+                        "summary": fatal_reason,
+                    })
+                    state_manager.mark_task_status(
+                        sk, "failed",
+                        attempts=attempt,
+                        last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+                        error_type="fatal",
+                        ai_reasoning=f"FATAL: {fatal_reason}",
+                    )
+                    print(f"      ❌ FATAL: {fatal_reason}")
+                    return SubtaskResult(
+                        success=False,
+                        output=fatal_reason,
+                        logs="",
+                        error_type="fatal",
+                        response_text=result,
+                        fatal_event={
+                            "reason": fatal_reason,
+                            "response_text": result,
+                        },
                     )
                 
                 # Check if AI reported LONG_RUNNING_IN_PROGRESS
@@ -484,9 +528,12 @@ class SubtaskExecutor:
                     
                     if analyze_result.success:
                         return analyze_result
+                    if analyze_result.error_type == "fatal":
+                        return analyze_result
                     
                     # Analysis says not completed — retry within long-running loop
                     print(f"      ⏳ Long-running callback analysis failed, retrying...")
+                    last_ai_output = analyze_result.response_text or analyze_result.output
                     state_manager.add_task_history(sk, {
                         "attempt": attempt,
                         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -514,6 +561,34 @@ class SubtaskExecutor:
                     )
                     if nudge_result is not None:
                         result = nudge_result
+                        last_ai_output = result
+                        fatal_reason = self.simple_executor._check_fatal(result) if subtask.get('fatal') else None
+                        if fatal_reason:
+                            state_manager.add_task_history(sk, {
+                                "attempt": attempt,
+                                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "result": "fatal",
+                                "summary": fatal_reason,
+                            })
+                            state_manager.mark_task_status(
+                                sk, "failed",
+                                attempts=attempt,
+                                last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+                                error_type="fatal",
+                                ai_reasoning=f"FATAL: {fatal_reason}",
+                            )
+                            print(f"      ❌ FATAL: {fatal_reason}")
+                            return SubtaskResult(
+                                success=False,
+                                output=fatal_reason,
+                                logs="",
+                                error_type="fatal",
+                                response_text=result,
+                                fatal_event={
+                                    "reason": fatal_reason,
+                                    "response_text": result,
+                                },
+                            )
                         # Check for LONG_RUNNING_IN_PROGRESS first (may come
                         # from signal-file detection or AI's nudge response).
                         if self._check_long_running_in_progress(result):
@@ -540,6 +615,9 @@ class SubtaskExecutor:
                             if analyze_result.success:
                                 return analyze_result
                             # Not successful — fall through to retry
+                            if analyze_result.error_type == "fatal":
+                                return analyze_result
+                            last_ai_output = analyze_result.response_text or analyze_result.output
                             state_manager.add_task_history(sk, {
                                 "attempt": attempt,
                                 "time": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -576,6 +654,9 @@ class SubtaskExecutor:
                             )
                             if analyze_result.success:
                                 return analyze_result
+                            if analyze_result.error_type == "fatal":
+                                return analyze_result
+                            last_ai_output = analyze_result.response_text or analyze_result.output
                             state_manager.add_task_history(sk, {
                                 "attempt": attempt,
                                 "time": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -672,6 +753,7 @@ class SubtaskExecutor:
     def _build_long_running_prompt(
         self, subtask: dict, exec_script_path: str,
         attempt: int, state_manager, parent_context: dict = None,
+        previous_attempt_output: str = None,
     ) -> str:
         """
         Build the prompt that tells AI to use autoagent-exec for long-running tasks.
@@ -691,6 +773,7 @@ class SubtaskExecutor:
             extract_summary_fn=self.simple_executor._extract_summary,
             parent_context=parent_context,
             project_description=(parent_context or {}).get('project_description', ''),
+            previous_attempt_output=previous_attempt_output,
         )
 
     def _check_long_running_in_progress(self, response: str) -> bool:
@@ -998,6 +1081,27 @@ class SubtaskExecutor:
                     parent_task_id=parent_task_id,
                     attempt=_log_round,
                 )
+
+            fatal_reason = self.simple_executor._check_fatal(result) if subtask.get('fatal') else None
+            if fatal_reason:
+                state_manager.mark_task_status(
+                    sk, "failed",
+                    error_type="fatal",
+                    last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+                    ai_reasoning=f"FATAL: {fatal_reason}",
+                )
+                print(f"      ❌ FATAL: {fatal_reason}")
+                return SubtaskResult(
+                    success=False,
+                    output=fatal_reason,
+                    logs="",
+                    error_type="fatal",
+                    response_text=result,
+                    fatal_event={
+                        "reason": fatal_reason,
+                        "response_text": result,
+                    },
+                )
             
             # Reuse the same robust check logic from SimpleTaskExecutor
             completion_status = self.simple_executor._check_completion(result)
@@ -1012,6 +1116,26 @@ class SubtaskExecutor:
                     command_info, conv_logger, parent_task_id, _log_round,
                 )
                 completion_status = self.simple_executor._check_completion(result)
+                fatal_reason = self.simple_executor._check_fatal(result) if subtask.get('fatal') else None
+                if fatal_reason:
+                    state_manager.mark_task_status(
+                        sk, "failed",
+                        error_type="fatal",
+                        last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+                        ai_reasoning=f"FATAL: {fatal_reason}",
+                    )
+                    print(f"      ❌ FATAL: {fatal_reason}")
+                    return SubtaskResult(
+                        success=False,
+                        output=fatal_reason,
+                        logs="",
+                        error_type="fatal",
+                        response_text=result,
+                        fatal_event={
+                            "reason": fatal_reason,
+                            "response_text": result,
+                        },
+                    )
 
             # Nudge for marker if still missing (same logic as SimpleTaskExecutor)
             if completion_status is None:
@@ -1023,6 +1147,26 @@ class SubtaskExecutor:
                 )
                 if nudge_result is not None:
                     result = nudge_result
+                    fatal_reason = self.simple_executor._check_fatal(result) if subtask.get('fatal') else None
+                    if fatal_reason:
+                        state_manager.mark_task_status(
+                            sk, "failed",
+                            error_type="fatal",
+                            last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+                            ai_reasoning=f"FATAL: {fatal_reason}",
+                        )
+                        print(f"      ❌ FATAL: {fatal_reason}")
+                        return SubtaskResult(
+                            success=False,
+                            output=fatal_reason,
+                            logs="",
+                            error_type="fatal",
+                            response_text=result,
+                            fatal_event={
+                                "reason": fatal_reason,
+                                "response_text": result,
+                            },
+                        )
                     # Nudge may also detect a re-submitted long-running task
                     # (synthetic LONG_RUNNING_IN_PROGRESS from signal file)
                     if self.simple_executor._check_long_running_in_progress_static(result):
@@ -1030,6 +1174,26 @@ class SubtaskExecutor:
                             subtask, client, subtask_id, signal_file, output_log,
                             command_info, conv_logger, parent_task_id, _log_round,
                         )
+                        fatal_reason = self.simple_executor._check_fatal(result) if subtask.get('fatal') else None
+                        if fatal_reason:
+                            state_manager.mark_task_status(
+                                sk, "failed",
+                                error_type="fatal",
+                                last_attempt=time.strftime("%Y-%m-%d %H:%M:%S"),
+                                ai_reasoning=f"FATAL: {fatal_reason}",
+                            )
+                            print(f"      ❌ FATAL: {fatal_reason}")
+                            return SubtaskResult(
+                                success=False,
+                                output=fatal_reason,
+                                logs="",
+                                error_type="fatal",
+                                response_text=result,
+                                fatal_event={
+                                    "reason": fatal_reason,
+                                    "response_text": result,
+                                },
+                            )
                     completion_status = self.simple_executor._check_completion(result)
 
             is_completed = completion_status is True

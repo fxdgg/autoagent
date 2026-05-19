@@ -277,7 +277,9 @@ class ConversationLogger:
         subtask_dir = os.path.join(self.session_dir, f"subtask_{task_id}")
         os.makedirs(subtask_dir, exist_ok=True)
 
-        if "failure_analysis" in call_type and failed_subtask_id:
+        if call_type and call_type == "fatal_analysis" and failed_subtask_id:
+            base = f"{call_type}_{failed_subtask_id}_round_{round_num}.md"
+        elif "failure_analysis" in call_type and failed_subtask_id:
             base = f"{call_type}_{failed_subtask_id}_round_{round_num}.md"
         else:
             base = f"{call_type}_round_{round_num}.md"
@@ -522,7 +524,7 @@ class ConversationLogger:
         if not os.path.isdir(directory):
             return []
         # Match both plain and schedule-prefixed decision files
-        _DECISION_KEYWORDS = ("failure_analysis_", "looping_failure_analysis_", "main_task_evaluation_")
+        _DECISION_KEYWORDS = ("failure_analysis_", "looping_failure_analysis_", "fatal_analysis_", "main_task_evaluation_")
         files = [
             f for f in os.listdir(directory)
             if any(kw in f for kw in _DECISION_KEYWORDS) and f.endswith(".md")
@@ -532,6 +534,8 @@ class ConversationLogger:
             order = 0
             if "looping_failure_analysis_" in fname:
                 order = 2
+            elif "fatal_analysis_" in fname:
+                order = 4
             elif "failure_analysis_" in fname:
                 order = 1
             elif "main_task_evaluation_" in fname:
