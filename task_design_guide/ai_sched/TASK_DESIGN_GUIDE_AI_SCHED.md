@@ -726,6 +726,10 @@ Design rules:
 
 7. **Revert with preservation of decision evidence**: For optimization or experiment tasks, if an implementation is rejected, preserve the hypothesis, measurements, and decision record even if the implementation commit is reverted.
 
+### 8.3 For Todo Authors (You)
+
+**DO NOT read this guide or subguides only once. When you feel ambiguity in writing todos, read it once more to check if this guide already answers your concern —— This guide and subguides has substantial amount of information, you may not pay attention to all of them at once.**
+
 ## 9. Task-Specific Subguides
 
 Read only the guide relevant to the task domain:
@@ -865,6 +869,10 @@ Read only the guide relevant to the task domain:
 [ ] Multiple branches are used for isolated experiments, ablations, or risky alternatives.
 [ ] Destructive git operations are forbidden unless intentionally allowed by the user or project rules.
 [ ] Reverts preserve decision evidence for experiments or optimization work even when implementation code is removed.
+
+#### 10.8.3 For Todo Authors (You)
+
+[ ] This guide or subguides are re-read when you feel ambiguity when writing todos.
 
 ### 10.9 Task-Specific Subguides
 
