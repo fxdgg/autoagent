@@ -18,6 +18,7 @@ autoagent/
 │   ├── orchestrator/            # 编排器
 │   │   ├── linear_orchestrator.py    # TodoOrchestrator 主类
 │   │   ├── ai_orchestrator.py        # AISchedulerMixin（AI 调度）
+│   │   ├── fatal_analysis.py         # FatalAnalysisMixin（致命失败分析）
 │   │   └── orchestrator_common.py    # SessionHelper、create_ai_client 等
 │   │
 │   ├── task_executor/           # 任务执行器
@@ -28,11 +29,13 @@ autoagent/
 │   │   └── task_executor_common.py   # 共享工具函数和类型
 │   │
 │   ├── ai_client/               # AI 客户端抽象层
-│   │   ├── ai_providers.py          # AIProvider 基类及各 Provider 实现
+│   │   ├── ai_providers.py          # AIProvider 基类、Provider 工厂、CodeBuddy/Test 特化类
 │   │   ├── ai_client.py             # AIClient（CLI 子进程模式）
 │   │   ├── ai_client_sdk.py         # AIClientSDK（SDK 模式）
 │   │   ├── ai_client_test.py        # AIClientTest（测试模式）
-│   │   └── ai_client_common.py      # 异常类型和共享常量
+│   │   ├── ai_client_common.py      # 异常类型和共享常量
+│   │   ├── providers.yaml           # CLI Provider 配置
+│   │   └── providers/               # stream-JSON 解析插件
 │   │
 │   ├── ideas/                   # Ideas 系统
 │   │   ├── ideas_watcher.py         # IdeasWatcher（文件监听 + 处理）
@@ -69,9 +72,7 @@ autoagent/
 │   ├── ARCHITECTURE.md              # 系统架构
 │   ├── USAGE.md                     # 使用指南
 │   ├── FILES.md                     # 文件结构（本文档）
-│   ├── PROMPT.md                    # Prompt 工程
-│   └── ai_orchestrator/
-│       └── DESIGN.md                # AI 调度器设计方案
+│   └── PROMPT.md                    # Prompt 工程
 │
 ├── task_design_guide/           # 任务设计指南（供 AI 消费）
 │   ├── linear/                      # 线性模式指南
@@ -111,7 +112,7 @@ autoagent/
 
 ### `src/orchestrator.py` — CLI 入口
 
-项目的唯一入口点。`main()` 函数负责：
+项目主 CLI 入口。`main()` 函数负责：
 - 解析命令行参数
 - 加载 `config.yaml` 配置
 - 合并 Preset 配置
@@ -124,6 +125,7 @@ autoagent/
 |------|------|
 | `linear_orchestrator.py` | `TodoOrchestrator` 主类：任务加载、验证、线性执行、Ideas 处理 |
 | `ai_orchestrator.py` | `AISchedulerMixin`：AI 调度循环、决策获取、两级重试、孤儿恢复 |
+| `fatal_analysis.py` | `FatalAnalysisMixin`：保留任务 `fatal_analysis` 的致命失败诊断与重试决策 |
 | `orchestrator_common.py` | `SessionHelper`（会话管理）、`create_ai_client()`（工厂函数） |
 
 ### `src/task_executor/` — 任务执行器包
@@ -140,19 +142,21 @@ autoagent/
 
 | 文件 | 职责 |
 |------|------|
-| `ai_providers.py` | `AIProvider` 基类 + 5 个 Provider 实现 + `TestProvider` + model 名称校验 |
+| `ai_providers.py` | `AIProvider` 基类、`CodeBuddyProvider`、`TestProvider`、Provider 工厂、model 名称校验 |
 | `ai_client.py` | `AIClient`：CLI 子进程模式，流式解析 AI 输出 |
 | `ai_client_sdk.py` | `AIClientSDK`：CodeBuddy SDK 直接调用模式 |
 | `ai_client_test.py` | `AIClientTest`：测试模式，读取预定义响应 |
 | `ai_client_common.py` | 异常层次结构、默认模型常量 |
+| `providers.yaml` | Claude/Gemini/OpenCode/Codex/CodeBuddy 等 CLI Provider 的命令模板配置 |
+| `providers/` | stream-JSON 输出解析插件目录 |
 
 ### `src/ideas/` — Ideas 系统包
 
 | 文件 | 职责 |
 |------|------|
-| `ideas_watcher.py` | `IdeasWatcher`：监听 ideas.md、协调拆解-审查-验证流程 |
-| `ideas_decomposer.py` | `IdeasDecomposerMixin`：AI 将自然语言 idea 转为结构化任务 |
-| `ideas_reviewer.py` | `IdeasReviewerMixin`：AI 审查生成的任务质量 |
+| `ideas_watcher.py` | `IdeasWatcher`：监听 ideas.md，并通过 mixin 组合协调拆解-审查-验证流程 |
+| `ideas_decomposer.py` | `IdeasDecomposerMixin`：为 `IdeasWatcher` 提供 AI 将自然语言 idea 转为结构化任务的能力 |
+| `ideas_reviewer.py` | `IdeasReviewerMixin`：为 `IdeasWatcher` 提供 AI 审查生成任务质量的能力 |
 
 ### `src/prompts/` — Prompt 模板包
 
@@ -162,7 +166,7 @@ autoagent/
 
 | 文件 | 职责 |
 |------|------|
-| `default_value.py` | `DEFAULTS` 字典（所有默认值的唯一真相源）、配置模板生成 |
+| `default_value.py` | `DEFAULTS` 字典（代码内置 fallback 值）、配置模板生成 |
 | `config_registry.py` | 全局配置注册表：启动时注册合并后的配置 dict，各模块通过 `get_config()` 读取 |
 | `truncation_limits.py` | Prompt 字段截断限制 |
 | `autoagent_exec.py` | 长时间任务启动脚本：快速失败检测、信号文件、后台分离、stdout/stderr 分离、防御性重定向检测 |
@@ -184,7 +188,7 @@ autoagent/
 | Debug | `autoagent_exec_show_console` |
 | Presets | 命名预设配置组合 |
 
-> **注意**：部分默认值（如 `backoff_base`、`signal_check_interval`、`signal_max_wait`、`signal_max_initial_wait`、`max_signal_retry` 等）仅在代码的 `DEFAULTS` 字典中定义，不暴露在 `config.yaml` 中。
+> **注意**：运行时配置优先级为命令行参数 > Preset > `--settings` 文件 > `config.yaml` 全局设置 > 代码内置 `DEFAULTS`。部分 fallback 值（如 `backoff_base`、`signal_check_interval`、`signal_max_wait`、`signal_max_initial_wait`、`max_signal_retry` 等）仅在 `DEFAULTS` 中定义，不暴露在 `config.yaml` 中。
 
 ### `todos.yaml`（用户创建）
 

@@ -130,9 +130,11 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `description` | string | 是 | 全局项目描述，所有任务可见 |
+| `description` | string | 否 | 全局项目描述，所有任务可见；省略时为空字符串 |
 | `ai_orchestrator` | dict | 否 | AI 调度配置（启用 AI 调度模式） |
 | `tasks` | list | 是 | 任务列表 |
+
+直接运行 `todos.yaml` 时，根级 `description` 可省略；Ideas 首批拆解输出仍会要求 AI 生成根级 `description`，作为项目上下文写回配置。
 
 ### 4.2 任务通用字段
 
@@ -142,11 +144,12 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 | `name` | string | 是 | 简短任务名 |
 | `type` | string | 是 | 任务类型 |
 | `completion_criteria` | string | 是 | 完成标准 |
-| `description` | string | 否 | 任务描述（AI 调度模式下建议填写） |
+| `description` | string | 否 | 任务描述（AI 调度模式下建议填写；省略时会用 `name` 自动填充） |
 | `initial_hint` | string | 否 | 执行提示 |
-| `model` | string | 否 | 模型角色覆盖 |
+| `model` | string | 否 | 模型角色或直接模型名称；角色会通过 `--model`/preset 映射解析 |
 | `max_attempts` | int | 否 | 最大重试次数（默认 5） |
 | `system_prompt_prefix` | string | 否 | 自定义系统 prompt |
+| `fatal` | bool | 否 | 允许该任务在遇到前置阻塞时用 `❌ FATAL: <reason>` 触发保留任务 `fatal_analysis` |
 
 ### 4.3 任务类型
 
@@ -158,6 +161,8 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 | `long_running` | 后台运行长时间命令 | 顶层 + 子任务 |
 | `simple_once` | 同 simple，但只执行一次 | 仅子任务 |
 | `long_running_once` | 同 long_running，但只执行一次 | 仅子任务 |
+
+`fatal_analysis` 是保留顶层任务 ID，不属于普通业务任务。定义该任务后，任何设置了 `fatal: true` 的普通任务或子任务都可以通过 `❌ FATAL: <reason>` 标记触发致命失败分析；保留任务的类型必须是 `simple` 或 `long_running`。
 
 ### 4.4 类型特有字段
 
@@ -201,10 +206,10 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--config`, `-c` | `todos.yaml` | 任务配置文件路径 |
+| `--config`, `-c` | `todos.yaml` | 任务配置文件路径；文件不存在时会创建空文件 |
 | `--workspace`, `-w` | `.` | AI 工作目录 |
 | `--mode` | 自动检测 | `linear` 或 `ai` |
-| `--task`, `-t` | 无 | 只执行指定任务 ID |
+| `--task`, `-t` | 无 | 只执行指定任务 ID；AI 调度模式不支持 |
 
 ### Provider 与模型
 
@@ -216,7 +221,7 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 | `--extra-args` | 无 | 传递给 AI 工具的额外参数 |
 | `--use-cli` | false | 使用 CLI 子进程模式 |
 | `--list-providers` | false | 列出所有可用 Provider 并退出 |
-| `--include-directories` | 无 | 允许 AI 访问的额外目录（仅 Gemini），逗号分隔 |
+| `--include-directories` | 无 | 预留参数；当前 Provider 接收但不实际应用 |
 | `--allow-unsupported-models` | false | 跳过对 CodeBuddy 支持模型列表的校验，适用于 CodeBuddy 尚未更新 --help 的新模型 |
 
 ### Ideas
@@ -226,6 +231,7 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 | `--ideas` | 无 | ideas.md 文件路径 |
 | `--ideas-only` | false | 只处理 ideas 不执行任务 |
 | `--human-review` | false | Ideas 人工审核 |
+| `--adversarial-review` | false | 启用 Ideas 对抗性 red-team 审查，并覆盖本次运行的 `config.yaml` 同名配置 |
 | `--no-idle` | false | 禁用 Idle 模式 |
 
 ### 会话管理
@@ -236,6 +242,8 @@ python orchestrator.py --ideas ideas.md --config todos.yaml --ideas-only
 | `--resume` | 无 | 恢复指定会话 ID |
 | `--list-sessions` | false | 列出所有会话 |
 | `--rename OLD NEW` | 无 | 重命名 sessions.csv 中的 workspace 路径（将所有匹配 OLD 的条目更新为 NEW） |
+| `--redo` | false | 重置当前未完成的顶层任务或子任务状态；再次运行时会从该任务重新执行 |
+| `--back` | false | 回退到上一个顶层任务或子任务，并重置目标任务状态 |
 
 ### Preset 与配置
 
@@ -282,7 +290,7 @@ preset:
     model: 
       plan: claude-opus-4.6
       default: claude-opus-4.6
-      lite: glm-5.0
+      lite: glm-5.0-ioa
       evaluation: claude-opus-4.6
       scheduler: claude-opus-4.6
     human_review: true
@@ -295,7 +303,9 @@ preset:
 python orchestrator.py --preset general --workspace ./my_project
 ```
 
-**优先级**：命令行参数 > Preset > `--settings` 文件 > config.yaml 全局设置 > 内置默认值
+**优先级**：命令行参数 > Preset > `--settings` 文件 > config.yaml 全局设置 > 内置默认值。
+
+`config.yaml` 是用户配置层，可以有意覆盖代码内置默认值；`--generate-default-config` 会用内置模板覆盖目标配置文件。
 
 `${workspace}` 变量会在加载时自动展开为实际工作目录。
 
@@ -377,7 +387,7 @@ python orchestrator.py --list-sessions
 | 会话恢复失败 | 会话目录被删除 | 使用 `--reset` 重新开始 |
 | autoagent-exec 输出为空 | AI 在命令中添加了输出重定向 | 系统提示词已禁止重定向；如需重定向应使用 `--stdout`/`--stderr` 参数 |
 | AI 看不到 autoagent-exec 三种输出 | 输出被重定向或进程仍在运行 | AI 应检查 PID，若进程仍在运行则输出 `LONG_RUNNING_IN_PROGRESS` |
-| 启动时 model 名称 WARNING | model 名称不在 CodeBuddy 支持列表中 | 检查拼写；仅 warning 不阻止运行 |
+| 启动时 model 名称错误 | model 名称不在 CodeBuddy 支持列表中 | 检查拼写；默认会终止运行，可用 `--allow-unsupported-models` 跳过校验 |
 
 ---
 
@@ -393,7 +403,7 @@ A: 通过文件系统。在 `initial_hint` 中指示 AI 将结果写入特定文
 
 **Q: AI 调度模式和线性模式可以混用吗？**
 
-A: 默认情况下不混用。如果 `todos.yaml` 包含 `ai_orchestrator` 配置，系统自动使用 AI 调度模式。但你可以通过 `--mode linear` 强制使用线性模式，此时 `ai_orchestrator` 配置会被忽略。
+A: 默认情况下不混用。如果 `todos.yaml` 包含 `ai_orchestrator` 配置，系统自动使用 AI 调度模式。非 ideas 运行时可以通过 `--mode linear` 强制使用线性模式，此时 `ai_orchestrator` 配置会被忽略；但当同时启用 `--ideas` 且配置中存在 `ai_orchestrator` 时，`--mode linear` 会被拒绝。已经用一种模式产生的 `.autoagent` 状态不能直接切到另一种模式复用，需要先使用 `--reset` 或换一个会话目录。
 
 **Q: 如何查看 AI 的完整对话记录？**
 

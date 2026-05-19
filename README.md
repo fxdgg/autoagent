@@ -235,9 +235,11 @@ ai_orchestrator:
 # 自动检测 ai_orchestrator 配置，启用 AI 调度模式
 python orchestrator.py --config todos.yaml
 
-# 在包含 ai_orchestrator 字段时，依然使用线性模式
+# 非 ideas 运行时，即使包含 ai_orchestrator 字段也可强制使用线性模式
 python orchestrator.py --config todos.yaml --mode linear
 ```
+
+> 注意：当同时启用 `--ideas` 且 `todos.yaml` 包含 `ai_orchestrator` 字段时，`--mode linear` 会被拒绝。此时应移除 `--mode linear` 或禁用 ideas 模式。
 
 ### 🔌 多 AI Provider 一键切换
 
@@ -265,7 +267,7 @@ python orchestrator.py --list-sessions     # 查看会话列表
 
 | 特性 | 说明 |
 |------|------|
-| **6 种任务类型** | simple（单步）、nested（多子任务）、looping（N 轮迭代）、long_running（后台运行），以及 simple_once / long_running_once（一次性变体） |
+| **任务类型** | 顶层任务支持 simple（单步）、nested（多子任务）、looping（N 轮迭代）、long_running（后台运行）；子任务还支持 simple_once / long_running_once（一次性变体） |
 | **Ideas 监听 & 自动拆解** | 后台监听 `ideas.md`，检测到变化自动拆解为任务并执行，随写随跑 |
 | **Preset 配置** | `config.yaml` 预设参数组合，避免每次输入大量参数 |
 | **完整日志系统** | 记录 AI 对话全过程，支持回溯和调试 |
@@ -310,11 +312,13 @@ python orchestrator.py --config todos.yaml --workspace ./project
 # 显式指定 AI 调度模式
 python orchestrator.py --config todos.yaml --mode ai
 
-# 只执行某个任务
+# 只执行某个任务（线性模式）
 python orchestrator.py --task 2
 
-# 重置
+# 重置 / 回退 / 重跑
 python orchestrator.py --reset
+python orchestrator.py --back
+python orchestrator.py --redo
 
 # 使用 Preset 配置
 python orchestrator.py --preset default
@@ -365,7 +369,7 @@ python orchestrator.py --preset default
 | [使用指南](doc/USAGE.md) | 完整使用指南 |
 | [任务设计指南](task_design_guide/linear/TASK_DESIGN_GUIDE.md) | 任务编写指南和最佳实践 |
 | [文件说明](doc/FILES.md) | 项目文件结构说明 |
-| [AI 调度器设计](doc/ai_orchestrator/DESIGN.md) | AI 调度模式的详细设计方案 |
+| [AI 调度模式指南](task_design_guide/ai_sched/TASK_DESIGN_GUIDE_AI_SCHED.md) | AI 调度模式的任务编写指南 |
 
 ---
 

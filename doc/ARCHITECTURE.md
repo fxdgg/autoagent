@@ -16,7 +16,8 @@ AutoAgent 采用 **编排器-执行器** 模式，通过 Mixin 组合实现功�
                          │ 创建
                          ▼
 ┌─────────────────────────────────────────────────────────┐
-│           TodoOrchestrator (AISchedulerMixin)           │
+│                  TodoOrchestrator                       │
+│        FatalAnalysisMixin + AISchedulerMixin            │
 │                                                         │
 │  ┌─────────────┐  ┌──────────────┐  ┌───────────────┐   │
 │  │ StateManager│  │ ConvLogger   │  │ IdeasWatcher  │   │
@@ -28,17 +29,17 @@ AutoAgent 采用 **编排器-执行器** 模式，通过 Mixin 组合实现功�
 │  • run_with_idle()   — Idle 监听模式                     │
 └────────────┬────────────────────────────────────────────┘
              │ 按任务类型分发
-     ┌───────┼───────────┐
-     ▼       ▼           ▼
-┌────────┐ ┌──────────┐ ┌──────────┐
-│Simple  │ │ Nested   │ │ Looping  │
-│Executor│ │ Executor │ │ Executor │
-└───┬────┘ └────┬─────┘ └────┬─────┘
-    │           │             │
-    └───────────┼─────────────┘
+     ┌───────┼───────────┬───────────────┐
+     ▼       ▼           ▼               ▼
+┌────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐
+│Simple  │ │ Nested   │ │ Looping  │ │Top-level   │
+│Executor│ │ Executor │ │ Executor │ │long_running│
+└───┬────┘ └────┬─────┘ └────┬─────┘ └──────┬─────┘
+    │           │             │              │
+    └───────────┼─────────────┴──────────────┘
                 ▼
         ┌───────────────┐
-        │SubtaskExecutor│  按子任务类型分发
+        │SubtaskExecutor│  子任务分发 + 顶层 long_running
         └──────┬────────┘
                │
                ▼
@@ -56,20 +57,21 @@ AutoAgent 采用 **编排器-执行器** 模式，通过 Mixin 组合实现功�
 
 **位置**：`src/orchestrator/linear_orchestrator.py`
 
-系统的核心编排类，继承 `AISchedulerMixin`。职责：
+系统的核心编排类，继承 `FatalAnalysisMixin` 和 `AISchedulerMixin`。职责：
 
 - 加载和验证 `todos.yaml` 任务定义
 - 管理任务执行生命周期
 - 按任务类型分发到对应执行器
 - 协调状态持久化和日志记录
 - 处理 Ideas 监听和任务追加
+- 处理保留任务 `fatal_analysis` 触发的致命失败分析
 
 **关键设计决策**：
 - 每个任务创建独立的 `AIClient` 实例，实现对话上下文隔离
 - 通过 `SessionHelper` 静态方法管理会话目录
 - 通过 `config_registry` 全局注册合并后的配置，各模块通过 `get_config()` 读取，避免重复加载文件
 - 支持断点续传：保存 `session_id` 和 `interrupt_pending` 标记
-- 启动时校验 model 名称：当 Provider 为 CodeBuddy 时，通过 `codebuddy --help` 提取支持的模型列表，对 `todos.yaml`、CLI `--model` 和 `config.yaml` preset 中的 model 名称进行校验（仅 warning，不阻止运行）
+- 启动时校验 model 名称：当 Provider 为 CodeBuddy 时，通过 `codebuddy --help` 提取支持的模型列表，对 `todos.yaml`、CLI `--model` 和 `config.yaml` preset 中的 model 名称进行校验；默认不通过会终止运行，可用 `--allow-unsupported-models` 跳过
 
 ### 2.2 AISchedulerMixin
 
@@ -104,7 +106,19 @@ Mixin 类，为 `TodoOrchestrator` 提供 AI 驱动的任务调度能力。
 
 > `RateLimitError`（429/503）不消耗重试次数，由内部指数退避处理。
 
-### 2.3 任务执行器
+### 2.3 FatalAnalysisMixin
+
+**位置**：`src/orchestrator/fatal_analysis.py`
+
+Mixin 类，为 `TodoOrchestrator` 提供保留任务 `fatal_analysis`。当普通任务或子任务设置 `fatal: true`，并且 AI 以 `❌ FATAL: <reason>` 作为最终标记时，编排器会调用该保留任务进行诊断。
+
+**行为**：
+- `fatal_analysis` 只能作为顶层保留任务出现，类型必须是 `simple` 或 `long_running`
+- 分析模型默认使用 `evaluation` 角色，也可在 `fatal_analysis` 任务上通过 `model` 覆盖
+- 输出 `{analysis, retry_from, suggested_fix}`，其中 `retry_from` 可以指向可重试的任务/子任务，也可以为 `stop`
+- 线性模式和 AI 调度模式都会在致命失败后进入该流程
+
+### 2.4 任务执行器
 
 #### SimpleTaskExecutor
 
@@ -125,7 +139,7 @@ BashTimeoutError / StreamTimeoutError → 同会话续传（不重置）
 SessionTimeoutError → 会话重置后重试
 ```
 
-**标记提醒机制**：当 AI 完成工作但忘记输出状态标记时，发送轻量级跟进 prompt（同一会话），避免昂贵的会话重置。最多 `max_marker_nudges` 次（默认 3）。
+**标记提醒机制**：当 AI 完成工作但忘记输出状态标记时，发送轻量级跟进 prompt（同一会话），避免昂贵的会话重置。最多 `max_marker_nudges` 次；仓库随附 `config.yaml` 配置为 2，代码内置 fallback 为 3。
 
 #### NestedTaskExecutor
 
@@ -157,6 +171,8 @@ SessionTimeoutError → 会话重置后重试
 - `nested` → NestedTaskExecutor（递归嵌套）
 - `looping` → LoopingTaskExecutor（递归嵌套）
 
+顶层 `long_running` 任务也会通过 `SubtaskExecutor._execute_long_running_subtask()` 执行，从而复用同一套 `autoagent-exec`、信号文件轮询和输出分析逻辑。
+
 ---
 
 ## 3. AI 客户端层
@@ -164,16 +180,13 @@ SessionTimeoutError → 会话重置后重试
 ### 3.1 Provider 抽象
 
 ```
-AIProvider (基类)
-├── CodeBuddyProvider   — 默认，支持 system prompt
-├── ClaudeCodeProvider  — Claude Code CLI
-├── GeminiCLIProvider   — Gemini CLI
-├── OpenCodeProvider    — OpenCode CLI
-├── CodexProvider       — Codex CLI
-└── TestProvider        — 测试用，读取预定义响应
+AIProvider (配置驱动的 CLI Provider 基类)
+├── CodeBuddyProvider   — CodeBuddy 特化类，支持 model 名称校验
+├── TestProvider        — 测试用，读取预定义响应
+└── 其它 CLI Provider   — Claude/Gemini/OpenCode/Codex 等由 providers.yaml 配置，使用 AIProvider 实例
 ```
 
-每个 Provider 实现 `build_command()` 和 `get_stdin_command()`，封装不同 AI 工具的 CLI 差异。
+`AIProvider` 根据 `src/ai_client/providers.yaml` 中的命令模板实现 `build_command()` 和 `get_stdin_command()`，封装不同 AI 工具的 CLI 差异。`src/ai_client/providers/` 目录提供 stream-JSON 输出解析插件，不是独立的 Provider 类层级。
 
 `CodeBuddyProvider` 额外提供 `get_supported_models()` 类方法，通过解析 `codebuddy --help` 输出提取支持的模型列表，用于启动时校验 model 名称（结果按 executable 路径缓存，每个 session 只调用一次 subprocess）。
 
@@ -253,7 +266,7 @@ YAML 持久化的状态管理器，线程安全，原子写入（写临时文件
 |------|--------|------|
 | 顶层任务 | `"task_id"` | `"1"` |
 | 轮次作用域子任务 | `"task_id@round_label"` | `"1.2@3.1"` |
-| AI 调度轮次前缀 | `"round.task_id"` | `"3.1"` |
+| AI 调度轮次前缀 | `"round.task_id"`；调度执行子任务时可继续追加子任务后缀 | `"3.1"`、`"3.1.2"` |
 | `*_once` 子任务 | `"task_id"`（无轮次前缀） | `"1.1"` |
 
 `*_once` 类型使用全局键（不加轮次前缀），确保跨轮次只执行一次。
@@ -285,12 +298,13 @@ orchestrator:
 
 ## 6. AI 决策点
 
-系统中有四个 AI 自主决策点：
+系统中有五个 AI 自主决策点：
 
 | 决策点 | 触发场景 | AI 输出 | 使用模型角色 |
 |--------|---------|---------|-------------|
 | **任务调度** | AI 调度模式每轮 | `{action, task_id, reasoning}` | `scheduler` |
 | **失败分析** | Nested/Looping 子任务失败 | `{retry_from, suggested_fix}` | `evaluation` |
+| **致命失败分析** | `fatal: true` 任务输出 `❌ FATAL: <reason>` | `{analysis, retry_from, suggested_fix}` | `evaluation` |
 | **主任务评估** | Nested 所有子任务完成 | `{main_task_completed, next_strategy}` | `evaluation` |
 | **任务完成** | Simple 任务执行后 | `✅` / `❌` / `⏳` 标记 | `default` / `lite` |
 
