@@ -1,0 +1,294 @@
+# =============================================================================
+# Test Rules 4 - Ideas Decomposition Testing (with Review)
+# =============================================================================
+# This test file verifies that ideas.md content is correctly decomposed into
+# TODO tasks and appended to todos.yaml, with a review step for each idea,
+# and that the full workflow (ideas processing + task execution) works end-to-end.
+#
+# Prerequisites:
+#   - Run with: --ideas ideas.md
+#   - ideas.md contains 2 ideas separated by ---
+#   - todos.yaml initially has task 1 (nested, 5 subtasks)
+#
+# Flow:
+#   1. Orchestrator detects ideas.md, calls check_and_process_ideas()
+#   2. IdeasWatcher parses 2 ideas from ideas.md
+#   3. For each idea:
+#      a. AI decomposes the idea into tasks
+#      b. A fresh-context positive reviewer AI reviews the generated tasks
+#      c. A fresh-context adversarial reviewer AI reviews the generated tasks
+#      d. Only when both positive and adversarial reviews pass in the same
+#         round is the idea considered approved
+#      e. If either rejects, continue to next round until approved or max rounds
+#   4. New tasks are appended to todos.yaml
+#   5. Orchestrator reloads todos and executes all tasks (original + new)
+#
+# Expected call sequence (ask() calls in order):
+#   Rule 1:  Idea 1 decomposition       → YAML for task 2 (simple)
+#   Rule 2:  Idea 1 positive review      → ✅ completed (approved)
+#   Rule 3:  Idea 1 adversarial review   → ✅ completed (approved)
+#   Rule 4:  Idea 2 decomposition        → YAML for task 3 (nested with 2 subtasks)
+#   Rule 5:  Idea 2 positive review #1   → ❌ not completed (rejected with feedback)
+#   Rule 6:  Idea 2 adversarial review #1→ ✅ completed (moot — positive failed)
+#   Rule 7:  Idea 2 positive review #2   → ✅ completed (approved on retry)
+#   Rule 8:  Idea 2 adversarial review #2→ ❌ not completed (structured findings)
+#   Rule 9:  Idea 2 adversarial worker   → revised YAML for task 3
+#   Rule 10: Idea 2 positive review #3   → ✅ completed (worker revision approved)
+#   Rule 11: Idea 2 adversarial review #3→ ✅ completed (both pass → done)
+#   Rule 12: Subtask 1.1 attempt #1      → ✅ completed
+#   Rule 13: Subtask 1.2 attempt #1      → autoagent-exec + LONG_RUNNING_IN_PROGRESS
+#   Rule 14: Subtask 1.2 callback        → ✅ completed
+#   Rule 15: Subtask 1.3 attempt #1      → ✅ completed
+#   Rule 16: Subtask 1.4 attempt #1      → ✅ completed
+#   Rule 17: Subtask 1.5 attempt #1      → ✅ completed
+#   Rule 18: Main task 1 evaluation      → main_task_completed: true
+#   Rule 19: Task 2 attempt #1           → ✅ completed
+#   Rule 20: Subtask 3.1 attempt #1      → ✅ completed
+#   Rule 21: Subtask 3.2 attempt #1      → autoagent-exec + LONG_RUNNING_IN_PROGRESS
+#   Rule 22: Subtask 3.2 callback        → ✅ completed
+#   Rule 23: Main task 3 evaluation      → main_task_completed: true
+# =============================================================================
+
+# --- Rule 1: Idea 1 decomposition ---
+# Tests: AI decomposes the first idea (Use __sincosf intrinsic) into a simple task
+# IdeasWatcher calls client.ask() with the idea content and expects YAML back
+description@2: "Optimize cuFFTDx DCT3D kernel by replacing separate trig calls with fused intrinsics"
+tasks:
+  - id: 2
+    name: "Replace cosf/sinf with __sincosf intrinsic"
+    type: simple
+    completion_criteria: |
+      Replace all separate cosf() and sinf() calls in cufftdx_dct3d.cuh with the __sincosf() intrinsic.
+    initial_hint: |
+      Look at the PostProcess functions in both DCT and IDCT kernels in cufftdx_dct3d.cuh.
+---RULE---
+# --- Rule 2: Idea 1 positive review - APPROVED ---
+# Tests: Reviewer AI approves the task decomposition for idea 1
+The task decomposition looks good:
+- Task ID 2 is correct (next available after task 1)
+- Type "simple" is appropriate for a straightforward code replacement
+- Completion criteria are clear and measurable
+- initial_hint provides useful guidance
+
+✅ completed
+---RULE---
+# --- Rule 3: Idea 1 adversarial review - APPROVED ---
+# Tests: Adversarial reviewer finds no issues with idea 1 tasks
+No adversarial concerns found. The task constraints are tight and unambiguous.
+No loopholes or destructive potential detected.
+
+✅ completed
+---RULE---
+# --- Rule 4: Idea 2 decomposition ---
+# Tests: AI decomposes the second idea (shared memory transpose) into a nested task
+description@3: "Optimize cuFFTDx DCT3D kernel with shared memory transpose for non-X axis"
+tasks:
+  - id: 3
+    name: "Implement shared memory transpose for non-X axis operations"
+    type: nested
+    max_attempts: 10
+    completion_criteria: |
+      Implement shared memory transpose buffer for AXIS=1 and AXIS=2 operations.
+    subtasks:
+      - id: 3.1
+        name: "Implement shared memory transpose buffer"
+        type: simple
+        completion_criteria: |
+          Add shared memory transpose logic for Y and Z axis passes.
+      - id: 3.2
+        name: "Benchmark and verify correctness"
+        type: long_running
+        completion_criteria: |
+          Run the full benchmark suite. Score must be 100/100.
+---RULE---
+# --- Rule 5: Idea 2 positive review #1 - REJECTED ---
+# Tests: Reviewer AI rejects the first version and provides feedback
+❌ not completed
+
+Issues found:
+1. The nested task is missing an "initial_hint" field that could help guide the AI executor
+2. Subtask 3.2 (long_running) should mention the specific benchmark command to run
+Please add initial_hint to the main task and be more specific in subtask 3.2's criteria.
+---RULE---
+# --- Rule 6: Idea 2 adversarial review #1 - APPROVED (moot) ---
+# Tests: Adversarial review runs even though positive review failed;
+#         result is moot since both must pass for approval
+No adversarial concerns found with the task structure.
+The constraints are reasonable.
+
+✅ completed
+---RULE---
+# --- Rule 7: Idea 2 positive review #2 - APPROVED ---
+# Tests: Reviewer AI approves on the second round
+The task decomposition addresses the key requirements:
+- Task structure is correct with nested subtasks
+- All task IDs and types are valid
+
+✅ completed
+---RULE---
+# --- Rule 8: Idea 2 adversarial review #2 - REJECTED ---
+# Tests: Adversarial reviewer reports structured findings instead of editing YAML
+❌ not completed
+
+severity: High
+location:
+  task_id: 3
+  field: completion_criteria
+vulnerable_text: "Implement shared memory transpose buffer for AXIS=1 and AXIS=2 operations."
+exploit_path: A lazy agent could add placeholder shared memory declarations without proving correctness or preserving benchmark score.
+impact: The task could be marked complete while producing a dummy or incomplete optimization.
+minimal_patch_intent: Require functional implementation, no dummy placeholders, no weakened tests, and benchmark evidence.
+do_not_change:
+  - task id
+  - task type
+  - task hierarchy
+  - unrelated files
+---RULE---
+# --- Rule 9: Idea 2 adversarial worker revision ---
+# Tests: Separate worker receives adversarial feedback plus the full task design guide,
+#        fixes the findings in one pass, and returns revised YAML while preserving ids/types/hierarchy
+# The mock provider returns YAML directly; production workers may also write the temp file.
+description@3: "Optimize cuFFTDx DCT3D kernel with shared memory transpose for non-X axis"
+tasks:
+  - id: 3
+    name: "Implement shared memory transpose for non-X axis operations"
+    type: nested
+    max_attempts: 10
+    initial_hint: |
+      Modify cufftdx_dct3d.cuh only. Implement real shared-memory transpose logic for AXIS=1 and AXIS=2; do not add placeholder buffers, dummy branches, hardcoded benchmark outputs, or weaken tests/benchmarks.
+    completion_criteria: |
+      Implement functional shared memory transpose buffer logic for AXIS=1 and AXIS=2 operations. The result must not be a placeholder/no-op, must not hardcode benchmark outputs, must not modify tests or benchmark scoring, and must preserve correctness with benchmark evidence.
+    subtasks:
+      - id: 3.1
+        name: "Implement shared memory transpose buffer"
+        type: simple
+        completion_criteria: |
+          Add real shared memory transpose logic for Y and Z axis passes in cufftdx_dct3d.cuh. Do not use dummy placeholder buffers, no-op branches, or unrelated file changes.
+      - id: 3.2
+        name: "Benchmark and verify correctness"
+        type: long_running
+        completion_criteria: |
+          Run the full benchmark suite with the project benchmark command. Score must be 100/100, and tests/benchmark scoring must not be modified.
+---RULE---
+# --- Rule 10: Idea 2 positive review #3 - APPROVED ---
+# Tests: Reviewer approves the adversarial worker revision
+The adversarial worker revision preserves schema and task structure while adding useful anti-hack constraints.
+
+✅ completed
+---RULE---
+# --- Rule 11: Idea 2 adversarial review #3 - APPROVED ---
+# Tests: Adversarial reviewer approves after worker hardening — both pass, idea 2 done
+No adversarial concerns found. The nested task constraints now forbid placeholders and benchmark tampering.
+
+✅ completed
+---RULE---
+# --- Rule 12: Subtask 1.1 attempt #1 - COMPLETED ---
+# Tests: Original task 1 subtask execution after ideas processing
+I have built the project and recorded the baseline performance.
+
+  cmake -B build -DCMAKE_BUILD_TYPE=Release -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda
+  cmake --build build --config Release
+
+The baseline timing has been recorded to baseline_timing.txt:
+  Elapsed: 150.00 ms
+
+✅ completed
+---RULE---
+# --- Rule 13: Subtask 1.2 attempt #1 - LONG_RUNNING submission ---
+I'll use autoagent-exec to run the ncu profiling command:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.1.2
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 14: Subtask 1.2 callback - COMPLETED ---
+I have analyzed the ncu profiling results.
+
+Key findings:
+- fused_dct_axis_kernel takes 60% of total time
+- Memory bandwidth utilization is at 45%
+- SM occupancy is 50% due to high register usage
+
+Written analysis to ncu_analysis.txt.
+
+✅ completed
+---RULE---
+# --- Rule 15: Subtask 1.3 attempt #1 - COMPLETED ---
+I have optimized the CUDA kernel:
+1. Replaced cosf()/sinf() with __sincosf() intrinsic
+2. Improved memory coalescing for Y/Z axis operations
+
+The code compiles without errors.
+
+✅ completed
+---RULE---
+# --- Rule 16: Subtask 1.4 attempt #1 - COMPLETED ---
+Build and benchmark results:
+- Score: 100/100 (correctness preserved)
+- Elapsed: 115.00 ms (was 150.00 ms)
+- Speedup: 23.3%
+- Target met: YES
+
+Written results to optimization_result.txt.
+
+✅ completed
+---RULE---
+# --- Rule 17: Subtask 1.5 attempt #1 - COMPLETED ---
+The optimization achieved 23.3% speedup with correct results.
+Committed: git commit -m "perf: optimize cuFFTDx DCT3D kernel - 23.3% speedup"
+Updated baseline_timing.txt with new timing (115.00 ms).
+
+✅ completed
+---RULE---
+# --- Rule 18: Main task 1 evaluation - COMPLETED ---
+{
+    "main_task_completed": true,
+    "analysis": "The optimization achieved 23.3% speedup (150ms -> 115ms) with correctness preserved (Score: 100/100). The 20% target has been exceeded."
+}
+---RULE---
+# --- Rule 19: Task 2 (from idea 1) attempt #1 - COMPLETED ---
+# Tests: Execution of a task that was dynamically added from ideas.md
+I have replaced all separate cosf() and sinf() calls with __sincosf()
+in cufftdx_dct3d.cuh:
+
+1. Found 4 pairs of cosf/sinf calls in PostProcess functions
+2. Replaced each pair with a single __sincosf() call
+3. Added proper __CUDA_ARCH__ guards for device-only intrinsics
+4. Verified compilation: no errors
+5. Quick validation: Score 100/100
+
+✅ completed
+---RULE---
+# --- Rule 20: Subtask 3.1 (from idea 2) attempt #1 - COMPLETED ---
+# Tests: Execution of a nested task subtask that was dynamically added
+I have implemented the shared memory transpose buffer:
+
+1. Added __shared__ float tile[TILE_SIZE][TILE_SIZE+1] for bank conflict avoidance
+2. For AXIS=1: load coalesced → transpose in smem → FFT → transpose back → store coalesced
+3. For AXIS=2: similar pattern with different indexing
+4. Code compiles without errors
+
+✅ completed
+---RULE---
+# --- Rule 21: Subtask 3.2 (from idea 2) attempt #1 - LONG_RUNNING ---
+# Tests: Long-running subtask in a dynamically added nested task
+I'll run the full benchmark suite using autoagent-exec:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 3.3.2
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 22: Subtask 3.2 callback - COMPLETED ---
+The benchmark completed successfully:
+- Score: 100/100 (correctness preserved!)
+- Y-axis speedup: 35% (better coalescing)
+- Z-axis speedup: 28% (better coalescing)
+- Overall speedup: 15% additional on top of previous optimizations
+
+✅ completed
+---RULE---
+# --- Rule 23: Main task 3 evaluation - COMPLETED ---
+{
+    "main_task_completed": true,
+    "analysis": "Shared memory transpose successfully implemented for AXIS=1 and AXIS=2. Correctness preserved (Score: 100/100). Y-axis improved by 35%, Z-axis by 28%."
+}

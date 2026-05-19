@@ -1,0 +1,82 @@
+# =============================================================================
+# Test Rules for AutoAgent TestProvider
+# =============================================================================
+# Format: Each rule is separated by '---RULE---' delimiter.
+# Rules are consumed in order, one per ask() call.
+#
+# For simple tasks: include '✅ completed' or '❌ not completed: <reason>'
+# For JSON responses (failure analysis, evaluation): include valid JSON
+# For long_running tasks: the AI should instruct autoagent-exec to run a command
+#
+# Tip: Use 'sleep 15' for testing long_running tasks.
+# =============================================================================
+
+# --- Rule 1: Subtask 1.1 (Build project and record baseline) ---
+I have built the project and recorded the baseline performance.
+
+The project builds successfully:
+  cmake -B build -DCMAKE_BUILD_TYPE=Release
+  cmake --build build --config Release
+
+The baseline timing has been recorded to baseline_timing.txt:
+  Elapsed: 150.00 ms
+
+✅ completed
+---RULE---
+# --- Rule 2: Subtask 1.2 (Profile with ncu - long_running) ---
+# For long_running tasks, use the simplified format below.
+# AIClientTest will parse this and actually run autoagent_exec.py,
+# extracting exec_path and log_dir from the prompt automatically.
+# Using a cross-platform sleep command as a test placeholder.
+
+I'll use autoagent-exec to run the ncu profiling command:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.1.2
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 3: Subtask 1.2 analysis callback (after long_running completes) ---
+I have analyzed the ncu profiling results.
+
+Key findings:
+- fused_dct_axis_kernel takes 60% of total time
+- Memory bandwidth utilization is at 45% (room for improvement)
+- SM occupancy is 50% due to high register usage
+
+Written analysis to ncu_analysis.txt.
+
+✅ completed
+---RULE---
+# --- Rule 4: Subtask 1.3 (Optimize CUDA kernel) ---
+I have optimized the CUDA kernel based on the profiling results:
+1. Replaced cosf()/sinf() with __sincosf() intrinsic
+2. Precomputed twiddle factors in shared memory
+3. Improved memory coalescing for Y/Z axis operations
+
+The code compiles without errors.
+
+✅ completed
+---RULE---
+# --- Rule 5: Subtask 1.4 (Build and benchmark) ---
+Build and benchmark results:
+- Score: 100/100 (correctness preserved)
+- Elapsed: 120.00 ms (was 150.00 ms)
+- Speedup: 20.0%
+- Target met: YES
+
+Written results to optimization_result.txt.
+
+✅ completed
+---RULE---
+# --- Rule 6: Subtask 1.5 (Git commit) ---
+The optimization was effective (20% speedup with correct results).
+Committed: git commit -m "perf: optimize cuFFTDx DCT3D kernel - 20.0% speedup"
+Updated baseline_timing.txt with new timing (120.00 ms).
+
+✅ completed
+---RULE---
+# --- Rule 7: Main task evaluation (AI evaluates if 20% target is met) ---
+{
+    "main_task_completed": true,
+    "analysis": "The optimization achieved exactly 20% speedup (150ms -> 120ms) with correctness preserved (Score: 100/100). The 20% target has been met."
+}

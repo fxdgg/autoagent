@@ -1,0 +1,148 @@
+# =============================================================================
+# Test Rules 5 - Once-type Subtask Behavior Testing
+# =============================================================================
+# This test verifies that simple_once and long_running_once subtasks are
+# executed only once and NOT re-executed when retries occur.
+#
+# Test scenario (nested task with 4 subtasks):
+#   1.1: simple_once      - One-time environment setup
+#   1.2: long_running_once - One-time data preprocessing (background)
+#   1.3: simple            - Main processing (fails first time)
+#   1.4: simple            - Validation
+#
+# Expected call sequence:
+#   Rule 1:  Subtask 1.1 attempt #1 → ✅ completed (simple_once)
+#   Rule 2:  Subtask 1.2 attempt #1 → autoagent-exec + LONG_RUNNING_IN_PROGRESS
+#   Rule 3:  Subtask 1.2 callback   → ✅ completed (long_running_once)
+#   Rule 4:  Subtask 1.3 attempt #1 → ❌ not completed (triggers failure analysis)
+#   Rule 5:  Failure analysis (DP1) → retry_from=1.1 (tests that 1.1 & 1.2 are NOT reset)
+#   Rule 6:  Subtask 1.3 attempt #1 (after reset) → ✅ completed
+#            (NOTE: 1.1 and 1.2 are skipped because they are *_once and already completed)
+#   Rule 7:  Subtask 1.4 attempt #1 → ✅ completed
+#   Rule 8:  Main task evaluation (DP2) → NOT completed, retry_from=1.3
+#            (tests that 1.1 & 1.2 are NOT reset by main task evaluation retry)
+#   Rule 9:  Subtask 1.3 attempt #1 (2nd retry) → ✅ completed
+#            (NOTE: 1.1 and 1.2 are still skipped)
+#   Rule 10: Subtask 1.4 attempt #1 (2nd retry) → ✅ completed
+#   Rule 11: Main task evaluation (DP2) → completed ✅
+#
+# Key verification points:
+#   - After Rule 5 (retry_from=1.1), subtasks 1.1 and 1.2 should NOT be
+#     re-executed. The next ask() call should be for subtask 1.3.
+#   - After Rule 8 (retry_from=1.3), subtasks 1.1 and 1.2 should still
+#     NOT be re-executed. The next ask() call should be for subtask 1.3.
+#   - If the once-type logic is broken, the test will consume rules in
+#     the wrong order and produce incorrect results.
+# =============================================================================
+
+# --- Rule 1: Subtask 1.1 (simple_once) - COMPLETED ---
+# First and only execution of the one-time environment setup.
+I have set up the environment:
+- Installed all required dependencies
+- Configured environment variables
+- Created necessary directories
+
+✅ completed
+---RULE---
+# --- Rule 2: Subtask 1.2 (long_running_once) - LONG_RUNNING submission ---
+# First and only execution of the one-time data preprocessing.
+I'll run the data preprocessing pipeline using autoagent-exec:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.1.2
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 3: Subtask 1.2 callback - COMPLETED ---
+# Callback after long_running_once completes.
+The data preprocessing pipeline completed successfully.
+
+Output files generated:
+- preprocessed_data.csv (1.2GB)
+- feature_matrix.npy (500MB)
+- metadata.json
+
+All data quality checks passed.
+
+✅ completed
+---RULE---
+# --- Rule 4: Subtask 1.3 attempt #1 - NOT COMPLETED ---
+# First attempt at main processing fails.
+I attempted to run the main processing pipeline but encountered an error:
+
+Error: Configuration mismatch - the processing parameters don't match
+the preprocessed data format. Need to adjust the config file.
+
+❌ not completed: Processing failed due to configuration mismatch
+---RULE---
+# --- Rule 5: Failure analysis (DP1) - retry_from=1.1 ---
+# AI analyzes the failure and decides to retry from 1.1.
+# CRITICAL: Even though retry_from=1.1, subtasks 1.1 (simple_once) and
+# 1.2 (long_running_once) should NOT be reset because they are *_once types.
+# The system should skip them and go directly to 1.3.
+{
+    "analysis": "Subtask 1.3 failed because the processing configuration doesn't match the preprocessed data format. The environment setup and data preprocessing are fine - we just need to fix the processing config and re-run.",
+    "retry_from": "1.1",
+    "reasoning": "Setting retry_from to 1.1 to re-evaluate from the beginning. However, the setup (1.1) and preprocessing (1.2) results are still valid and should not need to be redone.",
+    "suggested_fix": "Update the processing config to match the preprocessed data format. Check preprocessed_data.csv header for the correct column names."
+}
+---RULE---
+# --- Rule 6: Subtask 1.3 attempt #1 (after reset) - COMPLETED ---
+# After retry, 1.1 and 1.2 are skipped (once-type, already completed).
+# This rule is consumed by subtask 1.3's re-execution.
+I fixed the configuration and re-ran the main processing pipeline:
+- Updated config.yaml to match preprocessed data format
+- Processing completed successfully
+- Output: results.json with 1000 processed records
+
+✅ completed
+---RULE---
+# --- Rule 7: Subtask 1.4 attempt #1 - COMPLETED ---
+# Validation runs for the first time.
+Validation results:
+- Data integrity check: PASSED
+- Output format check: PASSED
+- Statistical validation: PASSED (mean=0.85, std=0.12)
+- All 1000 records validated successfully
+
+✅ completed
+---RULE---
+# --- Rule 8: Main task evaluation (DP2) - NOT completed, retry_from=1.3 ---
+# AI evaluates the main task and decides it's not complete yet.
+# CRITICAL: retry_from=1.3 means 1.1 and 1.2 should NOT be reset.
+{
+    "main_task_completed": false,
+    "analysis": "All subtasks completed but the statistical validation shows mean=0.85 which is below the expected threshold of 0.90. The processing needs to be re-run with adjusted parameters.",
+    "retry_from": "1.3",
+    "next_strategy": "Increase the processing precision parameter from 0.8 to 0.95 to improve output quality.",
+    "suggested_improvements": ["Adjust precision parameter", "Enable double-pass processing"]
+}
+---RULE---
+# --- Rule 9: Subtask 1.3 attempt #1 (2nd retry) - COMPLETED ---
+# After main task evaluation retry, 1.1 and 1.2 are still skipped.
+# This rule is consumed by subtask 1.3's second re-execution.
+I re-ran the processing with improved parameters:
+- Set precision=0.95 and enabled double-pass processing
+- Processing completed successfully
+- Output: results.json with 1000 processed records (improved quality)
+
+✅ completed
+---RULE---
+# --- Rule 10: Subtask 1.4 attempt #1 (2nd retry) - COMPLETED ---
+# Validation runs again after the improved processing.
+Validation results (improved):
+- Data integrity check: PASSED
+- Output format check: PASSED
+- Statistical validation: PASSED (mean=0.93, std=0.05)
+- All 1000 records validated successfully
+- Quality threshold met: 0.93 >= 0.90
+
+✅ completed
+---RULE---
+# --- Rule 11: Main task evaluation (DP2) - COMPLETED ---
+# AI evaluates the main task and confirms completion.
+{
+    "main_task_completed": true,
+    "analysis": "All subtasks completed successfully. The setup (1.1) and data preprocessing (1.2) ran once as expected. The main processing (1.3) was retried with improved parameters, achieving mean=0.93 which exceeds the 0.90 threshold. All validation checks pass."
+}
+
+... EOF no more lines ...

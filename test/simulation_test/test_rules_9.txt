@@ -109,6 +109,5 @@ Updated baseline_timing.txt with new timing (115.00 ms).
 # --- Rule 7: Main task evaluation - COMPLETED ---
 {
     "main_task_completed": true,
-    "analysis": "The optimization achieved 23.3% speedup (150ms -> 115ms) with correctness preserved (Score: 100/100). The 20% target has been exceeded.",
-    "confidence": "high"
+    "analysis": "The optimization achieved 23.3% speedup (150ms -> 115ms) with correctness preserved (Score: 100/100). The 20% target has been exceeded."
 }

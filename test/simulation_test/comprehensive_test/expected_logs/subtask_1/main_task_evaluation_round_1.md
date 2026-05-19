@@ -4,8 +4,13 @@
 
 ```
 You are a task evaluation expert. Evaluate whether the main task's completion criteria have been fully met based on the execution results.
+DO NOT modifying source code, tests, configs, data, generated files, etc.
 
 <context>
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
+
     <main_task>
         Nested comprehensive coverage
     </main_task>
@@ -17,31 +22,21 @@ You are a task evaluation expert. Evaluate whether the main task's completion cr
 </context>
 
 <workflow>
-    1.1. One-time environment setup (COMPLETED)
+    1.1. One-time environment setup (✅ completed)
             Criteria:
                 Environment configured and dependencies installed.
-            Result:
-                ✅ completed
-      1.2. One-time data preparation (COMPLETED)
+      1.2. One-time data preparation (✅ completed)
             Criteria:
                 Data pipeline executed, output files generated.
-            Result:
-                ✅ completed
-      1.3. Core processing (COMPLETED)
+      1.3. Core processing (✅ completed)
             Criteria:
                 Processing completed with correct output.
-            Result:
-                ✅ completed
-      1.4. Benchmark and validate (COMPLETED)
+      1.4. Benchmark and validate (✅ completed)
             Criteria:
                 Benchmark results recorded and correctness validated.
-            Result:
-                ✅ completed
-      1.5. Commit results (COMPLETED)
+      1.5. Commit results (✅ completed)
             Criteria:
                 Results committed to git.
-            Result:
-                ✅ completed
 </workflow>
 
 <instructions>
@@ -58,7 +53,7 @@ You are a task evaluation expert. Evaluate whether the main task's completion cr
     ```
 
     - `retry_from` and `next_strategy`: Only required when `main_task_completed` is false.
-    - `next_strategy`: Will be passed to the AI executing the next round — be specific and actionable.
+    - `next_strategy`: Will be passed to the AI executing the next round - be specific and actionable.
     - Available subtask IDs: ['1.1', '1.2', '1.3', '1.4', '1.5']
 </instructions>
 ```
@@ -70,7 +65,6 @@ You are a task evaluation expert. Evaluate whether the main task's completion cr
     "analysis": "All subtasks completed but the throughput improvement of 50% may not be reliable. The benchmark was run only once and results may vary. Need to run at least 3 iterations and report the median.",
     "retry_from": "1.3",
     "next_strategy": "Re-run processing with 3 benchmark iterations and report median throughput. Also add p95 latency metric.",
-    "suggested_improvements": ["Run 3 benchmark iterations", "Add p95 latency metric"],
-    "confidence": "medium"
+    "suggested_improvements": ["Run 3 benchmark iterations", "Add p95 latency metric"]
 }
 

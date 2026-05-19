@@ -4,6 +4,7 @@
 
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
+DO NOT modifying source code, tests, configs, data, generated files, etc.
 
 <failed_subtask>
     <task_name>
@@ -15,17 +16,23 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     </main_task_completion_criteria>
 
     <workflow>
-        5.1. Prepare fallback scenario (COMPLETED)
+        5.1. Prepare fallback scenario (✅ completed)
                 Criteria:
                     Fallback test inputs prepared.
-                Summary:
-                    ✅ completed
-        → 5.2. Run fragile transformation (FAILED)
+        → 5.2. Run fragile transformation (❌ not completed)
                 Criteria:
                     Transformation completed with validated output.
           5.3. Verify fallback output
+                Criteria:
+                    Verification completed successfully.
     </workflow>
 </failed_subtask>
+
+<context>
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
+</context>
 
 <outputs>
     <previous_step_context (5.1)>
@@ -66,7 +73,7 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     ```
 
     - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
-    - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
+    - `suggested_fix`: Will be shown to the AI executing the retry - be specific.
     - Available subtask IDs: ['5.1', '5.2', '5.3']
 </instructions>
 ```

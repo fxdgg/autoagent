@@ -4,6 +4,7 @@
 
 ```
 You are an AI task scheduler. Your job is to decide which task to execute next, or whether to stop execution.
+DO NOT modifying source code, tests, configs, data, generated files, etc.
 
 You must respond with a JSON object in one of these formats:
 1. Execute a task: {"action": "execute", "task_id": <id>, "reasoning": "<why>"}
@@ -76,12 +77,12 @@ You must choose exactly ONE task per round.
     </available_tasks>
 
     <schedule_history> (last 10 rounds, most recent call last)
-        Task 1 | Nested comprehensive coverage | COMPLETED
-        Task 2 | Looping comprehensive coverage | COMPLETED
-        Task 3 | Nested edge case coverage | COMPLETED
-        Task 4 | Looping max attempts exhaustion | FAILED
-        Task 5 | Nested invalid JSON fallback coverage | COMPLETED
-        Task 6 | Prompt truncation coverage | COMPLETED
+        Task 1 | Nested comprehensive coverage | ✅ completed
+        Task 2 | Looping comprehensive coverage | ✅ completed
+        Task 3 | Nested edge case coverage | ✅ completed
+        Task 4 | Looping max attempts exhaustion | ❌ not completed
+        Task 5 | Nested invalid JSON fallback coverage | ✅ completed
+        Task 6 | Prompt truncation coverage | ✅ completed
     </schedule_history>
 </context>
 ```

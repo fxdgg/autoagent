@@ -1,0 +1,204 @@
+# =============================================================================
+# Test Rules 12 - Fatal Analysis Path Coverage
+# =============================================================================
+# Tests all fatal_analysis decision paths:
+#   Path 1: Subtask fatal → retry same subtask (carry_forward)
+#   Path 2: Top-level simple fatal → retry predecessor
+#   Path 3: Subtask fatal → retry predecessor top-level
+#   Path 4: Fatal → stop
+#
+# ---- Task 1 (nested): subtask fatal → retry_from=1.2 ----
+#   Rule 1:  Subtask 1.1 (simple_once)       → ✅ completed
+#   Rule 2:  Subtask 1.2 (fatal)             → ❌ FATAL
+#   Rule 3:  fatal_analysis for 1.2           → retry_from=1.2, suggested_fix
+#            (carry_forward: 1.1 skipped as _once, 1.2 retries with fix)
+#   Rule 4:  Subtask 1.2 retry               → ✅ completed
+#   Rule 5:  Subtask 1.3                      → ✅ completed
+#   Rule 6:  Main task eval                   → completed
+#
+# ---- Task 2 (simple): succeeds ----
+#   Rule 7:  Task 2                           → ✅ completed
+#
+# ---- Task 3 (simple, fatal): retry predecessor ----
+#   Rule 8:  Task 3                           → ❌ FATAL
+#   Rule 9:  fatal_analysis for task 3        → retry_from=2
+#   Rule 10: Task 2 re-run                    → ✅ completed
+#   Rule 11: Task 3 re-run                    → ✅ completed
+#
+# ---- Task 4 (nested): subtask fatal → retry predecessor top-level ----
+#   Rule 12: Subtask 4.1                      → ✅ completed
+#   Rule 13: Subtask 4.2 (fatal)             → ❌ FATAL
+#   Rule 14: fatal_analysis for 4.2           → retry_from=3
+#   Rule 15: Task 3 re-run                    → ✅ completed
+#   Rule 16: Subtask 4.1 re-run              → ✅ completed
+#   Rule 17: Subtask 4.2 re-run              → ✅ completed
+#   Rule 18: Subtask 4.3                      → ✅ completed
+#   Rule 19: Main task eval                   → completed
+#
+# ---- Task 5 (nested): fatal → stop ----
+#   Rule 20: Subtask 5.1                      → ✅ completed
+#   Rule 21: Subtask 5.2 (fatal)             → ❌ FATAL
+#   Rule 22: fatal_analysis for 5.2           → retry_from=stop
+# =============================================================================
+
+# --- Rule 1: Subtask 1.1 (simple_once) - COMPLETED ---
+Environment setup completed:
+- Installed dependencies
+- Configured auth tokens
+
+✅ completed
+---RULE---
+# --- Rule 2: Subtask 1.2 (fatal) - FATAL ---
+Attempted to connect to auth-service for processing but the service
+is unreachable. This is an infrastructure issue that blocks all
+downstream work.
+
+❌ FATAL: auth-service unreachable, cannot proceed with processing
+---RULE---
+# --- Rule 3: fatal_analysis for subtask 1.2 - retry_from=1.2 ---
+{
+    "analysis": "Subtask 1.2 failed because the auth-service is unreachable. This is likely a transient infrastructure issue. Retrying the same subtask should resolve it once the service recovers.",
+    "retry_from": "1.2",
+    "suggested_fix": "Retry connecting to auth-service with increased timeout. Check service health endpoint first before attempting the main request."
+}
+---RULE---
+# --- Rule 4: Subtask 1.2 retry - COMPLETED ---
+# (1.1 is simple_once → skipped via carry_forward, suggested_fix applied)
+Connected to auth-service successfully after retry:
+- Used increased timeout as suggested
+- Checked health endpoint first
+- Processing completed with auth tokens
+
+✅ completed
+---RULE---
+# --- Rule 5: Subtask 1.3 - COMPLETED ---
+Results finalized:
+- All data committed
+- Summary report generated
+
+✅ completed
+---RULE---
+# --- Rule 6: Main task evaluation - completed ---
+{
+    "main_task_completed": true,
+    "analysis": "All subtasks completed successfully. Auth-service issue was resolved on retry and processing completed normally."
+}
+---RULE---
+# --- Rule 7: Task 2 (simple) - COMPLETED ---
+Data preparation completed:
+- Downloaded source datasets
+- Cleaned and normalized data
+- Output: prepared_data.csv
+
+✅ completed
+---RULE---
+# --- Rule 8: Task 3 (simple, fatal) - FATAL ---
+Attempted to deploy to cluster but no nodes are available.
+The cluster autoscaler is not responding and all existing nodes
+are in NotReady state.
+
+❌ FATAL: cluster has no available nodes, autoscaler unresponsive
+---RULE---
+# --- Rule 9: fatal_analysis for task 3 - retry_from=2 ---
+{
+    "analysis": "Task 3 failed because the cluster has no available nodes. The data preparation in task 2 may have consumed resources that need to be released. Retrying from task 2 to re-prepare data with smaller batch sizes.",
+    "retry_from": "2",
+    "suggested_fix": "Re-run data preparation with smaller batch sizes to reduce resource consumption, then retry cluster deployment."
+}
+---RULE---
+# --- Rule 10: Task 2 re-run - COMPLETED ---
+Re-ran data preparation with optimized settings:
+- Used smaller batch sizes as suggested
+- Reduced memory footprint by 40%
+- Output: prepared_data_v2.csv
+
+✅ completed
+---RULE---
+# --- Rule 11: Task 3 re-run - COMPLETED ---
+Cluster deployment succeeded:
+- Nodes became available after resource optimization
+- Deployed application successfully
+- Health checks passing
+
+✅ completed
+---RULE---
+# --- Rule 12: Subtask 4.1 - COMPLETED ---
+Built all artifacts:
+- Compiled application binary
+- Generated migration scripts
+- Packaged deployment bundle
+
+✅ completed
+---RULE---
+# --- Rule 13: Subtask 4.2 (fatal) - FATAL ---
+DB migration failed: the target database schema version
+is incompatible with the migration scripts. The prerequisite
+schema update from task 3 deployment appears incomplete.
+
+❌ FATAL: DB migration incompatible, prerequisite schema update incomplete
+---RULE---
+# --- Rule 14: fatal_analysis for subtask 4.2 - retry_from=3 ---
+{
+    "analysis": "Subtask 4.2 failed because the DB schema is incompatible. The root cause is that task 3's deployment did not fully complete the schema update. Need to retry from task 3 to ensure the schema is properly updated before attempting the migration.",
+    "retry_from": "3",
+    "suggested_fix": "Re-deploy task 3 ensuring all schema migrations complete, then re-run task 4 from scratch."
+}
+---RULE---
+# --- Rule 15: Task 3 re-run (again) - COMPLETED ---
+Re-deployed with complete schema updates:
+- Applied all pending schema migrations
+- Verified schema version compatibility
+- Deployment health checks passing
+
+✅ completed
+---RULE---
+# --- Rule 16: Subtask 4.1 re-run - COMPLETED ---
+Rebuilt artifacts with updated schema:
+- Regenerated migration scripts for new schema
+- Compiled and packaged
+
+✅ completed
+---RULE---
+# --- Rule 17: Subtask 4.2 re-run - COMPLETED ---
+DB migration completed successfully:
+- Schema version compatible
+- All migrations applied
+- Data integrity checks passed
+
+✅ completed
+---RULE---
+# --- Rule 18: Subtask 4.3 - COMPLETED ---
+Deployment verified:
+- All endpoints responding
+- Integration tests passing
+- Monitoring dashboards green
+
+✅ completed
+---RULE---
+# --- Rule 19: Main task evaluation - completed ---
+{
+    "main_task_completed": true,
+    "analysis": "All subtasks completed. DB migration succeeded after prerequisite schema was properly updated via task 3 re-deployment."
+}
+---RULE---
+# --- Rule 20: Subtask 5.1 - COMPLETED ---
+Preflight checks passed:
+- Network connectivity verified
+- Credentials validated
+- Service endpoints reachable
+
+✅ completed
+---RULE---
+# --- Rule 21: Subtask 5.2 (fatal) - FATAL ---
+External payment gateway returned HTTP 503 Service Unavailable.
+The gateway is in maintenance mode with no ETA for recovery.
+This is a third-party service outage beyond our control.
+
+❌ FATAL: payment gateway unavailable, third-party maintenance with no ETA
+---RULE---
+# --- Rule 22: fatal_analysis for subtask 5.2 - stop ---
+{
+    "analysis": "Subtask 5.2 failed because the external payment gateway is in maintenance mode with no ETA. This is an external blocker that cannot be resolved by retrying any task. Stopping AutoAgent.",
+    "retry_from": "stop",
+    "suggested_fix": ""
+}

@@ -4,6 +4,7 @@
 
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
+DO NOT modifying source code, tests, configs, data, generated files, etc.
 
 <failed_subtask>
     <task_name>
@@ -15,18 +16,26 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     </main_task_completion_criteria>
 
     <workflow>
-        3.1. Build artifacts (COMPLETED)
+        3.1. Build artifacts (✅ completed)
                 Criteria:
                     Build artifacts generated successfully.
-                Summary:
-                    ✅ completed
-        → 3.2. Run integration tests (FAILED)
+        → 3.2. Run integration tests (❌ not completed)
                 Criteria:
                     Integration tests passed.
           3.3. Deploy staging
+                Criteria:
+                    Staging deployment verified and healthy.
           3.4. Smoke test staging
+                Criteria:
+                    Smoke tests passed on staging.
     </workflow>
 </failed_subtask>
+
+<context>
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
+</context>
 
 <outputs>
     <previous_step_context (3.1)>
@@ -71,7 +80,7 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     ```
 
     - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
-    - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
+    - `suggested_fix`: Will be shown to the AI executing the retry - be specific.
     - Available subtask IDs: ['3.1', '3.2', '3.3', '3.4']
 </instructions>
 ```
@@ -82,7 +91,6 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     "analysis": "Integration tests failed because the build artifacts were compiled without the auth module enabled. The build config needs AUTH_ENABLED=true.",
     "retry_from": "3.1",
     "reasoning": "The build step needs to be re-run with correct flags, then tests re-run.",
-    "suggested_fix": "Re-run the build with AUTH_ENABLED=true in the build configuration and add a type coercion step for the auth token fields.",
-    "confidence": "high"
+    "suggested_fix": "Re-run the build with AUTH_ENABLED=true in the build configuration and add a type coercion step for the auth token fields."
 }
 

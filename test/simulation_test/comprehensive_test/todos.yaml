@@ -44,6 +44,15 @@
 # Tests: round-scoped description (description@7).
 #        The executor should inject description@7 instead of the root-level
 #        description into <project_description>.
+#
+# ---- Task 8: nested ----
+# Tests: fatal_analysis with carry_forward.
+#   8.1  simple           — succeeds
+#   8.2  simple (fatal)   — ❌ FATAL → fatal_analysis → retry_from=8.2
+#                           (carry_forward: 8.1 stays completed, skipped)
+#   8.2' simple           — succeeds (with suggested_fix)
+#   8.3  simple           — succeeds
+#   Main eval             — completed
 # =============================================================================
 
 description: >
@@ -71,12 +80,21 @@ ai_orchestrator:
       type: response
     7:
       type: response
+    8:
+      type: response
 
 description@7: >
   Round-scoped description for task 7: validates that the orchestrator
   selects description@7 over the root-level description.
 
 tasks:
+  # Reserved fatal_analysis task
+  - id: fatal_analysis
+    name: "Fatal Analysis"
+    type: simple
+    completion_criteria: |
+      Analyze the fatal failure and decide retry strategy.
+
   # ==========================================================================
   # Task 1: Nested — full path coverage
   # ==========================================================================
@@ -373,3 +391,47 @@ tasks:
       Round-scoped description verified in prompt context.
     initial_hint: |
       Verify that description@7 appears in the project context.
+
+  # ==========================================================================
+  # Task 8: Nested — fatal_analysis coverage
+  # ==========================================================================
+  - id: 8
+    name: "Nested fatal analysis coverage"
+    description: "Nested task testing fatal_analysis with carry_forward."
+    type: nested
+    max_attempts: 100
+    completion_criteria: |
+      All subtasks completed after fatal recovery.
+
+    subtasks:
+      - id: 8.1
+        name: "Registry setup"
+        type: simple
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Registry credentials configured.
+        initial_hint: |
+          Configure the container registry credentials.
+
+      - id: 8.2
+        name: "Push container image"
+        type: simple
+        fatal: true
+        max_attempts: 1
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Container image pushed to registry.
+        initial_hint: |
+          Build and push the container image to the registry.
+
+      - id: 8.3
+        name: "Deploy container"
+        type: simple
+        system_prompt_prefix: |
+          You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
+        completion_criteria: |
+          Container deployed and running.
+        initial_hint: |
+          Deploy the container from the registry.

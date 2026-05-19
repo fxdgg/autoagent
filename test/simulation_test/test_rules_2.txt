@@ -170,8 +170,7 @@ Updated baseline_timing.txt with new timing (125.00 ms).
         "Use float4 vectorized loads for better memory bandwidth",
         "Implement shared memory transpose for Y/Z axis to improve coalescing",
         "Consider fusing the pre/post processing with the FFT kernel"
-    ],
-    "confidence": "medium"
+    ]
 }
 ---RULE---
 # --- Rule 12: Subtask 1.2 (round 2) - LONG_RUNNING submission ---
@@ -232,6 +231,5 @@ Updated baseline_timing.txt with new timing (100.00 ms).
 # Tests: Main task evaluation returning true (task finished!)
 {
     "main_task_completed": true,
-    "analysis": "The optimization achieved 33.3% total speedup (150ms -> 100ms) with correctness preserved (Score: 100/100). The 20% target has been exceeded. Two rounds of optimization were performed: Round 1 achieved 16.7% speedup via twiddle factor precomputation and sincosf(), Round 2 achieved an additional 20% via shared memory transpose and vectorized loads.",
-    "confidence": "high"
+    "analysis": "The optimization achieved 33.3% total speedup (150ms -> 100ms) with correctness preserved (Score: 100/100). The 20% target has been exceeded. Two rounds of optimization were performed: Round 1 achieved 16.7% speedup via twiddle factor precomputation and sincosf(), Round 2 achieved an additional 20% via shared memory transpose and vectorized loads."
 }

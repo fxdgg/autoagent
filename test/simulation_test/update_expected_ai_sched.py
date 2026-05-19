@@ -16,7 +16,6 @@ Usage:
 import os
 import re
 import shutil
-import yaml
 
 
 def _normalize_log_content(text, project_root=None):
@@ -53,14 +52,27 @@ def _normalize_log_content(text, project_root=None):
 
 STRIP_KEYS = {'time', 'last_attempt', 'context_created_at', 'timestamp'}
 
-def _normalize_state_data(data):
-    """Recursively strip runtime-variable fields from parsed todos_state data."""
-    if isinstance(data, dict):
-        return {k: _normalize_state_data(v) for k, v in data.items()
-                if k not in STRIP_KEYS}
-    if isinstance(data, list):
-        return [_normalize_state_data(item) for item in data]
-    return data
+_STRIP_LINE_RE = re.compile(
+    r'^(\s*)(' + '|'.join(re.escape(k) for k in STRIP_KEYS) + r'):.*$'
+)
+
+_FATAL_KEY_RE = re.compile(
+    r'^(\s*)(fatal_analysis:\d+\.\d+):\d+(:?)$'
+)
+
+
+def _normalize_state_text(text: str) -> str:
+    """Strip runtime-variable lines and normalize fatal_analysis keys."""
+    lines = text.splitlines(True)
+    out = []
+    for line in lines:
+        if _STRIP_LINE_RE.match(line):
+            continue
+        m = _FATAL_KEY_RE.match(line.rstrip('\n'))
+        if m:
+            line = m.group(1) + m.group(2) + m.group(3) + '\n'
+        out.append(line)
+    return ''.join(out)
 
 
 def main():
@@ -124,13 +136,12 @@ def main():
         return
 
     with open(src_state, "r", encoding="utf-8") as f:
-        state_data = yaml.safe_load(f)
+        text = f.read()
 
-    norm_state = _normalize_state_data(state_data)
+    norm = _normalize_state_text(text)
 
     with open(dst_state, "w", encoding="utf-8") as f:
-        yaml.dump(norm_state, f, default_flow_style=False,
-                  allow_unicode=True, sort_keys=True)
+        f.write(norm)
     print(f"  Updated: expected_state.yaml")
 
     print("\nDone! Expected files updated successfully.")

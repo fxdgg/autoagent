@@ -4,6 +4,7 @@
 
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
+DO NOT modifying source code, tests, configs, data, generated files, etc.
 
 <failed_subtask>
     <task_name>
@@ -16,23 +17,29 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     </main_task_completion_criteria>
 
     <workflow>
-        1.1. One-time environment setup (COMPLETED)
+        1.1. One-time environment setup (✅ completed)
                 Criteria:
                     Environment configured and dependencies installed.
-                Summary:
-                    ✅ completed
-          1.2. One-time data preparation (COMPLETED)
+          1.2. One-time data preparation (✅ completed)
                 Criteria:
                     Data pipeline executed, output files generated.
-                Summary:
-                    ✅ completed
-        → 1.3. Core processing (FAILED)
+        → 1.3. Core processing (❌ not completed)
                 Criteria:
                     Processing completed with correct output.
           1.4. Benchmark and validate
+                Criteria:
+                    Benchmark results recorded and correctness validated.
           1.5. Commit results
+                Criteria:
+                    Results committed to git.
     </workflow>
 </failed_subtask>
+
+<context>
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
+</context>
 
 <outputs>
     <previous_step_context (1.2)>
@@ -79,7 +86,7 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     ```
 
     - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
-    - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
+    - `suggested_fix`: Will be shown to the AI executing the retry - be specific.
     - Available subtask IDs: ['1.1', '1.2', '1.3', '1.4', '1.5']
 </instructions>
 ```
@@ -90,7 +97,6 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     "analysis": "Subtask 1.3 failed because the processing config does not match the data schema produced by the preparation step. The timestamp field type mismatch needs to be fixed in the config.",
     "retry_from": "1.1",
     "reasoning": "Retrying from the beginning to re-evaluate the full pipeline, though setup and data prep should not need re-running.",
-    "suggested_fix": "Update config.yaml to set timestamp_format='datetime64' and add a type coercion step for string-to-datetime conversion in the processing pipeline.",
-    "confidence": "high"
+    "suggested_fix": "Update config.yaml to set timestamp_format='datetime64' and add a type coercion step for string-to-datetime conversion in the processing pipeline."
 }
 

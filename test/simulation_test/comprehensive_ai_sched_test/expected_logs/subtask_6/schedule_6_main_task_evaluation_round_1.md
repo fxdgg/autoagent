@@ -4,8 +4,13 @@
 
 ```
 You are a task evaluation expert. Evaluate whether the main task's completion criteria have been fully met based on the execution results.
+DO NOT modifying source code, tests, configs, data, generated files, etc.
 
 <context>
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
+
     <main_task>
         Prompt truncation coverage
     </main_task>
@@ -16,21 +21,15 @@ You are a task evaluation expert. Evaluate whether the main task's completion cr
 </context>
 
 <workflow>
-    6.1. Generate oversized prior context (COMPLETED)
+    6.1. Generate oversized prior context (✅ completed)
             Criteria:
                 Oversized diagnostic context generated.
-            Result:
-                ✅ completed
-      6.2. Retry with truncated context (COMPLETED)
+      6.2. Retry with truncated context (✅ completed)
             Criteria:
                 Retry succeeds after analyzing truncated context.
-            Result:
-                ✅ completed
-      6.3. Finalize truncation validation (COMPLETED)
+      6.3. Finalize truncation validation (✅ completed)
             Criteria:
                 Final validation recorded.
-            Result:
-                ✅ completed
 </workflow>
 
 <instructions>
@@ -47,7 +46,7 @@ You are a task evaluation expert. Evaluate whether the main task's completion cr
     ```
 
     - `retry_from` and `next_strategy`: Only required when `main_task_completed` is false.
-    - `next_strategy`: Will be passed to the AI executing the next round — be specific and actionable.
+    - `next_strategy`: Will be passed to the AI executing the next round - be specific and actionable.
     - Available subtask IDs: ['6.1', '6.2', '6.3']
 </instructions>
 ```
@@ -56,7 +55,6 @@ You are a task evaluation expert. Evaluate whether the main task's completion cr
 
 {
     "main_task_completed": true,
-    "analysis": "Oversized context was truncated safely in downstream prompts, retry analysis remained actionable, and the final checkpoint reconstruction plus validation completed successfully.",
-    "confidence": "high"
+    "analysis": "Oversized context was truncated safely in downstream prompts, retry analysis remained actionable, and the final checkpoint reconstruction plus validation completed successfully."
 }
 

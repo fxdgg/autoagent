@@ -4,6 +4,7 @@
 
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
+DO NOT modifying source code, tests, configs, data, generated files, etc.
 
 <failed_subtask>
     <task_name>
@@ -16,27 +17,29 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     </main_task_completion_criteria>
 
     <workflow>
-        1.1. One-time environment setup (COMPLETED)
+        1.1. One-time environment setup (✅ completed)
                 Criteria:
                     Environment configured and dependencies installed.
-                Summary:
-                    ✅ completed
-          1.2. One-time data preparation (COMPLETED)
+          1.2. One-time data preparation (✅ completed)
                 Criteria:
                     Data pipeline executed, output files generated.
-                Summary:
-                    ✅ completed
-          1.3. Core processing (COMPLETED)
+          1.3. Core processing (✅ completed)
                 Criteria:
                     Processing completed with correct output.
-                Summary:
-                    ✅ completed
-        → 1.4. Benchmark and validate (FAILED)
+        → 1.4. Benchmark and validate (❌ not completed)
                 Criteria:
                     Benchmark results recorded and correctness validated.
           1.5. Commit results
+                Criteria:
+                    Results committed to git.
     </workflow>
 </failed_subtask>
+
+<context>
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
+</context>
 
 <outputs>
     <previous_step_context (1.3)>
@@ -83,7 +86,7 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     ```
 
     - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
-    - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
+    - `suggested_fix`: Will be shown to the AI executing the retry - be specific.
     - Available subtask IDs: ['1.1', '1.2', '1.3', '1.4', '1.5']
 </instructions>
 ```
@@ -94,7 +97,6 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     "analysis": "Subtask 1.4 failed with a segfault due to null pointer dereference when processing records with empty optional fields. The benchmark code needs null checks for optional fields.",
     "retry_from": "1.4",
     "reasoning": "The processing itself succeeded; only the benchmark runner crashes. Retry from 1.4 with a fix.",
-    "suggested_fix": "Add null checks for optional fields in the benchmark runner before accessing field values. Use std::optional or check for nullptr before dereferencing.",
-    "confidence": "high"
+    "suggested_fix": "Add null checks for optional fields in the benchmark runner before accessing field values. Use std::optional or check for nullptr before dereferencing."
 }
 

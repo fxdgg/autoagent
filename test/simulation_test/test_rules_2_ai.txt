@@ -1,0 +1,235 @@
+# =============================================================================
+# Test Rules 2 - Comprehensive Edge Case Testing
+# =============================================================================
+# This test file exercises many edge cases in the AutoAgent orchestrator:
+#
+#   1. Subtask returns ❌ not completed, then succeeds on retry
+#   2. Long-running task submission
+#   3. Long-running callback returns malformed output (no status marker),
+#      triggering a marker nudge
+#   4. Nudge response returns ❌ not completed → retry
+#   5. Long-running callback retry with correct ✅ completed
+#   6. Subtask uses fuzzy completion marker (Layer 3 matching)
+#   7. Subtask fails with ❌ not completed, then retries internally
+#   8. Retried subtasks succeed
+#   9. Main task evaluation returns main_task_completed: false (retry)
+#  10. Second round succeeds and main task evaluation returns true
+#
+# NOTE: Simple task ❌ not completed does NOT trigger failure analysis
+#       (Decision Point 1). It only causes SimpleTaskExecutor to retry
+#       internally. Failure analysis is only triggered when the subtask
+#       executor returns success=False (i.e., max_attempts exhausted).
+#
+# Expected call sequence (ask() calls in order):
+#   Rule 1:  Subtask 1.1 attempt #1 → ❌ not completed
+#   Rule 2:  Subtask 1.1 attempt #2 → ✅ completed
+#   Rule 3:  Subtask 1.2 attempt #1 → autoagent-exec + LONG_RUNNING_IN_PROGRESS
+#   Rule 4:  Subtask 1.2 callback   → malformed (no marker) → triggers nudge
+#   Rule 5:  Subtask 1.2 nudge      → ❌ not completed
+#   Rule 6:  Subtask 1.2 attempt #2 → autoagent-exec + LONG_RUNNING_IN_PROGRESS
+#   Rule 7:  Subtask 1.2 callback   → ✅ completed
+#   Rule 8:  Subtask 1.3 attempt #1 → fuzzy "✅ Task Completed Successfully"
+#   Rule 9:  Subtask 1.4 attempt #1 → ❌ not completed (internal retry)
+#   Rule 10: Subtask 1.4 attempt #2 → ✅ completed (fixed precision)
+#   Rule 11: Subtask 1.5 attempt #1 → ✅ completed
+#   Rule 12: Main task evaluation    → main_task_completed: false, retry_from: 1.2
+#   Rule 13: Subtask 1.2 (round 2)  → autoagent-exec + LONG_RUNNING_IN_PROGRESS
+#   Rule 14: Subtask 1.2 callback   → ✅ completed
+#   Rule 15: Subtask 1.3 (round 2)  → ✅ completed
+#   Rule 16: Subtask 1.4 (round 2)  → ✅ completed
+#   Rule 17: Subtask 1.5 (round 2)  → ✅ completed
+#   Rule 18: Main task evaluation    → main_task_completed: true
+# =============================================================================
+
+# --- Rule 1: Subtask 1.1 attempt #1 - NOT COMPLETED ---
+# Tests: Simple task retry when AI reports not completed
+I attempted to build the project but encountered a CMake configuration error.
+
+CMake Error at CMakeLists.txt:15:
+  Could not find CUDA toolkit. Set CUDA_TOOLKIT_ROOT_DIR.
+
+I was unable to resolve this in the current attempt.
+
+❌ not completed: CMake could not find CUDA toolkit
+---RULE---
+# --- Rule 2: Subtask 1.1 attempt #2 - COMPLETED ---
+# Tests: Successful retry after previous failure
+I fixed the CUDA toolkit path and rebuilt the project successfully.
+
+  cmake -B build -DCMAKE_BUILD_TYPE=Release -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda
+  cmake --build build --config Release
+
+The baseline timing has been recorded to baseline_timing.txt:
+  Elapsed: 150.00 ms
+
+✅ completed
+---RULE---
+# --- Rule 3: Subtask 1.2 attempt #1 - LONG_RUNNING submission ---
+# Tests: Long-running task submission via autoagent-exec
+I'll use autoagent-exec to run the ncu profiling command:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.1.2
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 4: Subtask 1.2 callback - MALFORMED OUTPUT (no status marker) ---
+# Tests: What happens when AI returns text without ✅/❌ markers
+# Expected behavior: _check_completion returns False (default), treated as not completed
+I looked at the ncu profiling output. The results show some interesting
+patterns in the kernel execution. The fused_dct_axis_kernel appears to
+be the primary bottleneck.
+
+Here are the key metrics I found:
+- SM Occupancy: 45%
+- Memory Throughput: 60%
+- Compute Throughput: 30%
+
+I have written my analysis to ncu_analysis.txt.
+---RULE---
+# --- Rule 5: Subtask 1.2 nudge response - NOT COMPLETED ---
+# Tests: Marker nudge after LR callback without marker. AI acknowledges
+#        the task is not fully done when prompted for a status marker.
+❌ not completed: Analysis written but profiling data was incomplete
+---RULE---
+# --- Rule 6: Subtask 1.2 attempt #2 - LONG_RUNNING re-submission ---
+# Tests: Re-submission of long-running task after callback failure
+Let me re-run the profiling with more detailed metrics:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.1.2
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 6: Subtask 1.2 callback #2 - COMPLETED ---
+# Tests: Successful long-running callback on second attempt
+I have thoroughly analyzed the ncu profiling results.
+
+Key findings:
+- fused_dct_axis_kernel takes 60% of total time
+- Memory bandwidth utilization is at 45% (room for improvement)
+- SM occupancy is 50% due to high register usage
+- Significant stalls due to memory dependency (cosf/sinf calls)
+
+Written detailed analysis to ncu_analysis.txt.
+
+✅ completed
+---RULE---
+# --- Rule 7: Subtask 1.3 attempt #1 - FUZZY COMPLETION MARKER ---
+# Tests: Layer 3 fuzzy matching in _check_completion()
+# Uses "✅ Task Completed Successfully" instead of strict "✅ completed"
+I have optimized the CUDA kernel based on the profiling results:
+1. Replaced cosf()/sinf() with __sincosf() intrinsic
+2. Precomputed twiddle factors in shared memory
+3. Improved memory coalescing for Y/Z axis operations
+
+The code compiles without errors. All changes are in cufftdx_dct3d.cuh.
+
+✅ Task Completed Successfully
+---RULE---
+# --- Rule 8: Subtask 1.4 attempt #1 - NOT COMPLETED (internal retry) ---
+# Tests: Simple task ❌ not completed triggers internal retry (NOT failure analysis)
+Build and benchmark results:
+- Score: 90/100 (CORRECTNESS BROKEN!)
+- Elapsed: 110.00 ms (was 150.00 ms)
+- Speedup: 26.7%
+
+The optimization broke correctness. Score dropped from 100 to 90.
+Some DCT coefficients are slightly off, likely due to the twiddle
+factor precomputation introducing rounding errors.
+
+❌ not completed: Correctness broken - Score is 90/100, expected 100/100
+---RULE---
+# --- Rule 9: Subtask 1.4 attempt #2 - COMPLETED ---
+# Tests: Successful internal retry of subtask 1.4 after not-completed
+Build and benchmark results (after fixing precision in the kernel):
+- Score: 100/100 (correctness preserved!)
+- Elapsed: 125.00 ms (was 150.00 ms)
+- Speedup: 16.7%
+- Target met: NO (need 20%, got 16.7%)
+
+Written results to optimization_result.txt.
+
+✅ completed
+---RULE---
+# --- Rule 10: Subtask 1.5 attempt #1 - COMPLETED ---
+# Tests: Git commit step (speedup exists but below 20% target)
+The optimization achieved 16.7% speedup with correct results.
+Committed: git commit -m "perf: optimize cuFFTDx DCT3D kernel - 16.7% speedup"
+Updated baseline_timing.txt with new timing (125.00 ms).
+
+✅ completed
+---RULE---
+# --- Rule 11: Main task evaluation - NOT COMPLETED (retry from 1.2) ---
+# Tests: Main task evaluation returning false, triggering a new round
+# The AI decides the 20% target is not met and wants to retry from profiling
+{
+    "main_task_completed": false,
+    "analysis": "The optimization achieved 16.7% speedup (150ms -> 125ms) which is below the 20% target. The correctness is preserved (Score: 100/100). Further optimization is needed, particularly in memory access patterns for non-X axis operations.",
+    "retry_from": "1.2",
+    "next_strategy": "Re-profile the optimized kernel to find remaining bottlenecks. Focus on memory coalescing for Y and Z axis operations, and consider using vectorized loads/stores.",
+    "suggested_improvements": [
+        "Use float4 vectorized loads for better memory bandwidth",
+        "Implement shared memory transpose for Y/Z axis to improve coalescing",
+        "Consider fusing the pre/post processing with the FFT kernel"
+    ]
+}
+---RULE---
+# --- Rule 12: Subtask 1.2 (round 2) - LONG_RUNNING submission ---
+# Tests: Second round of long-running task
+I'll re-profile the optimized kernel to find remaining bottlenecks:
+
+autoagent-exec --cmd "python -c \"import time; time.sleep(1)\"" --task-id 1.1.2
+
+⏳ LONG_RUNNING_IN_PROGRESS
+---RULE---
+# --- Rule 13: Subtask 1.2 callback (round 2) - COMPLETED ---
+# Tests: Successful callback in second round
+I have re-analyzed the profiling results for the optimized kernel.
+
+New findings (compared to first profile):
+- fused_dct_axis_kernel still takes 55% of time (was 60%)
+- Y-axis operations have poor coalescing (stride = 64 * sizeof(float))
+- L2 cache hit rate improved from 40% to 55%
+- Main remaining bottleneck: strided memory access in Y/Z axis
+
+Written updated analysis to ncu_analysis.txt.
+
+✅ completed
+---RULE---
+# --- Rule 14: Subtask 1.3 (round 2) - COMPLETED ---
+# Tests: Optimization in second round
+I have applied additional optimizations:
+1. Added shared memory transpose buffer for Y-axis operations
+2. Used float4 vectorized loads where alignment permits
+3. Reduced bank conflicts with padding in shared memory
+
+The code compiles without errors.
+
+✅ completed
+---RULE---
+# --- Rule 15: Subtask 1.4 (round 2) - COMPLETED ---
+# Tests: Benchmark in second round shows target met
+Build and benchmark results:
+- Score: 100/100 (correctness preserved!)
+- Elapsed: 100.00 ms (was 125.00 ms baseline, original 150.00 ms)
+- Speedup vs current baseline: 20.0%
+- Speedup vs original: 33.3%
+- Target met: YES
+
+Written results to optimization_result.txt.
+
+✅ completed
+---RULE---
+# --- Rule 16: Subtask 1.5 (round 2) - COMPLETED ---
+# Tests: Git commit in second round
+The optimization achieved 20.0% additional speedup with correct results.
+Committed: git commit -m "perf: optimize cuFFTDx DCT3D kernel - 33.3% total speedup"
+Updated baseline_timing.txt with new timing (100.00 ms).
+
+✅ completed
+---RULE---
+# --- Rule 17: Main task evaluation (round 2) - COMPLETED ---
+# Tests: Main task evaluation returning true (task finished!)
+{
+    "main_task_completed": true,
+    "analysis": "The optimization achieved 33.3% total speedup (150ms -> 100ms) with correctness preserved (Score: 100/100). The 20% target has been exceeded. Two rounds of optimization were performed: Round 1 achieved 16.7% speedup via twiddle factor precomputation and sincosf(), Round 2 achieved an additional 20% via shared memory transpose and vectorized loads."
+}

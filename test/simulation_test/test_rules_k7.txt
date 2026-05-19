@@ -77,7 +77,7 @@ All API endpoints validated.
 ✅ completed
 ---RULE---
 # --- Rule 10: Task 4 main_task_evaluation → completed ---
-{"main_task_completed": true, "analysis": "All subtasks completed successfully. Unit tests and integration tests both pass.", "confidence": "high"}
+{"main_task_completed": true, "analysis": "All subtasks completed successfully. Unit tests and integration tests both pass."}
 ---RULE---
 # --- Rule 11: Scheduler → execute task 1 (repeat) ---
 {"action": "execute", "task_id": 1, "reasoning": "Re-run environment setup with updated config after optimization"}

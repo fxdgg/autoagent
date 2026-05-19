@@ -83,8 +83,7 @@ the preprocessed data format. Need to adjust the config file.
     "analysis": "Subtask 1.3 failed because the processing configuration doesn't match the preprocessed data format. The environment setup and data preprocessing are fine - we just need to fix the processing config and re-run.",
     "retry_from": "1.1",
     "reasoning": "Setting retry_from to 1.1 to re-evaluate from the beginning. However, the setup (1.1) and preprocessing (1.2) results are still valid and should not need to be redone.",
-    "suggested_fix": "Update the processing config to match the preprocessed data format. Check preprocessed_data.csv header for the correct column names.",
-    "confidence": "high"
+    "suggested_fix": "Update the processing config to match the preprocessed data format. Check preprocessed_data.csv header for the correct column names."
 }
 ---RULE---
 # --- Rule 6: Subtask 1.3 attempt #1 (after reset) - COMPLETED ---
@@ -115,8 +114,7 @@ Validation results:
     "analysis": "All subtasks completed but the statistical validation shows mean=0.85 which is below the expected threshold of 0.90. The processing needs to be re-run with adjusted parameters.",
     "retry_from": "1.3",
     "next_strategy": "Increase the processing precision parameter from 0.8 to 0.95 to improve output quality.",
-    "suggested_improvements": ["Adjust precision parameter", "Enable double-pass processing"],
-    "confidence": "high"
+    "suggested_improvements": ["Adjust precision parameter", "Enable double-pass processing"]
 }
 ---RULE---
 # --- Rule 9: Subtask 1.3 attempt #1 (2nd retry) - COMPLETED ---
@@ -144,8 +142,7 @@ Validation results (improved):
 # AI evaluates the main task and confirms completion.
 {
     "main_task_completed": true,
-    "analysis": "All subtasks completed successfully. The setup (1.1) and data preprocessing (1.2) ran once as expected. The main processing (1.3) was retried with improved parameters, achieving mean=0.93 which exceeds the 0.90 threshold. All validation checks pass.",
-    "confidence": "high"
+    "analysis": "All subtasks completed successfully. The setup (1.1) and data preprocessing (1.2) ran once as expected. The main processing (1.3) was retried with improved parameters, achieving mean=0.93 which exceeds the 0.90 threshold. All validation checks pass."
 }
 
 ... EOF no more lines ...

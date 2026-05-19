@@ -78,6 +78,5 @@ Updated baseline_timing.txt with new timing (120.00 ms).
 # --- Rule 7: Main task evaluation (AI evaluates if 20% target is met) ---
 {
     "main_task_completed": true,
-    "analysis": "The optimization achieved exactly 20% speedup (150ms -> 120ms) with correctness preserved (Score: 100/100). The 20% target has been met.",
-    "confidence": "high"
+    "analysis": "The optimization achieved exactly 20% speedup (150ms -> 120ms) with correctness preserved (Score: 100/100). The 20% target has been met."
 }

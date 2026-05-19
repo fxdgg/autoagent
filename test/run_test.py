@@ -198,6 +198,9 @@ def run_orchestrator(project_root, autoagent_dir, test_schema, test_num, log_dir
     if extra_args:
         cmd_parts.extend(extra_args)
 
+    if extra_args and "--ideas" in extra_args:
+        cmd_parts.append("--adversarial-review")
+
     # Set PYTHONPATH so orchestrator can import its modules
     env = os.environ.copy()
     existing_pypath = env.get("PYTHONPATH", "")
@@ -272,12 +275,20 @@ def _normalize_log_content(text, project_root=None):
     return text
 
 
+_FATAL_KEY_RE_DATA = re.compile(r'^(fatal_analysis:\d+\.\d+):\d+$')
+
 def _normalize_state_data(data):
     """Recursively strip runtime-variable fields from parsed todos_state data."""
     STRIP_KEYS = {'time', 'last_attempt', 'context_created_at', 'timestamp'}
     if isinstance(data, dict):
-        return {k: _normalize_state_data(v) for k, v in data.items()
-                if k not in STRIP_KEYS}
+        out = {}
+        for k, v in data.items():
+            if k in STRIP_KEYS:
+                continue
+            m = _FATAL_KEY_RE_DATA.match(str(k))
+            norm_k = m.group(1) if m else k
+            out[norm_k] = _normalize_state_data(v)
+        return out
     if isinstance(data, list):
         return [_normalize_state_data(item) for item in data]
     return data
@@ -801,7 +812,10 @@ Examples:
                     try:
                         print(s)
                     except UnicodeEncodeError:
-                        print(s.encode("utf-8", errors="replace").decode("ascii", errors="replace"))
+                        import sys
+                        sys.stdout.buffer.write(s.encode("utf-8", errors="replace"))
+                        sys.stdout.buffer.write(b"\n")
+                        sys.stdout.buffer.flush()
 
                 if proc_result.stdout:
                     # Show last 30 lines of output

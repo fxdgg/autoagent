@@ -243,8 +243,7 @@ Updated baseline_timing.txt with new timing (115.00 ms).
 # --- Rule 18: Main task 1 evaluation - COMPLETED ---
 {
     "main_task_completed": true,
-    "analysis": "The optimization achieved 23.3% speedup (150ms -> 115ms) with correctness preserved (Score: 100/100). The 20% target has been exceeded.",
-    "confidence": "high"
+    "analysis": "The optimization achieved 23.3% speedup (150ms -> 115ms) with correctness preserved (Score: 100/100). The 20% target has been exceeded."
 }
 ---RULE---
 # --- Rule 19: Task 2 (from idea 1) attempt #1 - COMPLETED ---
@@ -291,6 +290,5 @@ The benchmark completed successfully:
 # --- Rule 23: Main task 3 evaluation - COMPLETED ---
 {
     "main_task_completed": true,
-    "analysis": "Shared memory transpose successfully implemented for AXIS=1 and AXIS=2. Correctness preserved (Score: 100/100). Y-axis improved by 35%, Z-axis by 28%.",
-    "confidence": "high"
+    "analysis": "Shared memory transpose successfully implemented for AXIS=1 and AXIS=2. Correctness preserved (Score: 100/100). Y-axis improved by 35%, Z-axis by 28%."
 }

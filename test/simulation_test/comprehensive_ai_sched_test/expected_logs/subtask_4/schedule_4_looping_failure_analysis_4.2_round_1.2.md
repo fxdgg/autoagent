@@ -4,6 +4,7 @@
 
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
+DO NOT modifying source code, tests, configs, data, generated files, etc.
 
 <failed_subtask>
     <task_name>
@@ -15,16 +16,20 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     </main_task_completion_criteria>
 
     <workflow>
-        4.1. Generate report (COMPLETED)
+        4.1. Generate report (✅ completed)
                 Criteria:
                     Report generated with correct data.
-                Summary:
-                    ✅ completed
-        → 4.2. Validate report (FAILED)
+        → 4.2. Validate report (❌ not completed)
                 Criteria:
                     Report validation passed.
     </workflow>
 </failed_subtask>
+
+<context>
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
+</context>
 
 <outputs>
     <previous_step_context (4.1)>
@@ -75,7 +80,7 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     ```
 
     - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
-    - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
+    - `suggested_fix`: Will be shown to the AI executing the retry - be specific.
     - Available subtask IDs: ['4.1', '4.2']
 </instructions>
 ```
@@ -86,7 +91,6 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     "analysis": "Report validation failed again due to a sign error in the YoY chart generation. The formula subtracts current from previous instead of previous from current.",
     "retry_from": "4.2",
     "reasoning": "Only the chart generation needs fixing, not the data itself.",
-    "suggested_fix": "Fix the YoY comparison formula in chart_generator.py: change (prev_quarter - curr_quarter) to (curr_quarter - prev_quarter) for growth calculation.",
-    "confidence": "high"
+    "suggested_fix": "Fix the YoY comparison formula in chart_generator.py: change (prev_quarter - curr_quarter) to (curr_quarter - prev_quarter) for growth calculation."
 }
 

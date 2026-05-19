@@ -1,0 +1,174 @@
+# =============================================================================
+# Test 12: Fatal Analysis path coverage
+# =============================================================================
+# Tests EVERY fatal_analysis decision path:
+#
+# ---- Task 1 (nested): subtask fatal → retry same subtask ----
+#   1.1  simple_once     — succeeds, skipped on retry
+#   1.2  simple (fatal)  — ❌ FATAL → fatal_analysis → retry_from=1.2
+#                          (carry_forward: 1.1 stays completed)
+#   1.2' simple          — succeeds (with suggested_fix)
+#   1.3  simple          — succeeds
+#   Main eval            — completed
+#
+# ---- Task 2 (simple): succeeds normally ----
+#
+# ---- Task 3 (simple, fatal): top-level fatal → retry predecessor ----
+#   ❌ FATAL → fatal_analysis → retry_from=2
+#   Task 2 re-executes → succeeds
+#   Task 3 re-executes → succeeds
+#
+# ---- Task 4 (nested): subtask fatal → retry predecessor top-level ----
+#   4.1  simple          — succeeds
+#   4.2  simple (fatal)  — ❌ FATAL → fatal_analysis → retry_from=3
+#   Task 3 re-executes → succeeds
+#   Task 4 re-executes: 4.1, 4.2, 4.3 all succeed
+#   Main eval            — completed
+#
+# ---- Task 5 (nested): fatal → stop ----
+#   5.1  simple          — succeeds
+#   5.2  simple (fatal)  — ❌ FATAL → fatal_analysis → retry_from=stop
+#   AutoAgent stops
+#
+# Expected exit code: 1 (task 5 failed + stop)
+# =============================================================================
+
+description: |
+  Test project for fatal analysis path coverage.
+
+ai_orchestrator:
+  strategy: |
+    Execute tasks sequentially.
+  max_rounds: 10
+  stop_condition: |
+    All tasks completed.
+  last_result:
+    1:
+      type: response
+    2:
+      type: response
+    3:
+      type: response
+    4:
+      type: response
+    5:
+      type: response
+
+tasks:
+  # Reserved fatal_analysis task
+  - id: fatal_analysis
+    name: "Fatal Analysis"
+    type: simple
+    completion_criteria: |
+      Analyze the fatal failure and decide retry strategy.
+
+  # ==========================================================================
+  # Task 1: Nested — subtask fatal, retry same subtask
+  # ==========================================================================
+  - id: 1
+    name: "Nested with subtask fatal retry"
+    description: "Nested task where a subtask hits a fatal error and retries itself."
+    type: nested
+    max_attempts: 100
+    completion_criteria: |
+      All subtasks completed successfully.
+
+    subtasks:
+      - id: 1.1
+        name: "One-time setup"
+        type: simple_once
+        completion_criteria: |
+          Setup completed.
+
+      - id: 1.2
+        name: "Auth-dependent processing"
+        type: simple
+        fatal: true
+        max_attempts: 1
+        completion_criteria: |
+          Processing completed with auth service.
+
+      - id: 1.3
+        name: "Finalize results"
+        type: simple
+        completion_criteria: |
+          Results finalized.
+
+  # ==========================================================================
+  # Task 2: Simple — succeeds normally (predecessor for task 3 retry)
+  # ==========================================================================
+  - id: 2
+    name: "Data preparation"
+    description: "Simple task that prepares data."
+    type: simple
+    completion_criteria: |
+      Data prepared successfully.
+
+  # ==========================================================================
+  # Task 3: Simple fatal — top-level fatal, retry predecessor
+  # ==========================================================================
+  - id: 3
+    name: "Cluster deployment"
+    description: "Simple task that requires cluster resources."
+    type: simple
+    fatal: true
+    completion_criteria: |
+      Deployment completed on cluster.
+
+  # ==========================================================================
+  # Task 4: Nested — subtask fatal, retry predecessor top-level
+  # ==========================================================================
+  - id: 4
+    name: "Nested with subtask fatal retry predecessor"
+    description: "Nested task where a subtask hits fatal and retries a predecessor top-level task."
+    type: nested
+    max_attempts: 100
+    completion_criteria: |
+      All subtasks completed successfully.
+
+    subtasks:
+      - id: 4.1
+        name: "Build artifacts"
+        type: simple
+        completion_criteria: |
+          Artifacts built.
+
+      - id: 4.2
+        name: "Deploy with DB migration"
+        type: simple
+        fatal: true
+        max_attempts: 1
+        completion_criteria: |
+          DB migration and deployment completed.
+
+      - id: 4.3
+        name: "Verify deployment"
+        type: simple
+        completion_criteria: |
+          Deployment verified.
+
+  # ==========================================================================
+  # Task 5: Nested — fatal → stop
+  # ==========================================================================
+  - id: 5
+    name: "Nested with fatal stop"
+    description: "Nested task where fatal analysis decides to stop."
+    type: nested
+    max_attempts: 100
+    completion_criteria: |
+      All subtasks completed.
+
+    subtasks:
+      - id: 5.1
+        name: "Preflight checks"
+        type: simple
+        completion_criteria: |
+          Preflight checks passed.
+
+      - id: 5.2
+        name: "External service integration"
+        type: simple
+        fatal: true
+        max_attempts: 1
+        completion_criteria: |
+          External service integration completed.

@@ -12,8 +12,8 @@
     Always wrap the command in double quotes so that shell operators are passed correctly.
     
     How does this work:
-    You are not executing commands using autoagent-exec; instead you are SUBMITTING the command to the background by using it.
-    So DO NOT manually wait for the command to finish.
+    You are SUBMITTING the command to the background, instead of executing commands using autoagent-exec.
+    So DO NOT manually wait for the command to finish —— Just output ⏳ LONG_RUNNING_IN_PROGRESS after it shows "TASK SUBMITTED".
     
     autoagent-exec has three possible outcomes:
       - "TASK SUBMITTED" → the command is submitted to background. Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.
@@ -21,12 +21,16 @@
       - "[FAST-FAIL]" → the command failed quickly. Read the error output, fix the issue, and retry.
     
     ⚠️ CRITICAL — No Output Redirection:
-    autoagent-exec already captures ALL stdout/stderr to a log file automatically.
+    autoagent-exec automatically captures ALL stdout/stderr to a log file.
     If you add output redirection (>, >>, 2>, &>, | tee, etc.), you may NOT see any of the three outcomes above.
-    If the task hint's command already includes redirection, strip the redirection and use --stdout / --stderr instead:
+    If commands in `initial_hint` already includes redirection, strip the redirection and use --stdout / --stderr instead:
       "<autoagent-exec>" --stdout build.log --stderr build_err.log "make"
     
-    Pass --help to autoagent-exec for further troubleshooting.
+    ⚠️ If you can't see autoagent-exec's any of the three outcomes:
+    The output may have been already redirected. DO NOT run autoagent-exec again before checking the process by PID.
+    Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately if it's still running.
+    Check the command outputs in redirected files or "logs/<SESSION>/lr_tasks/lr_6.6.2_output.log" and continue working if it has already finished.
+    DO NOT use `sleep` or any wait command in your session.
     
     3. When you are done, end your response with EXACTLY one of:
       ✅ completed

@@ -4,6 +4,7 @@
 
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
+DO NOT modifying source code, tests, configs, data, generated files, etc.
 
 <failed_subtask>
     <task_name>
@@ -16,27 +17,29 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     </main_task_completion_criteria>
 
     <workflow>
-        1.1. One-time environment setup (COMPLETED)
+        1.1. One-time environment setup (✅ completed)
                 Criteria:
                     Environment configured and dependencies installed.
-                Summary:
-                    ✅ completed
-          1.2. One-time data preparation (COMPLETED)
+          1.2. One-time data preparation (✅ completed)
                 Criteria:
                     Data pipeline executed, output files generated.
-                Summary:
-                    ✅ completed
-          1.3. Core processing (COMPLETED)
+          1.3. Core processing (✅ completed)
                 Criteria:
                     Processing completed with correct output.
-                Summary:
-                    ✅ completed
-        → 1.4. Benchmark and validate (FAILED)
+        → 1.4. Benchmark and validate (❌ not completed)
                 Criteria:
                     Benchmark results recorded and correctness validated.
           1.5. Commit results
+                Criteria:
+                    Results committed to git.
     </workflow>
 </failed_subtask>
+
+<context>
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
+</context>
 
 <outputs>
     <failed_subtask_output (1.4)>
@@ -77,7 +80,7 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     ```
 
     - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
-    - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
+    - `suggested_fix`: Will be shown to the AI executing the retry - be specific.
     - Available subtask IDs: ['1.1', '1.2', '1.3', '1.4', '1.5']
 </instructions>
 ```
@@ -88,7 +91,6 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     "analysis": "Subtask 1.4 failed again. The first fix (null checks) introduced a logic error that skips valid records, causing negative throughput. Need to fix the conditional logic to only skip truly null records.",
     "retry_from": "1.4",
     "reasoning": "The null check implementation was too aggressive. Need a more precise fix.",
-    "suggested_fix": "Replace the broad null check with a targeted check: only skip records where the optional field pointer is nullptr, not where the field value is zero or empty string. Use field.has_value() instead of field != nullptr.",
-    "confidence": "high"
+    "suggested_fix": "Replace the broad null check with a targeted check: only skip records where the optional field pointer is nullptr, not where the field value is zero or empty string. Use field.has_value() instead of field != nullptr."
 }
 

@@ -4,6 +4,7 @@
 
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
+DO NOT modifying source code, tests, configs, data, generated files, etc.
 
 <failed_subtask>
     <task_name>
@@ -15,17 +16,23 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     </main_task_completion_criteria>
 
     <workflow>
-        2.1. Iteration setup (COMPLETED)
+        2.1. Iteration setup (✅ completed)
                 Criteria:
                     Setup completed for this iteration.
-                Summary:
-                    ✅ completed
-        → 2.2. Process data (FAILED)
+        → 2.2. Process data (❌ not completed)
                 Criteria:
                     Data processed correctly.
           2.3. Verify output
+                Criteria:
+                    Output verified and saved.
     </workflow>
 </failed_subtask>
+
+<context>
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
+</context>
 
 <outputs>
     <failed_subtask_output (2.2)>
@@ -61,7 +68,7 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     ```
 
     - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
-    - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
+    - `suggested_fix`: Will be shown to the AI executing the retry - be specific.
     - Available subtask IDs: ['2.1', '2.2', '2.3']
 </instructions>
 ```
@@ -72,7 +79,6 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     "analysis": "After fixing null user_id values, a second issue appeared: malformed email entries. The data cleaning needs to handle both null values and malformed emails.",
     "retry_from": "2.2",
     "reasoning": "The setup is fine; only the processing step needs additional data validation.",
-    "suggested_fix": "Add email validation regex to the preprocessing filter alongside the null handling. Use re.match(r'^[^@]+@[^@]+//.[^@]+$', email) and drop records that fail validation.",
-    "confidence": "high"
+    "suggested_fix": "Add email validation regex to the preprocessing filter alongside the null handling. Use re.match(r'^[^@]+@[^@]+//.[^@]+$', email) and drop records that fail validation."
 }
 

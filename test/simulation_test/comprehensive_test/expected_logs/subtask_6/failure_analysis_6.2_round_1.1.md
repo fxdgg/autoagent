@@ -4,6 +4,7 @@
 
 ```
 You are a failure analysis expert. Analyze the subtask failure below and decide the best retry strategy.
+DO NOT modifying source code, tests, configs, data, generated files, etc.
 
 <failed_subtask>
     <task_name>
@@ -15,17 +16,23 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     </main_task_completion_criteria>
 
     <workflow>
-        6.1. Generate oversized prior context (COMPLETED)
+        6.1. Generate oversized prior context (✅ completed)
                 Criteria:
                     Oversized diagnostic context generated.
-                Summary:
-                    ✅ completed
-        → 6.2. Retry with truncated context (FAILED)
+        → 6.2. Retry with truncated context (❌ not completed)
                 Criteria:
                     Retry succeeds after analyzing truncated context.
           6.3. Finalize truncation validation
+                Criteria:
+                    Final validation recorded.
     </workflow>
 </failed_subtask>
+
+<context>
+    <project_description>
+        Comprehensive test project exercising all prompt-building paths for nested and looping task executors.
+    </project_description>
+</context>
 
 <outputs>
     <previous_step_context (6.1)>
@@ -91,7 +98,7 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     ```
 
     - `retry_from`: The failed subtask itself, or an earlier one if the root cause is there.
-    - `suggested_fix`: Will be shown to the AI executing the retry — be specific.
+    - `suggested_fix`: Will be shown to the AI executing the retry - be specific.
     - Available subtask IDs: ['6.1', '6.2', '6.3']
 </instructions>
 ```
@@ -102,7 +109,6 @@ You are a failure analysis expert. Analyze the subtask failure below and decide 
     "analysis": "The retry failed because the checkpoint replay logic mixes stale offsets with the reconstructed final checkpoint. The next attempt should ignore stale offsets and rebuild the final checkpoint from the latest validated cursor only.",
     "retry_from": "6.2",
     "reasoning": "The oversized diagnostic note is still useful; only the retry logic needs a more targeted fix.",
-    "suggested_fix": "Reset the replay buffer before reconstructing the final checkpoint, then rebuild the checkpoint exclusively from the latest validated cursor snapshot instead of mixing in stale offsets.",
-    "confidence": "high"
+    "suggested_fix": "Reset the replay buffer before reconstructing the final checkpoint, then rebuild the checkpoint exclusively from the latest validated cursor snapshot instead of mixing in stale offsets."
 }
 
