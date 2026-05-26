@@ -388,11 +388,11 @@ tasks:
     type: simple
     max_attempts: 2
     completion_criteria: |
-      1. The root cause of the failure claimed by previous failed task is identified.
-      2. If fixable within allowed scope, the correct fix is applied and verified. If not fixable, AutoAgent is stopped with a clear explanation.
+      1. The root cause of the fatal failure claimed by previous failed task is identified.
+      2. If fixable within user-defined allowed scope, the correct fix is applied and verified. 
+      3. If not fixable within allowed scope, AutoAgent is stopped with a clear explanation.
     system_prompt_prefix: |
-      You are a diagnostic engineer. You may inspect any file and fix failures claimed by previous failed task within allowed scope. 
-      Do NOT modify source code, tests, configs, or benchmark scripts.
+      You are a diagnostic engineer. You may inspect any file and fix failures claimed by previous failed task within the user-defined allowed scope.
     initial_hint: |
       Read error_report.md for the fatal error details.
 

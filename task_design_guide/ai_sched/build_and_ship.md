@@ -1,27 +1,52 @@
 # Best Practice: Build & Ship
 
-## 1. Three Core Principles
+## 1. Four Core Principles
 
-Patterns for **implementing features, fixing bugs, and refactoring** — the most common software engineering task. These tasks typically involve **large codebases (10k+ lines)** where changes span multiple modules, so the three core principles below must be enforced:
+Patterns for **implementing features, fixing bugs, and refactoring** — the most common software engineering task. These tasks typically involve **large codebases (10k+ lines)** where changes span multiple modules, so the four core principles below must be enforced:
 
-1. **Module-based splitting at the top level** — Split by module/subsystem boundary into **independent top-level tasks**, not subtasks of one big nested task. In AI scheduling mode, top-level tasks are the scheduler's redispatch units: design each module task so it can run 0, 1, or many times without corrupting shared state.
+1. **Module-based splitting at the top level** — Split by module/subsystem boundary into **independent top-level tasks**, not subtasks of one big nested task. Each top-level task owns one module's changes end-to-end (replan + implement + anti-hack). Top-level tasks are the unit of independent retry (see §3).
 
-2. **Anti-hack verification** — Every top-level module task must contain (as its last subtask) a dedicated `max_attempts: 1` verification subtask that re-runs the module's tests AND checks explicit diff evidence (`git diff --name-only <recorded-base>..HEAD` plus targeted `git diff` on tests/contracts) for scope violations, weakened assertions, `@skip` additions, and modified public schemas. Without this, the AI can silently "pass" by gaming the tests (see main guide §4.9).
+2. **Replan before implement** — Every module task begins with a lightweight replan subtask that reads the current codebase state (which may have changed from earlier modules) and the original design plan, then updates the design doc as needed: fix issues left by earlier tasks, add missing constraints, adjust interfaces, extend the file scope. Since linear mode cannot retry earlier tasks, the replan subtask is responsible for making `design_plan/` the accurate single source of truth before implementation starts.
 
-3. **Unit test discipline** — Every implementation subtask that changes behavior must include unit tests for that behavior, written in the same subtask as the code (not a later subtask). Tests cover: happy path, edge cases, error cases, and any regression scenario that motivated the change.
+3. **Anti-hack verification** — Every top-level module task must contain (as its last subtask) a dedicated `max_attempts: 1` verification subtask that re-runs the module's tests AND checks explicit diff evidence (`git diff --name-only <recorded-base>..HEAD` plus targeted `git diff` on tests/contracts) for scope violations, weakened assertions, skipped-test annotations, and modified public schemas. Without this, the AI can silently "pass" by gaming the tests (see main guide §6.1).
+
+4. **Unit test discipline** — Every implementation subtask that changes behavior must include unit tests for that behavior, written in the same subtask as the code (not a later subtask). Tests cover: happy path, edge cases, error cases, and any regression scenario that motivated the change.
 
 ---
 
 ## 2. Recommended Structure
 
-| Task size | Structure |
-|-----------|-----------|
-| Single bug or small feature (< 3 files, < 1 module) | One top-level `simple` task |
-| Feature or bug fix touching one module | One top-level `nested`: implement + test → anti-hack verify (`max_attempts: 1`) |
-| Large feature / refactor spanning N modules, OR N independent bugs | **1 Analysis top-level task** + **N top-level `nested` tasks** + **1 top-level integration task** scheduled by `ai_orchestrator.strategy` (See §3) |
-| Any of the above with build/test > 1 min | Use `long_running` for the verification subtask (see main guide rule 5 / §2.1) |
+```
+├── nested (prerequisite check + design)
+|   ├── build and run tests without modifications           (simple or long_running, max_attempts: 1, model: lite, fatal: true) <!-- OPTIONAL: skip if project is built from scratch, or cannot be partially built / tested. -->
+|   ├── write design_plan/ + guardrails.md                  (simple)
+|   └── review design_plan/ for completeness                (simple, max_attempts: 5) <!-- If user provided design_plan/, review only the diff from the write subtask -->
+├── nested (module 1)
+|   ├── replan: review current state + update local plan    (simple)
+|   ├── implement + test                                    (simple or long_running)
+|   └── anti-hack verify                                    (simple or long_running, max_attempts: 1)
+├── nested (module 2)
+|   ├── replan: review current state + update local plan    (simple)
+|   ├── implement + test                                    (simple or long_running)
+|   └── anti-hack verify                                    (simple or long_running, max_attempts: 1)
+...
+├── nested (module N)
+|   ├── replan: review current state + update local plan    (simple)
+|   ├── implement + test                                    (simple or long_running)
+|   └── anti-hack verify                                    (simple or long_running, max_attempts: 1)
+└── nested (integration)
+    ├── integration tests + cross-module fixes              (simple or long_running)
+    └── global anti-hack + full suite verification          (simple or long_running, max_attempts: 1)
+```
 
-**Verifier type note**: the complete example below keeps verifier subtasks as `simple` for compactness. If any verifier command may exceed one minute (for example full `pytest`, `ruff`, `mypy`, integration tests, or large module tests), change that verifier's `type` to `long_running` while keeping `max_attempts: 1`, and the same `❌ not completed: <reason>` failure behavior.
+Key Considerations:
+
+- **Separate analysis from implementation**: design plan in one task, implementation in others (see main guide §4.2).
+- The "review design_plan/ for completeness" task should have high `max_attempts` so that the design plan can be thoroughly reviewed multiple times.
+- Anti-hack verification subtasks should use `max_attempts: 1` — failures should propagate to the parent for proper retry.
+- Build/test subtask in the prerequisite task should use `fatal: true` — if the project cannot build or pass tests without any modification, this is a prerequisite failure that `fatal_analysis` should handle. It is fatal analysis task's responsibility to define the fix boundary. **Skip build/test subtask entirely if the project is built from scratch, or cannot be partially built / tested.**.
+- Use `long_running` for build / test / verification a if they contain commands that may exceed one minute.
+- Executors that output `❌ not completed` or `❌ FATAL` must append an entry to `error_report.md` before outputting the marker.
 
 ---
 
@@ -33,19 +58,13 @@ In AI scheduling mode, the scheduler selects one top-level task per round and ca
 
 Do not put all modules into one large `nested` task. The scheduler cannot partially select inner subtasks; once it selects a top-level `nested` task, its subtasks run through the normal sequential executor. A one-big-nested design therefore hides useful scheduling boundaries and makes recovery coarser.
 
-2. **`looping` is generally not recommended for Build & Ship**, since the goal of implementation is typically "to reach a specific end state". Let the scheduler perform re-execution by redispatching top-level tasks.
+2. **`looping` is generally not recommended for Build & Ship**, since the goal of implementation is typically "to reach a specific end state".
 
 3. **Details for task decomposition when module-based splitting is required**:
-  - **Default flat at the top level**: prefer top-level `simple` / `long_running` / small `nested` tasks and let the scheduler handle ordering, dependency waits, and re-execution.
-  - **Each Build & Ship module `nested` task generally has just two subtasks**: `implement + test` and `anti-hack verify`. This keeps enforced order local while leaving module-level scheduling to `ai_orchestrator.strategy`.
-  - **A final top-level integration task is scheduled after module success**. It sees the full codebase, runs the whole test suite, and fixes cross-module bugs only now visible. Its workload is not large because each module has already been unit-tested in isolation.
-  - **Put an analysis task in the graph** that designs an implementation plan (including per-module scope boundaries) and exposes scheduler-relevant artifacts via `last_result`.
+  - **Each `nested` task generally has three subtasks**: `replan`, `implement + test`, and `anti-hack verify`.
+  - **A final top-level integration task is added at the end**. This task sees the full codebase, runs the whole test suite, and fixes cross-module bugs only now visible. Its workload is not large because each module has already been unit-tested in isolation.
 
-4. **Prerequisite failures should be natural scheduler signals**: if a consumer task is dispatched before required artifacts exist, it should output `❌ not completed: <reason>`. The scheduler strategy can then rerun the missing producer task or wait for its successful `last_result`, instead of requiring the consumer task to compensate by rewriting unrelated work.
-
-5. **Most Build & Ship `nested` module tasks can use `last_result: type: response`**. They usually have only two subtasks and the scheduler mainly needs the final success/failure summary. Use `last_result: type: file` only for producer tasks whose artifacts the scheduler must inspect across rounds (for example analysis, integration summary, benchmark/report files).
-
-6. **Anti-hack subtask should explicitly output `❌ not completed: <reason>` when anti-hack check fails** for correct failure propagation (see main guide rule 18 / §4.7).
+4. **Anti-hack subtask should explicitly output `❌ not completed: <reason>` when anti-hack check fails** for correct failure propagation (see main guide rule 18 / §4.7).
 
 ---
 
@@ -62,13 +81,13 @@ AutoAgent system does **not** enforce `design_plan/` or `guardrails.md` semantic
 
 | Artifact | Holds | Consumed by |
 |----------|-------|-------------|
-| `design_plan/index.md` | System overview, architecture, cross-module interface contracts, integration risks | Every module task (reads for neighbor contracts and system context) |
-| `design_plan/<module>.md` | One per top-level module task: responsibility, public interface, internal design, test strategy, dependencies | The owning module task (authoritative); adjacent modules may peek |
-| `guardrails.md` | Clean baseline commit (SHA + timestamp + pytest/lint/type state), scope whitelist (allowed files per module), append-only revision log, and module-start SHA markers | All anti-hack subtasks — the single oracle for "what changed", "what was allowed", and "was the change declared" |
+| `design_plan/index.md` | System overview, architecture, document directory | Every module task (reads for system context and to locate module-specific docs) |
+| `design_plan/<module>.md` | One per top-level module task: responsibility, public interface, internal design (error handling, state management, validation rules), test strategy, dependencies | The owning module task (authoritative); adjacent modules may peek |
+| `guardrails.md` | Clean baseline commit (SHA + timestamp), scope whitelist (allowed files per module), append-only revision log, and module-start SHA markers | All anti-hack subtasks — the single oracle for "what changed", "what was allowed", and "was the change declared" |
 
 ### 4.2 Artifact structure
 
-Three short skeletons. Keep each one lean — these are templates, not essays. The per-submodule file, in particular, documents *design intent and reasoning*; it is not an implementation spec with pseudocode.
+Three skeletons below. `design_plan/` must be **thorough on all design decisions** — error handling protocols, state transitions, edge-case behavior, validation rules, concurrency semantics, etc. — because any design point not explicitly specified will be "freely invented" by the implementation AI. The only thing excluded from design_plan/ is pseudocode / line-level implementation details. `guardrails.md` is audit data only.
 
 **`design_plan/index.md`:**
 
@@ -80,22 +99,23 @@ One paragraph: goal, scope, non-goals.
 
 ## §2 Architecture
 - Components / layers and their responsibilities (high-level; details per module live in <module>.md)
-- Major control flows (e.g. "CSV upload → parse → validate → bulk insert → payment → notify")
-- ASCII diagram optional but encouraged
+- Major control flows
+- ASCII diagram (optional)
 
-## §3 Cross-Module Interface Contracts
-One line per cross-module edge.
-- csv_parser.parse(file_bytes: bytes) -> list[OrderRow]; raises CsvFormatError on malformed input
-- db.orders.bulk_insert(rows: list[OrderRow]) -> BulkInsertResult; atomic per-row (partial failure → per-row status, no full rollback)
-- ... (one bullet per edge)
+## §3 Document Directory
+| Document | Description |
+| <relative/path/to/document> | <one-line description of this document> |
 
-## §4 Integration Risks & Cross-Module Assumptions
-- Transaction boundary: service layer owns the transaction; DB layer never commits.
-- Call order: validate → parse → db insert → payment → notify; notify failures are logged, not fatal.
-- ... (one bullet per non-obvious assumption)
+## §4 Task-Module Assignment
+Which task is responsible for which module document(s).
+| Module Document | Responsible Task(s) |
+| design_plan/<module_1>.md | <task id(s)> |
+| design_plan/<module_2>.md | <task id(s)> |
 ```
 
-**`design_plan/<module>.md`** (one per top-level module task; name it after the module, e.g. `csv_parser.md`):
+**IMPORTANT**: Task decomposition is performed by YOU, not the executor that writes design plan. Executor can only change each module's **assignment**. Therefore, you MUST explicitly tell the plan executor each subsequent task's responsibility, otherwise it doesn't know how will this plan be executed. See the complete example in §5 for guidance.
+
+**`design_plan/<module>.md`** (one per top-level module task):
 
 ```markdown
 # Design Plan — <Module Name>
@@ -105,18 +125,21 @@ One line per cross-module edge.
 - Explicitly NOT owned: <what callers must handle themselves>
 
 ## §2 Public Interface
-Signatures this module exposes. Either re-state from index.md §3 or point to it ("see index.md §3").
+Signatures this module exposes with full semantics: parameters, return values, error conditions, side effects.
 
 ## §3 Internal Design
 - Key data structures: <what and why>
 - Key algorithms / control flow: <the non-obvious parts>
 - Design choices and reasoning: <alternatives considered, why this one>
+- Error handling protocol: <how each error type is detected, propagated, and recovered>
+- State management: <what state is held, lifecycle, invariants>
+- Validation rules: <input validation, preconditions, postconditions>
 
 ## §4 Test Strategy
 Test *categories* only (concrete cases are designed by the implementation task).
 - happy: <shape of happy-path cases>
-- edge: <specific edge conditions, e.g. empty input, boundary sizes>
-- error: <failure modes to cover>
+- edge: <specific edge conditions>
+- error: <failure modes to cover, expected error behavior>
 - regression (if any): <specific scenarios this module must not regress>
 
 ## §5 Dependencies
@@ -129,62 +152,54 @@ Test *categories* only (concrete cases are designed by the implementation task).
 ```markdown
 # Guardrails
 
+<!-- RULES: §1 is immutable after Task 1. §2 may only grow via `scope-extend:` markers in §3. §3 is append-only. -->
+
 ## §1 Baseline
-- baseline commit SHA: <sha>   (Task 1 clean baseline commit)
+- baseline commit SHA: <sha>
 - baseline timestamp: <ISO-8601>
-- working tree clean at baseline: yes
-- pytest result: <e.g. 842 passed, 0 failed>
-- ruff check: clean / <count> warnings
-- mypy: clean / <count> errors
+- <validation command 1> result: <result>
+- <validation command 2>: <result>
 
 ## §2 Scope Whitelist (Module → Allowed Files)
-Exhaustive. No wildcards the anti-hack cannot mechanically diff against.
-- module 2 (csv_parser): src/utils/csv_parser.py, tests/unit/test_csv_parser.py
-- module 3 (db.orders): src/db/orders.py, tests/unit/db/test_orders.py
+Initial estimate. Replan subtasks may extend this via `scope-extend:` markers in §3.
+- module <id> (<module_name>): <file1>, <file2>, ...
 - ... (one line per module task)
-- integration task (6): tests/integration/test_bulk_orders.py
-- design_plan/ and guardrails.md itself: module tasks may update design_plan/** only under §4.3 policy and may append guardrails.md §3; never edit §1 or §2
+- integration: <file1>, <file2>, ...
+- design_plan/ and guardrails.md itself: <update rules of design_plan/ and guardrails.md>
 
 ## §3 Revision Log (Append-Only)
 Covers edits to **both** `design_plan/**` and `guardrails.md`.
-- baseline: task 1 — <sha> — clean baseline + scope whitelist written; design_plan/ authored
-- module-start: csv_parser — <sha> — before task 2.1 edits
-- contract-update: design_plan/db_orders.md §2 — <old> → <new> — rationale: partial-failure reporting required by index.md §4 assumption
+- baseline: task 1 — <sha> — scope whitelist written; design_plan/ authored
+- module-start: <module> — <sha> — before task <id> edits
+- scope-extend: <module> — <new files> — <why needed>
+- contract-update: design_plan/<module>.md §<sec> — <old> → <new> — <why>
 - gap-fill: design_plan/<module>.md §<sec> — <what> — <why substantial>
 - ... (append-only; never rewrite earlier entries)
 ```
 
-### 4.3 Plan vs reality: update policy
+Reality often diverges during large implementations. The rule: **let design_plan evolve, let guardrails §2 extend with justification, keep guardrails §1 immutable**.
 
-Reality often diverges during large implementations. The rule: **let design_plan evolve, keep guardrails §1/§2 immutable**.
-
-| Action | `design_plan/**` | `guardrails.md` |
-|--------|------------------|-----------------|
-| **Allowed mid-flight edit** | A module task may edit its own `<module>.md`, or append to `index.md` §3/§4, when implementation surfaces a real contract bug. Change committed **with** the dependent code. | Only `§3 Revision Log` is editable (append-only). Add `module-start`, `contract-update`, or `gap-fill` markers as needed. `§1` and `§2` are immutable in content. |
-| **Forbidden (hacking)** | Deleting a §4 test category; rewriting §3 contracts in a way the revision log does not explain | Widening `§2` scope; rewriting `§3` non-append; any edit to `§1` or `§2` |
-| **Consumer behavior** | Module tasks read the **latest committed** design_plan at session start; other modules' updates are visible because all tasks share the filesystem and committed state | Anti-hack subtasks read guardrails for every check |
+**design_plan/**: A module task may edit its own `<module>.md`, or append to `index.md`, when implementation surfaces a real contract bug. Changes should be committed **with** the dependent code.
+**guardrails.md**: `§2` may be extended by replan subtasks via `scope-extend:` entries in `§3`. `§3 Revision Log` is always append-only. `§1` is immutable.
 
 Revision-log entries should use machine-readable marker prefixes so anti-hack can match diffs mechanically:
 
 - `module-start: <module> — <sha> — before task <id> edits`
+- `scope-extend: <module> — <new files> — <why needed>`
 - `contract-update: <path> §<sec> — <old> → <new> — <why>`
 - `gap-fill: <path> §<sec> — <what> — <why substantial>`
 - `contract-hack-detected: <path> §<sec> — <reason>` (only used by verifiers when reporting a failure; do not commit this as a fix)
 
 ### 4.4 Prerequisite, module-start, and diff baseline policy
 
-In AI scheduling mode, prerequisite handling has two layers:
-
-- **Primary control**: encode dependencies and recovery in `ai_orchestrator.strategy`. If a consumer reports `❌ not completed: prerequisite artifact missing`, the scheduler can naturally redispatch the missing producer task or wait for its successful `last_result`.
-- **Executor fallback**: every consumer task still verifies required artifacts before editing, because it may be scheduled from stale history, after a failed predecessor, or after partial filesystem changes.
+Every top-level task after Task 1 must begin with a replan subtask that inspects the current state. Since linear mode cannot retry earlier tasks, the replan subtask is responsible for fixing any issues and making design_plan/ the single source of truth.
 
 Required policy:
 
-1. **Prerequisite checks**: verify required source files, test files, design_plan sections, and guardrails baseline/scope entries exist before starting work. If a prerequisite is missing or clearly incomplete, output `❌ not completed: prerequisite artifact missing: <path-or-condition>` and do not compensate by rewriting unrelated work.
-2. **Module-start SHA**: each module implementation subtask records the current `HEAD` as `module-start: <module> — <sha> — before task <id> edits` in `guardrails.md §3` before making implementation changes. The module anti-hack subtask diffs from that SHA, not from an implicit "previous task completion commit".
+1. **Replan as prerequisite handling**: the replan subtask verifies design_plan/ and guardrails.md exist and are consistent with the current codebase. If earlier tasks left errors or gaps, fix them directly — do not output `❌ not completed` to retry earlier tasks (impossible in linear mode). Update design_plan/ so it is accurate, then the implementation subtask can work purely from the design doc.
+2. **Module-start SHA**: each module's replan subtask records the current `HEAD` as `module-start: <module> — <sha> — before task <id> edits` in `guardrails.md §3` before making any changes. The module anti-hack subtask diffs from that SHA, not from an implicit "previous task completion commit".
 3. **Diff commands**: use `git diff --name-only <recorded-sha>..HEAD` for scope checks, and targeted `git diff <recorded-sha>..HEAD -- tests/ design_plan/ guardrails.md <schema/api paths>` for integrity checks. `git diff --stat` is useful as a summary, but is not sufficient evidence by itself.
-4. **Global baseline**: final global anti-hack diffs from `guardrails.md §1` baseline SHA. `guardrails.md §1` and `§2` must not change after Task 1.
-5. **Scheduler visibility**: configure `last_result` for every top-level task whose outcome is referenced by `strategy`. For typical two-subtask Build & Ship module tasks, `type: response` is enough; use `type: file` for analysis or integration artifacts that the scheduler must inspect.
+4. **Global baseline**: final global anti-hack diffs from `guardrails.md §1` baseline SHA. `guardrails.md §1` must not change after Task 1. `§2` may only grow via `scope-extend:` entries recorded in `§3`.
 
 ### 4.5 When the user provides a design doc themselves
 
@@ -195,26 +210,17 @@ Required policy:
 - Always produce `guardrails.md` from scratch (baseline + scope whitelist + initial revision log entry — including a `gap-fill:` log entry for any substantial gap-fill performed in step 2).
 - The commit at the end of Task 1 **is** the baseline; `guardrails.md §1` records its SHA.
 
-**Module tasks (2–5) in this mode** behave exactly as in default mode: they may edit `design_plan/**` under the same "contract-bug-forces-update" rules. The fact that the user originally provided the doc grants no special immunity — but the default tendency remains "edit minimally".
+**Module tasks** in this mode behave exactly as in default mode: they may edit `design_plan/**` under the same "contract-bug-forces-update" rules. The fact that the user originally provided the doc grants no special immunity — but the default tendency remains "edit minimally".
 
-**Global anti-hack (task 6.2)** is identical to default mode: diff every file under `design_plan/**` and `guardrails.md` against the Task-1 baseline commit. Every diff chunk must have a matching machine-readable `guardrails.md §3` marker. No separate two-baseline tracking is needed because Task 1's commit already absorbs any user-design-doc gap-fills.
+**Global anti-hack** is identical to default mode: diff every file under `design_plan/**` and `guardrails.md` against the Task-1 baseline commit. Every diff chunk must have a matching machine-readable `guardrails.md §3` marker.
 
-### 4.6 State persistence patterns (Optional)
-
-For richer history tracking, keep small, stable state files that every later task can read from disk without relying on conversation context. For Build & Ship, `design_plan/` and `guardrails.md` are usually enough; larger projects may add a compact `build_state.md` when operational facts become too noisy for `guardrails.md §3`.
-
-Use `build_state.md` only for factual task-state snapshots such as:
-
-- per-module `module-start` SHA table
-- prerequisite check status per task
-- integration findings and owner module
-- deferred cross-module issues that still need resolution
-
-`build_state.md` must not override `guardrails.md §1/§2`, widen scope, or replace the `guardrails.md §3` revision log required by anti-hack checks.
+**IMPORTANT**: It is strongly recommended to ask the user to provide a design plan by themselves. Designing a whole plan automatically in a single task will typically degrade plan's quality significantly. **ALWAYS ask the user if they have not provided a design plan, when possible**.
 
 ---
 
 ## 5. Complete Example
+
+Use this example to understand the recommended linear-mode structure for Build & Ship. Replace every `<placeholder>` token with project-specific content; do not copy placeholder wording into real tasks. `<!-- xxx -->` are comments that explain this example in detail, so do not include them into real tasks either.
 
 ```yaml
 description: |
@@ -813,42 +819,3 @@ tasks:
           If ANY check fails, output `❌ not completed: <reason>` with specific
           details. Do NOT fix code (see main guide §4.7 and §4.9).
 ```
-
-**How this example maps to the three core principles:**
-
-- **Module-based splitting at the top level**: tasks 2–5 each own one module (utils / db / service / route) as independent top-level `nested` tasks. The scheduler can redispatch the failed or stale module task without rerunning unrelated module tasks, and prerequisite failures become signals to redispatch the missing producer.
-- **Scheduler visibility**: Task 1 exposes durable planning artifacts with `last_result: type: file`; the two-subtask module tasks and integration task use `last_result: type: response` because their final responses are enough for scheduler decisions in this example.
-- **Anti-hack verification**: subtasks 2.2, 3.2, 4.2, 5.2, 6.2 are all dedicated `max_attempts: 1` verifiers with `system_prompt_prefix` forbidding edits; each checks tests + recorded-SHA diff scope + test-integrity heuristics. If a verifier command may exceed one minute, switch that verifier from `simple` to `long_running`.
-- **Unit test discipline**: each implementation subtask (2.1, 3.1, 4.1, 5.1) lists the exact unit test categories it must cover, written in the same subtask as the code. Integration tests are deferred to task 6.1, intentionally — they only become tractable once all modules exist.
-
-### 5.1 Variants in design-doc mode
-
-When the user provides a `design_plan/` (see §4.5), the scheduler graph stays identical and only these fields change:
-
-1. `description.Reference Docs` gains `design_plan/` as a P0 Must Read entry.
-2. `description.Rules` gains one line: "design_plan/ was user-provided; edit only on substantial gaps (missing <module>.md, missing Architecture section, undefined contract needed by anti-hack); every edit recorded in guardrails.md §3 with marker `gap-fill: <path> §<sec> — <what> — <why substantial>`."
-3. **Task 1** switches from authoring design_plan/ to inspect-and-gap-fill; guardrails.md is always authored from scratch.
-4. `ai_orchestrator.strategy` still treats Task 1 as the bootstrap producer, and `last_result.1` should still expose `guardrails.md` plus `design_plan/index.md` so the scheduler can see the baseline and design availability.
-
-Task 1 `completion_criteria` becomes:
-
-```yaml
-      1. design_plan/ (user-provided) has been read end-to-end. Any
-         substantial gap (missing <module>.md for a module task 2–5;
-         missing §2 Architecture or §3/§4 sections in index.md; a contract
-         needed by anti-hack that is entirely undefined) has been filled
-         directly in the relevant file. Cosmetic, stylistic, or
-         reorganization edits are NOT performed.
-      2. guardrails.md is produced from scratch with §1 Baseline
-         (clean commit SHA after step 1's edits, ISO-8601 timestamp,
-         clean working-tree status, plus pytest/ruff/mypy state),
-         §2 Scope Whitelist (exhaustive), and §3 Revision Log. The log's
-         initial entry records the baseline; any gap-fill edit performed
-         in step 1 gets its own entry in the form
-         `gap-fill: <path> §<sec> — <what> — <why substantial>`.
-      3. design_plan/ and guardrails.md are committed together from a clean
-         working tree; that commit is the baseline referenced in guardrails.md §1.
-      4. No source code modified.
-```
-
-Each module task's `initial_hint` also gains one line: "design_plan/ was user-provided; prefer working around design quirks in code over editing design_plan/. Edit only on real contract bugs, and always pair the edit with a guardrails.md §3 `contract-update:` entry."
