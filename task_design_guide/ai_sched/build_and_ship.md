@@ -17,8 +17,8 @@ Patterns for **implementing features, fixing bugs, and refactoring** — the mos
 ## 2. Recommended Structure
 
 ```
-├── nested (prerequisite check + design)
-|   ├── build and run tests without modifications           (simple or long_running, max_attempts: 1, model: lite, fatal: true) <!-- OPTIONAL: skip if project is built from scratch, or cannot be partially built / tested. -->
+├── build and run tests without modifications               (simple or long_running, max_attempts: 1, model: lite) <!-- OPTIONAL: skip if project is built from scratch, or cannot be partially built / tested. -->
+├── nested (plan design)
 |   ├── write design_plan/ + guardrails.md                  (simple)
 |   └── review design_plan/ for completeness                (simple, max_attempts: 5) <!-- If user provided design_plan/, review only the diff from the write subtask -->
 ├── nested (module 1)
@@ -44,9 +44,8 @@ Key Considerations:
 - **Separate analysis from implementation**: design plan in one task, implementation in others (see main guide §4.2).
 - The "review design_plan/ for completeness" task should have high `max_attempts` so that the design plan can be thoroughly reviewed multiple times.
 - Anti-hack verification subtasks should use `max_attempts: 1` — failures should propagate to the parent for proper retry.
-- Build/test subtask in the prerequisite task should use `fatal: true` — if the project cannot build or pass tests without any modification, this is a prerequisite failure that `fatal_analysis` should handle. It is fatal analysis task's responsibility to define the fix boundary. **Skip build/test subtask entirely if the project is built from scratch, or cannot be partially built / tested.**.
 - Use `long_running` for build / test / verification a if they contain commands that may exceed one minute.
-- Executors that output `❌ not completed` or `❌ FATAL` must append an entry to `error_report.md` before outputting the marker.
+- Executors that output `❌ not completed` must append an entry to `error_report.md` before outputting the marker.
 
 ---
 
@@ -224,139 +223,461 @@ Use this example to understand the recommended AI-scheduling-mode structure for 
 
 ```yaml
 description: |
-  # Project: E-Commerce Order Management
+  # <project name>
 
   ## Goal
-  Add a bulk order processing feature that allows administrators to upload a CSV
-  of orders, validate them, process payments, and send confirmation emails. The
-  feature spans database, service, API, and notification modules.
+  <goal>
 
   ## Architecture
-  - src/db/orders.py — Order database models and queries
-  - src/db/payments.py — Payment transaction records
-  - src/services/order_service.py — Order business logic
-  - src/services/payment_service.py — Payment processing integration
-  - src/services/notification_service.py — Email notification dispatch
-  - src/routes/admin.py — Admin API route handlers
-  - src/utils/csv_parser.py — CSV parsing utilities
-  - tests/unit/ — Unit tests (mirrors src/ structure)
-  - tests/integration/ — Integration tests
-  - package: Python 3.11 + FastAPI + SQLAlchemy + pytest
+  - <component or module 1>: <its responsibility>
+  - <component or module 2>: <its responsibility>
+  ...
+
+  ## Key file paths
+  - <file path 1>: <its purpose>
+  - <file path 2>: <its purpose>
+  <!-- Only put relevant files here. -->
+  ...
 
   ## Design & Audit Docs
   - design_plan/index.md — system overview, architecture, cross-module interface contracts, integration risks (Must Read)
   - design_plan/<module>.md — one per module: responsibility, public interface, internal design, test strategy, dependencies (Must Read for the owning module task; other modules Read on Demand)
   - guardrails.md — baseline commit, scope whitelist, revision log, module-start SHA markers (Must Read for anti-hack subtasks)
-  - error_report.md — execution error records; executors write on failure, only failure/fatal analysis task reads (P1)
+  - error_report.md — execution error records; executors write on failure, only failure analysis task reads (P1)
+
+  ## Environments
+  <environments>
 
   ## Key Commands
-  - Install: pip install -e ".[dev]"
-  - Unit tests: pytest tests/unit/
-  - Integration tests: pytest tests/integration/
-  - Full suite: pytest
-  - Lint: ruff check src/ tests/
-  - Type check: mypy src/
+  - <command 1>: <command>
+  - <command 2>: <command>
+  ...
 
   ## Hard Constraints
-  - Do NOT modify existing API endpoint schemas (request/response formats).
-  - Do NOT remove, weaken, skip, or rewrite existing tests.
-  - Do NOT change database migration files or existing model schemas.
-  - Do NOT modify the payment gateway integration contract.
-  - Do NOT change notification templates or delivery logic for existing flows.
-  - Each module task's changes must be scoped to its own allowed-file list in
-    guardrails.md §2.
-
-  ## Rules
-  - Fully autonomous: never ask the user questions.
-  - Persist design to design_plan/index.md and design_plan/<module>.md;
-    persist audit data (baseline, scope whitelist, revision log, module-start
-    SHAs) to guardrails.md.
-  - Split implementation into one scheduler-visible top-level task per module;
-    dependencies and redispatch decisions belong in ai_orchestrator.strategy.
-  - If a task is scheduled before prerequisites exist, it must report
-    `❌ not completed: <reason>` rather than compensating by rewriting unrelated
-    work; the scheduler will redispatch the missing producer task.
-  - Every top-level task must be idempotent enough to run 0, 1, or many times.
-  - Every module task must include unit tests for new code AND an anti-hack
-    verification subtask.
-  - Commit changes at each subtask completion.
-  - Before starting any implementation subtask, run `git status`; if
-    uncommitted changes exist from a previous retry, inspect and either
-    continue from them or `git checkout .` to discard (see main guide §4.10).
-  - Before editing a module, record the current `HEAD` in guardrails.md §3 as
-    `module-start: <module> — <sha> — before task <id> edits`; anti-hack
-    subtasks diff from this SHA.
-  - guardrails.md §1 and §2 are immutable after Task 1; only §3 may be appended.
-  - Any verification subtask that may run longer than one minute should be
-    changed from `simple` to `long_running`, keeping `max_attempts: 1`.
-  - The final integration task is scheduled only after module tasks succeed; it
-    fixes cross-module bugs but must not rewrite module-internal logic.
-  - design_plan/ may be edited only under the contract-bug-forces-update rules:
-    a module task may edit its own <module>.md or append to index.md when
-    implementation surfaces a real contract bug. Every design_plan change must
-    be committed with the dependent code and recorded in guardrails.md §3 with
-    a `contract-update:` or `gap-fill:` marker.
-  - guardrails.md §2 may only grow via `scope-extend:` entries recorded in §3.
-    §3 is append-only. §1 is immutable after Task 1.
+  - Each module task's changes must be scoped to its own allowed-file list in guardrails.md §2.
+  - <project-specific constraints on what should not be modified>
+  - <project-specific constraints on not weakening existing tests, if any exist>
+  - <other project-specific constraints>
 
   ## Reference Docs
-  - P0 Must Read: docs/api_spec.md — API design patterns and admin endpoint conventions
-  - P0 Must Read: docs/testing_guide.md — Test structure, fixtures, and mocking patterns
-  - P1 Read Before Related Work: docs/payment_integration.md — Payment gateway contract
-  - P1 Read Before Related Work: docs/database_schema.md — Current schema and migration rules
+  ### P0 Must Read
+    - <document path 1>: <its responsibility>
+    - <document path 2>: <its responsibility>
+    ...
+  ### P1 Read Before Related Work
+    - <document path 1>: <its responsibility>
+    - <document path 2>: <its responsibility>
+    ...
+  ### P2 On Demand
+    - <document path 1>: <its responsibility>
+    - <document path 2>: <its responsibility>
+    ...
+
+  ## Rules
+  - Persist design to design_plan/index.md and design_plan/<module>.md; persist audit data (baseline, scope whitelist, revision log, module-start SHAs) to guardrails.md.
+  - Before any implementation work on a module, the replan subtask must record the current HEAD
+    in guardrails.md §3 as `module-start: <module> — <sha> — before task <id> edits`.
+    Anti-hack subtasks diff from this SHA.
+  - A module task may edit its own design_plan/<module>.md or append to design_plan/index.md
+    when implementation surfaces a real contract bug. Every design_plan change must be committed
+    with the dependent code and recorded in guardrails.md §3 with a `contract-update:` or
+    `gap-fill:` marker.
+  - guardrails.md §1 is immutable after Task 1; §2 may only grow via `scope-extend:` entries
+    in §3; §3 is append-only.
+  - Before starting any implementation subtask, run `git status`; if uncommitted changes exist
+    from a previous retry, inspect and either continue from them or `git checkout .` to discard.
+  - <other project-specific rules>
 
 ai_orchestrator:
   strategy: |
-    1. Bootstrap: run Task 1 (Baseline and design plan) first. If any later task
-       reports missing design_plan/ or guardrails.md artifacts, redispatch Task 1.
-    2. After Task 1 succeeds, run Tasks 2–5 in any order (they are independent
-       module tasks).
-    3. Run Task 6 only after Tasks 2–5 have all succeeded. If Task 6 reports
-       missing or broken module artifacts, redispatch the owning module task.
-    4. If the fatal_analysis task outputs `❌ not completed: <reason>`, stop
-       scheduling and report the reason to the user.
-    5. If a task fails for a code/test issue inside its own scope, rerun that same
-       task up to its max_attempts. Prefer producer redispatch for prerequisite
-       failures, not consumer retries.
-    6. Stop when Task 6 succeeds, or after 5 consecutive scheduling rounds with
-       no progress. Do not run tasks whose successful result is already current
-       unless a downstream failure identifies that task as the owner.
+    1. Bootstrap: run Task 1 (Prerequisite Check) then Task 2 (Design Plan) first.
+       If any later task reports missing design_plan/ or guardrails.md artifacts,
+       the owning module task's replan subtask will handle them (no need to
+       redispatch Task 1 or Task 2).
+    2. After Task 1 and Task 2 succeed, detect Tasks 3–<N>'s dependencies and schedule accordingly
+       (module tasks may have dependencies on each other through cross-module
+       interfaces documented in design_plan/index.md §3).
+    3. Run Task <last_id> (Integration) only after all its prerequisite module tasks have
+       succeeded. If Task <last_id> reports missing or broken module artifacts,
+       the scheduler identifies the responsible module task based on
+       dependency and redispatches it.
+    4. If a task fails for a code/test issue inside its own scope, rerun that same
+       task. If repeatedly fails, run diagnosis task (<last_id+1>).
   max_rounds: 30
   stop_condition: |
-    Stop when Task 6 (Integration: end-to-end tests, full suite, global anti-hack)
-    succeeds after all module tasks have succeeded. Otherwise stop after 5
-    consecutive no-progress rounds and report the blocking task and reason.
+    Stop when Task <last_id> (Integration: end-to-end tests, full suite, global anti-hack)
+    succeeds after all module tasks have succeeded. Otherwise stop when the
+    diagnosis task (<last_id+1>) outputs `❌ not completed: <reason>` and report the reason.
   last_result:
     1:
-      type: file
-      path:
-        - ${workspace}/guardrails.md
-        - ${workspace}/design_plan/index.md
+      type: response
     2:
       type: response
-    3:
+    <N>:
       type: response
-    4:
+    <last_id>:
       type: response
-    5:
-      type: response
-    6:
+    <last_id+1>:
       type: response
 
 tasks:
-  # ── Fatal Analysis ─────────────────────────────────────────────────────────
-  - id: fatal_analysis
+  # ── Task 1: Prerequisite Check ────────────────────────────────────
+  - id: 1
+    name: "Build and run tests without modifications"
+    description: |
+      Verify that the existing codebase builds and tests pass without any
+      modifications. If they fail, report the failure for a dedicated
+      analysis task to handle.
+    type: simple
+    max_attempts: 1
+    model: lite
+    completion_criteria: |
+      1. <build command> exits 0.
+      2. <test command> exits 0.
+      3. git diff --name-only shows no changes.
+    system_prompt_prefix: |
+      You are a build engineer. Do NOT modify source code, tests, configs, or project files.
+    initial_hint: |
+      <hint on running build and test commands>
+
+      If build or test fails, first retry the failing command once to rule out transient issues  (e.g. resource busy, file locked, network flake). 
+      Only if the failure persists after retry, append an entry to error_report.md with the failure details, then output `❌ not completed: <build/test failure reason>` so that a dedicated analysis task can handle it.
+
+  <!-- If user has provided a design plan, replace the whole subtask 2.1 with the variant defined in section 6.1 of this guide. -->
+  # ── Task 2: Plan Design ────────────────────────────────────
+  - id: 2
+    name: "Write design_plan/ + guardrails.md"
+    type: nested
+    max_attempts: 3
+    completion_criteria: |
+      1. design_plan/index.md is produced with §1 Overview, §2 Architecture, §3 Document Directory.
+      2. One design_plan/<module>.md is produced for each top-level module task, each with §1 Responsibility, §2 Public Interface, §3 Internal Design, §4 Test Strategy, §5 Dependencies.
+      3. design_plan/ is reviewed for completeness: every design decision that would be "freely invented" by implementation is explicitly complemented.
+      4. guardrails.md is produced with §1 Baseline, §2 Scope Whitelist, §3 Revision Log.
+      5. error_report.md exists with a header, initially empty.
+      6. No source files, tests, configs, or scripts are modified.
+    subtasks:
+      - id: 2.1
+        name: "Write design_plan/, guardrails.md, and error_report.md"
+        type: simple
+        completion_criteria: |
+          1. design_plan/index.md produced with §1 Overview, §2 Architecture, §3 Document Directory, §4 Task-Module Assignment.
+          2. One design_plan/<module>.md is produced per module in the project's own module decomposition.
+             A single task may span multiple modules (and thus multiple .md files); a single module may also
+             be shared by multiple tasks. The assignment of which task works on which module document is
+             recorded in index.md §4 Task-Module Assignment and must be consistent.
+          3. guardrails.md is produced with §1 Baseline, §2 Scope Whitelist (one entry per task), §3 Revision Log.
+          4. error_report.md exists with a header, initially empty.
+          5. No source files, tests, configs, or scripts are modified.
+        system_prompt_prefix: |
+          You are a global planner. Your role is to produce the master design plan that every
+          subsequent task will execute against. You must think holistically across the entire
+          project — every module, every cross-module interface, every error path — and ensure
+          the design plan is complete, unambiguous, and internally consistent. No implementation
+          detail should be left for later tasks to invent; the only thing excluded is
+          pseudocode / line-level code. Do NOT modify source code, tests, or configs.
+        initial_hint: |
+          ## Project Detail
+
+          <Write all project details that this plan task needs here. Do NOT duplicate things that has been written in root description. Since this task needs to write the whole design plan, this task must have all the information of this project.>
+
+          ## Task decomposition is FIXED
+
+          The tasks below have already been decomposed in the todo list. This decomposition is NOT
+          modifiable — you MUST NOT change task boundaries, merge tasks, or create new tasks.
+          The only thing you may adjust is which module document(s) each task is responsible for
+          (recorded in index.md §4).
+
+          Modules are defined by the project's own architecture — NOT by a 1:1 mapping to tasks.
+          A task may own multiple module documents; a module document may be shared by multiple tasks.
+
+          ## Subsequent tasks and their work
+
+          You MUST tell every later executor exactly what they are responsible for:
+
+          | Task ID | Task Name | Work Description |
+          |---------|-----------|------------------|
+          | 3       | Module: <module_name_1> | <what task 3 implements> |
+          | 4       | Module: <module_name_2> | <what task 4 implements> |
+          ...
+          | <last_id> | Integration | End-to-end tests, full suite, global anti-hack |
+
+          ## Design Plan Format
+
+          1. Create design_plan/index.md exactly in this Markdown format:
+             # Design Plan — Index
+
+             ## §1 Overview
+             One paragraph: goal, scope, non-goals.
+
+             ## §2 Architecture
+             - Components / layers and their responsibilities (high-level; details per module live in <module>.md)
+             - Major control flows
+             - ASCII diagram (optional)
+
+             ## §3 Document Directory
+             | Document | Description |
+             | <relative/path/to/document> | <one-line description of this document> |
+
+             ## §4 Task-Module Assignment
+             Which task is responsible for which module document(s).
+             | Module Document | Responsible Task(s) |
+             | design_plan/<module_1>.md | <task id(s)> |
+             | design_plan/<module_2>.md | <task id(s)> |
+
+          2. Create one design_plan/<module>.md per module in the project decomposition exactly in this Markdown format:
+              # Design Plan — <Module Name>
+
+              ## §1 Responsibility
+              - What this module owns: <one sentence>
+              - Explicitly NOT owned: <what callers must handle themselves>
+
+              ## §2 Public Interface
+              Signatures this module exposes with full semantics: parameters, return values, error conditions, side effects.
+
+              ## §3 Internal Design
+              - Key data structures: <what and why>
+              - Key algorithms / control flow: <the non-obvious parts>
+              - Design choices and reasoning: <alternatives considered, why this one>
+              - Error handling protocol: <how each error type is detected, propagated, and recovered>
+              - State management: <what state is held, lifecycle, invariants>
+              - Validation rules: <input validation, preconditions, postconditions>
+
+              ## §4 Test Strategy
+              Test *categories* only (concrete cases are designed by the implementation task).
+              - happy: <shape of happy-path cases>
+              - edge: <specific edge conditions>
+              - error: <failure modes to cover, expected error behavior>
+              - regression (if any): <specific scenarios this module must not regress>
+
+              ## §5 Dependencies
+              - Calls into: <list of other modules>
+              - Called from: <list of other modules>
+
+          3. Create guardrails.md exactly in this Markdown format:
+              # Guardrails
+
+              ## §1 Baseline
+              - baseline commit SHA: <sha>
+              - baseline timestamp: <ISO-8601>
+              - <validation command 1> result: <result> <!-- Delete this if no existing build / test exists. -->
+              - <validation command 2>: <result> <!-- Delete this if no existing build / test exists. -->
+
+              ## §2 Scope Whitelist (Module → Allowed Files)
+              - module <id> (<module_name>): <file1>, <file2>, ...
+              - ... (one line per module task)
+              - integration: <file1>, <file2>, ...
+              - design_plan/ and guardrails.md itself: <update rules of design_plan/ and guardrails.md>
+
+              ## §3 Revision Log (Append-Only)
+              - baseline: task 1 — <sha> — scope whitelist written; design_plan/ authored
+
+          4. Create error_report.md exactly in this Markdown format:
+             # Error Report — <project name>
+
+             (none yet)
+
+          design_plan/ must be thorough: every design decision that the implementation AI
+          would otherwise invent freely must be explicitly specified (error handling protocols,
+          state transitions, validation rules, concurrency semantics, etc.).
+          The only thing excluded is pseudocode / line-level implementation.
+          guardrails is audit data, not documentation.
+
+          Commit all of them together; that commit is the baseline for all later anti-hack subtasks.
+          Do NOT modify source code in this task.
+
+      - id: 2.2
+        name: "Review design_plan/ for completeness"
+        type: simple
+        max_attempts: 5
+        completion_criteria: |
+          1. index.md §3 Document Directory list all module docs, and §4 Task-Module Assignment are reasonable and applicable.
+          2. <write project-specific completion_criteria here>
+          3. No design point is left ambiguous enough that two reasonable implementations would behave differently.
+          4. If gaps are found, they are filled directly in design_plan/ and committed, then output `❌ not completed: task 2.2 should be retried to review once more` so that another reviewer can review it again.
+          5. No source files, tests, configs, or scripts are modified.
+        system_prompt_prefix: |
+          You are a design reviewer. Your job is to find underspecified design points that would force the implementation AI to guess. Do NOT modify source code, tests, or configs.
+        initial_hint: |
+          Read every file in design_plan/ carefully. For each module, check:
+
+          - Does index.md §3 Document Directory list all module docs?
+          - Are index.md §4 Task-Module Assignment reasonable and applicable?
+          <write other project-specific review rules here>
+
+          For every gap found, fill it directly in the relevant design_plan/ file. Once complete:
+          1. Record in guardrails.md §3: `gap-fill: <path> §<sec> — <what> — <why substantial>`
+          2. commit every additions together;
+          3. output `❌ not completed: task 2.2 should be retried to review once more` so that another reviewer can review it again.
+
+  # ── Tasks 3..N+1: One top-level nested task per module ───────────────────────
+  <!-- Repeat this pattern for each module. The example shows one module task. -->
+  - id: 3
+    name: "Module: <module_name>"
+    description: |
+      Implement and unit-test the <module_name> module, then verify scope and
+      test integrity with an anti-hack subtask. Produces a concise final response for scheduler decisions.
+    type: nested
+    max_attempts: 3
+    completion_criteria: |
+      1. <module-specific implementation criteria>
+      2. Unit tests for <module_name> pass.
+      3. No files outside the <module_name> effective scope (original guardrails.md §2 entry + any `scope-extend:` additions) are modified, except design_plan/** updates justified by `contract-update:` markers and append-only guardrails.md §3 entries.
+      4. <negative constraints for this module>
+    subtasks:
+      - id: 3.1
+        name: "Replan <module_name>: review current state and update local plan"
+        type: simple
+        completion_criteria: |
+          1. design_plan/<module_name>.md, design_plan/index.md, and guardrails.md have been read.
+          2. Current codebase state has been inspected (git log, existing source files from earlier modules).
+          3. If the original plan needs adjustments (new files needed, interface changes from earlier modules, scope changes, or issues from earlier tasks' work), design_plan/<module_name>.md is updated and guardrails.md §2 is extended with `scope-extend:` entries in §3.
+          4. If earlier tasks left incorrect or incomplete design artifacts, they are fixed directly in design_plan/ (earlier tasks cannot be retried).
+          5. Any updates are committed before implementation begins.
+        initial_hint: |
+          Read design_plan/<module_name>.md (your module) and design_plan/index.md (system architecture and cross-module context).
+          Inspect the current codebase — earlier module tasks may have changed interfaces, added files, or updated contracts.
+
+          Your job is to ensure design_plan/ is accurate and complete for this module BEFORE implementation starts. Earlier tasks cannot be retried — if they left issues in design_plan/, fix them here directly.
+
+          1. Record the current `HEAD` in guardrails.md §3 as:
+             `module-start: <module_name> — <sha> — before task 3 edits`
+             This must be done before any edits.
+
+          2. Specifically check and update:
+             - If earlier modules changed interfaces that affect this module, update design_plan/<module_name>.md §2/§3 accordingly, and record in guardrails.md §3:
+               `contract-update: <path> §<sec> — <old> → <new> — <why>`
+             - If new files are needed (helpers, configs, migrations), extend guardrails.md §2 by appending the new files to the <module_name> row, and record in §3:
+               `scope-extend: <module_name> — <new files> — <why needed>`
+
+          3. If no changes needed, proceed without modifications.
+          4. Commit any plan/scope updates before implementation begins.
+
+      - id: 3.2
+        name: "Implement <module_name> with unit tests"
+        type: simple
+        completion_criteria: |
+          1. <module_name> implemented per the public interface in design_plan/<module_name>.md §2 (and cross-module edges in adjacent design_plan/<other_module>.md §2/§5).
+          2. Unit tests in <test file path> cover **every category** listed in design_plan/<module_name>.md §4 (happy / edge / error). Concrete cases are designed by this task.
+          3. <module test command> passes.
+          4. Only files inside the <module_name> effective scope (original §2 entry + `scope-extend:` additions) are modified, plus design_plan/** updates justified by `contract-update:` markers and append-only guardrails.md §3 entries.
+          5. Changes inside this task are committed.
+        initial_hint: |
+          Read design_plan/<module_name>.md (your module) and design_plan/index.md (system architecture and cross-module context).
+          Check guardrails.md §2 for the effective scope whitelist for <module_name> (including any `scope-extend:` additions from the replan subtask).
+          Check git status first — discard residual changes from previous retry.
+          Implement source code AND unit tests together.
+
+          If you discover the contract is infeasible or wrong, you MAY update design_plan/ (<module_name>.md §2/§3 as appropriate) and append a guardrails.md §3 entry in the form
+          `contract-update: <path> §<sec> — <old> → <new> — <why>`; commit the design_plan change alongside your code.
+          If earlier tasks left bugs in the code, fix them directly — earlier tasks cannot be retried.
+          
+          Run <module test command> before committing changes. NEVER delete a §4 test category just to pass.
+
+      - id: 3.3
+        name: "Anti-hack verification for <module_name>"
+        type: simple
+        max_attempts: 1
+        system_prompt_prefix: |
+          You are an anti-hack verifier. Your sole job is to detect constraint violations. Do NOT modify source code, tests, configs, scripts, or generated data.
+        completion_criteria: |
+          1. <module test command> exits with code 0.
+          2. If verification result is 'FAIL', output `❌ not completed: Anti-hack verification failed. Implementation task should be retried` so that the implementation task can be retried.
+          3. No public contracts, tests, configs, scripts, generated outputs, or unrelated modules were modified.
+        initial_hint: |
+          Run: <module test command>
+
+          Inspect git to find implementation code changes corresponding to this module.
+          
+          1. Read the <module_name> `module-start:` SHA from guardrails.md §3.
+             Run: git diff --name-only <module_name-module-start-sha>..HEAD
+             Allowed files must be within the <module_name> effective scope: the original §2 row PLUS any files added via `scope-extend:` entries in §3 for this module.
+             design_plan/** and guardrails.md §3 are allowed only if a contract was updated with a matching marker.
+
+          2. Run: git diff <module_name-module-start-sha>..HEAD -- <test file path>
+             and check for removed/weakened assertions or skipped-test annotations.
+
+          3. <write all other anti-hack rules here based on global description and task-specific informations>
+
+          If verification result is 'FAIL', append an entry to error_report.md with the failure details, then output `❌ not completed: Anti-hack verification failed. Implementation task should be retried`
+          so that the implementation task can be retried. Do not fix code by yourself.
+  <!-- Repeat tasks 3..N for remaining modules following the same pattern as task 3. -->
+
+  # ── Final Task: Integration + Global Anti-hack ─────────────────────────────
+  - id: <last_id>
+    name: "Integration: end-to-end tests, full suite, global anti-hack"
+    description: |
+      Add end-to-end coverage for the completed module set, run full validation,
+      and perform global anti-hack verification before the scheduler stops.
+    type: nested
+    max_attempts: 3
+    completion_criteria: |
+      1. Integration tests for the end-to-end flow pass.
+      2. Full <test command> suite exits with code 0.
+      3. No existing tests weakened in the repo.
+    subtasks:
+      - id: <last_id>.1
+        name: "Write and pass integration tests"
+        type: simple
+        max_attempts: 3
+        completion_criteria: |
+          1. <integration test file path> added, covering the end-to-end flow.
+          2. <integration test command> passes.
+          3. If a cross-module bug is found, fix is scoped to the minimal module(s) responsible; module-internal logic refactors are not allowed — only bug fixes.
+        initial_hint: |
+          Verify source and test files for each module exist and their unit tests pass.
+          If a module left issues (failing tests, missing integration points), fix them here — earlier tasks cannot be retried.
+
+          Write integration tests per cross-module interfaces documented in each design_plan/<module>.md §2 and §5, and any integration risks noted in design_plan/index.md §2 Architecture.
+          If a cross-module bug surfaces, fix it in the responsible module (keep fix minimal) and re-run the test.
+          Do NOT rewrite module logic.
+
+          Changes are commited once completed.
+
+      - id: <last_id>.2
+        name: "Global anti-hack and full-suite verification"
+        type: simple
+        max_attempts: 1
+        system_prompt_prefix: |
+          You are a test runner and code integrity verifier. Do NOT modify any files except for appending to error_report.md on failure.
+        completion_criteria: |
+          1. <test command> (full suite) exits with code 0.
+          2. git diff --name-only <guardrails-baseline-sha>..HEAD shows changes only in the effective scope (original guardrails.md §2 entries + `scope-extend:` additions in §3), plus design_plan/** and append-only guardrails.md §3 edits.
+          3. No existing tests weakened: no removed assertions, no skipped-test annotations, no relaxed comparisons, no conditional test bypasses.
+          4. If verification result is 'FAIL', output `❌ not completed: Anti-hack verification failed. Implementation task should be retried` so that the implementation task can be retried.
+          5. No public contracts, tests, configs, scripts, generated outputs, or unrelated modules were modified.
+        initial_hint: |
+          Run: <test command> (full suite)
+
+          Inspect git to find implementation code changes of all modules.
+
+          1. Read the baseline SHA from guardrails.md §1. Run:
+             git diff --name-only <guardrails-baseline-sha>..HEAD
+             Verify every changed source/test file appears in some module's effective scope (original §2 entry + `scope-extend:` additions in §3).
+             design_plan/** and append-only guardrails.md §3 edits are allowed only with matching revision-log markers.
+
+          2. Run: git diff <guardrails-baseline-sha>..HEAD -- <test directories>
+             Check for removed assertions, added skip/xfail annotations, relaxed comparisons, deleted tests.
+
+          3. <write all other anti-hack rules here based on global description and task-specific informations>
+
+          If verification result is 'FAIL', append an entry to error_report.md with the failure details, then output `❌ not completed: Anti-hack verification failed. Integration task should be retried`
+          so that the integration task can be retried. Do not fix code by yourself.
+
+  # ── Diagnosis ─────────────────────────────────────────────────────────
+  - id: <last_id+1>
     name: "Diagnose and resolve fatal prerequisite failures"
     description: |
       Handle hard prerequisites or global blockers that prevent any task from
       proceeding. Scheduler schedules this task when other tasks report
       `❌ not completed: <hard prerequisites or global blocker issues>`.
     type: simple
-    max_attempts: 2
+    max_attempts: 1
     completion_criteria: |
       1. The root cause of the fatal failure claimed by previous failed task is identified.
       2. If fixable within user-defined allowed scope, the correct fix is applied and verified.
-      3. If not fixable within allowed scope, AutoAgent is stopped with a clear explanation.
+      3. If not fixable within allowed scope, output `❌ not completed: <reason>`
+        so the scheduler can stop and report to the user.
     system_prompt_prefix: |
       You are a diagnostic engineer. You may inspect any file and fix failures
       claimed by previous failed task within the user-defined allowed scope.
@@ -372,514 +693,9 @@ tasks:
         - Modify files outside the failing task's allowed scope
         - Change design_plan/ or guardrails.md §1/§2 (only append to §3 if needed)
 
-  # ── Task 1: Prerequisite Check + Design ────────────────────────────────────
-  - id: 1
-    name: "Verify prerequisites and write design_plan/ + guardrails.md"
-    description: |
-      Analyze the codebase, produce design_plan/ and guardrails.md, and commit
-      the clean baseline consumed by all later module and integration tasks.
-    type: nested
-    max_attempts: 3
-    completion_criteria: |
-      1. <build command> exits 0. <!-- Remove if no existing code to build -->
-      2. <test command> exits 0. <!-- Remove if no existing tests -->
-      3. design_plan/index.md is produced with §1 Overview, §2 Architecture,
-         §3 Cross-Module Interface Contracts, §4 Integration Risks,
-         §5 Task-Module Assignment.
-      4. One design_plan/<module>.md is produced for each top-level module task
-         (tasks 2–5), each with §1 Responsibility, §2 Public Interface,
-         §3 Internal Design, §4 Test Strategy (categories only), §5 Dependencies.
-      5. design_plan/ is reviewed for completeness: every design decision that
-         would be "freely invented" by implementation is explicitly complemented.
-      6. guardrails.md is produced with §1 Baseline, §2 Scope Whitelist,
-         §3 Revision Log.
-      7. error_report.md exists with a header, initially empty.
-      8. No source code modified.
-    subtasks:
-      - id: 1.1
-        name: "Build and run tests without modifications"
-        type: simple
-        max_attempts: 1
-        model: lite
-        fatal: true
-        completion_criteria: |
-          1. <build command> exits 0.
-          2. <test command> exits 0.
-          3. git diff --name-only shows no changes.
-        system_prompt_prefix: |
-          You are a build engineer. Do NOT modify source code, tests, configs, or project files.
-        initial_hint: |
-          <hint on running build and test commands>
-
-          If build or test fails, first retry the failing command once to rule out transient issues
-          (e.g. resource busy, file locked, network flake).
-          Only if the failure persists after retry, append an entry to error_report.md with the
-          failure details, then output `❌ FATAL: <build/test failure reason>` so that a dedicated
-          analysis task can handle it.
-
-      <!-- If user has provided a design plan, replace subtask 1.2 with the variant
-           defined in section 6.1 of this guide. -->
-      - id: 1.2
-        name: "Write design_plan/, guardrails.md, and error_report.md"
-        type: simple
-        completion_criteria: |
-          1. design_plan/index.md produced with §1 Overview, §2 Architecture,
-             §3 Cross-Module Interface Contracts, §4 Integration Risks,
-             §5 Task-Module Assignment.
-          2. One design_plan/<module>.md is produced per module in the project's
-             own module decomposition.
-             A single task may span multiple modules (and thus multiple .md files);
-             a single module may also be shared by multiple tasks. The assignment
-             of which task works on which module document is recorded in index.md
-             §5 Task-Module Assignment and must be consistent.
-          3. guardrails.md is produced with §1 Baseline, §2 Scope Whitelist
-             (one entry per task), §3 Revision Log.
-          4. error_report.md exists with a header, initially empty.
-          5. No source files, tests, configs, or scripts are modified.
-        system_prompt_prefix: |
-          You are a global planner. Your role is to produce the master design plan
-          that every subsequent task will execute against. You must think holistically
-          across the entire project — every module, every cross-module interface,
-          every error path — and ensure the design plan is complete, unambiguous,
-          and internally consistent. No implementation detail should be left for
-          later tasks to invent; the only thing excluded is pseudocode / line-level
-          code. Do NOT modify source code, tests, or configs.
-        initial_hint: |
-          <Write the whole project description here. Since this task needs to write
-          the whole design plan, this task must have all the information of this project.>
-
-          CRITICAL: You are producing the master design plan that ALL subsequent
-          tasks will execute against.
-
-          ## Task decomposition is FIXED
-
-          The tasks below have already been decomposed in the todo list. This
-          decomposition is NOT negotiable — you MUST NOT change task boundaries,
-          merge tasks, or create new tasks. The only thing you may adjust is which
-          module document(s) each task is responsible for (recorded in index.md §5).
-
-          ## Subsequent tasks and their work
-
-          You MUST tell every later executor exactly what they are responsible for:
-
-          | Task ID | Type   | Task Name | Work Description |
-          |---------|--------|-----------|------------------|
-          | 2       | nested | Module: <module_name_1> | <what task 2 implements> |
-          | 3       | nested | Module: <module_name_2> | <what task 3 implements> |
-          | ...     |        | ...       | ...              |
-          | <N>     | nested | Module: <module_name_last> | <what task N implements> |
-          | <last>  | nested | Integration: end-to-end tests, full suite, global anti-hack | <what the integration task does> |
-
-          Replace the table above with the real task list from the actual todo.
-          For each module a task is responsible for, create one
-          design_plan/<module>.md (use the module name as the filename stem).
-          If a task spans multiple modules, create one .md per module.
-
-          ## Module decomposition follows the project design
-
-          Modules are defined by the project's own architecture — NOT by a 1:1
-          mapping to tasks. A task may own multiple module documents; a module
-          document may be shared by multiple tasks.
-
-          ## Design Plan Format
-
-          1. Create design_plan/index.md exactly in this Markdown format:
-             # Design Plan — Index
-
-             ## §1 Overview
-             One paragraph: goal, scope, non-goals.
-
-             ## §2 Architecture
-             - Components / layers and their responsibilities (high-level;
-               details per module live in <module>.md)
-             - Major control flows
-             - ASCII diagram (optional)
-
-             ## §3 Cross-Module Interface Contracts
-             For every cross-module boundary, specify:
-             - Signatures (function/method names, parameter types, return types)
-             - Error codes / exceptions and their semantics
-             - Atomicity guarantees and side-effect promises
-             - Data exchange formats (DTOs, events, schemas)
-
-             ## §4 Integration Risks
-             - Transaction boundary issues
-             - Call-order dependencies
-             - Partial-failure semantics
-             - Other cross-module risks
-
-             ## §5 Task-Module Assignment
-             Which task is responsible for which module document(s).
-             | Module Document | Responsible Task(s) |
-             | design_plan/<module_1>.md | <task id(s)> |
-             | design_plan/<module_2>.md | <task id(s)> |
-
-          2. Create one design_plan/<module>.md per module exactly in this format:
-             # Design Plan — <Module Name>
-
-             ## §1 Responsibility
-             - What this module owns: <one sentence>
-             - Explicitly NOT owned: <what callers must handle themselves>
-
-             ## §2 Public Interface
-             Signatures this module exposes with full semantics: parameters,
-             return values, error conditions, side effects.
-
-             ## §3 Internal Design
-             - Key data structures: <what and why>
-             - Key algorithms / control flow: <the non-obvious parts>
-             - Design choices and reasoning: <alternatives considered, why this one>
-             - Error handling protocol: <how each error type is detected,
-               propagated, and recovered>
-             - State management: <what state is held, lifecycle, invariants>
-             - Validation rules: <input validation, preconditions, postconditions>
-
-             ## §4 Test Strategy
-             Test *categories* only (concrete cases are designed by the
-             implementation task).
-             - happy: <shape of happy-path cases>
-             - edge: <specific edge conditions>
-             - error: <failure modes to cover, expected error behavior>
-             - regression (if any): <specific scenarios this module must
-               not regress>
-
-             ## §5 Dependencies
-             - Calls into: <list of other modules>
-             - Called from: <list of other modules>
-
-          3. Create guardrails.md exactly in this Markdown format:
-             # Guardrails
-
-             <!-- RULES: §1 is immutable after Task 1. §2 may only grow via
-             `scope-extend:` markers in §3. §3 is append-only. -->
-
-             ## §1 Baseline
-             - baseline commit SHA: <sha>
-             - baseline timestamp: <ISO-8601>
-             - <validation command 1> result: <result>
-             - <validation command 2>: <result>
-
-             ## §2 Scope Whitelist (Module → Allowed Files)
-             Initial estimate. Replan subtasks may extend this via
-             `scope-extend:` markers in §3.
-             - module <id> (<module_name>): <file1>, <file2>, ...
-             - ... (one line per module task)
-             - integration: <file1>, <file2>, ...
-             - design_plan/ and guardrails.md itself: <update rules of
-               design_plan/ and guardrails.md>
-
-             ## §3 Revision Log (Append-Only)
-             Covers edits to **both** `design_plan/**` and `guardrails.md`.
-             - baseline: task 1 — <sha> — scope whitelist written;
-               design_plan/ authored
-
-          4. Create error_report.md exactly in this Markdown format:
-             # Error Report — <project name>
-
-             (none yet)
-
-          design_plan/ must be thorough: every design decision that the
-          implementation AI would otherwise invent freely must be explicitly
-          specified (error handling protocols, state transitions, validation
-          rules, concurrency semantics, cross-module interface contracts,
-          integration risks, etc.). The only thing excluded from design_plan/
-          is pseudocode / line-level implementation details. guardrails is
-          audit data, not documentation.
-
-          Commit all of them together; that commit is the baseline for all
-          later anti-hack subtasks. Do NOT modify source code in this task.
-
-      - id: 1.3
-        name: "Review design_plan/ for completeness"
-        type: simple
-        max_attempts: 5
-        completion_criteria: |
-          1. index.md §5 Task-Module Assignment lists all module docs and
-             assignments are reasonable and applicable.
-          2. index.md §3 Cross-Module Interface Contracts and §4 Integration
-             Risks are complete and actionable.
-          3. Every module doc has all five sections and no design point is
-             ambiguous enough that two reasonable implementations would
-             behave differently.
-          4. If gaps are found, they are filled directly in design_plan/ and
-             committed, then output `❌ not completed: task 1.3 should be
-             retried to review once more` so that another reviewer can
-             review it again.
-          5. No source files, tests, configs, or scripts are modified.
-        system_prompt_prefix: |
-          You are a design reviewer. Your job is to find underspecified design
-          points that would force the implementation AI to guess. Do NOT modify
-          source code, tests, or configs.
-        initial_hint: |
-          Read every file in design_plan/ carefully. For each module, check:
-
-          - Does index.md §5 Task-Module Assignment list all module docs?
-          - Are index.md §3 Cross-Module Interface Contracts complete and
-            actionable (signatures, error codes, atomicity, data formats)?
-          - Are index.md §4 Integration Risks thorough (transaction boundaries,
-            call order, partial-failure semantics)?
-          - Does every module doc have all five sections?
-          - Is any design point ambiguous enough that two reasonable
-            implementations would behave differently?
-
-          For every gap found, fill it directly in the relevant design_plan/
-          file. Once complete:
-          1. Record in guardrails.md §3:
-             `gap-fill: <path> §<sec> — <what> — <why substantial>`
-          2. commit every addition together;
-          3. output `❌ not completed: task 1.3 should be retried to review
-             once more` so that another reviewer can review it again.
-
-  # ── Tasks 2–5: One top-level nested task per module ────────────────────────
-  <!-- Repeat this pattern for each module. The example shows one module task. -->
-  - id: 2
-    name: "Module: <module_name>"
-    description: |
-      Implement and unit-test the <module_name> module, then verify scope and
-      test integrity with an anti-hack subtask. Produces a concise final response for scheduler decisions.
-    type: nested
-    max_attempts: 3
-    completion_criteria: |
-      1. <module-specific implementation criteria>
-      2. Unit tests for <module_name> pass.
-      3. No files outside the <module_name> effective scope (original
-         guardrails.md §2 entry + any `scope-extend:` additions) are modified,
-         except design_plan/** updates justified by `contract-update:` markers
-         and append-only guardrails.md §3 entries.
-      4. <negative constraints for this module>
-    subtasks:
-      - id: 2.1
-        name: "Replan <module_name>: review current state and update local plan"
-        type: simple
-        completion_criteria: |
-          1. design_plan/<module_name>.md, design_plan/index.md, and
-             guardrails.md have been read.
-          2. Current codebase state has been inspected (git log, existing
-             source files from earlier modules).
-          3. If the original plan needs adjustments (new files needed,
-             interface changes from earlier modules, scope changes, or
-             issues from earlier tasks' work), design_plan/<module_name>.md
-             is updated and guardrails.md §2 is extended with `scope-extend:`
-             entries in §3.
-          4. If earlier tasks left incorrect or incomplete design artifacts,
-             they are fixed directly in design_plan/ (earlier tasks cannot
-             be retried).
-          5. Any updates are committed before implementation begins.
-        initial_hint: |
-          Read design_plan/<module_name>.md (your module) and
-          design_plan/index.md (system architecture, cross-module interface
-          contracts, and integration risks).
-          Inspect the current codebase — earlier module tasks may have changed
-          interfaces, added files, or updated contracts.
-
-          Your job is to ensure design_plan/ is accurate and complete for this
-          module BEFORE implementation starts. Earlier tasks cannot be retried —
-          if they left issues in design_plan/, fix them here directly.
-
-          1. Record the current `HEAD` in guardrails.md §3 as:
-             `module-start: <module_name> — <sha> — before task 2 edits`
-             This must be done before any edits.
-
-          2. Specifically check and update:
-             - If earlier modules changed interfaces that affect this module,
-               update design_plan/<module_name>.md §2/§3 accordingly, and
-               record in guardrails.md §3:
-               `contract-update: <path> §<sec> — <old> → <new> — <why>`
-             - If new files are needed (helpers, configs, migrations), extend
-               guardrails.md §2 by appending the new files to the
-               <module_name> row, and record in §3:
-               `scope-extend: <module_name> — <new files> — <why needed>`
-
-          3. If no changes needed, proceed without modifications.
-          4. Commit any plan/scope updates before implementation begins.
-
-      - id: 2.2
-        name: "Implement <module_name> with unit tests"
-        type: simple
-        completion_criteria: |
-          1. <module_name> implemented per the public interface in
-             design_plan/<module_name>.md §2 (and, if it exposes cross-module
-             edges, design_plan/index.md §3 and the interface contracts in §3).
-          2. Unit tests in <test file path> cover **every category** listed in
-             design_plan/<module_name>.md §4 (happy / edge / error). Concrete
-             cases are designed by this task.
-          3. <module test command> passes.
-          4. Only files inside the <module_name> effective scope (original §2
-             entry + `scope-extend:` additions) are modified, plus
-             design_plan/** updates justified by `contract-update:` markers
-             and append-only guardrails.md §3 entries.
-          5. Changes committed.
-        initial_hint: |
-          PREREQUISITE FALLBACK: Scheduler strategy should run this task only
-          after its prerequisite tasks succeed. Verify prerequisite artifacts
-          exist and pass. If missing or broken, output
-          `❌ not completed: prerequisite artifact missing or broken: <artifact-or-test>`
-          so the scheduler can redispatch the owning producer task.
-
-          Read design_plan/<module_name>.md (your module) and
-          design_plan/index.md (system architecture, cross-module interface
-          contracts, and integration risks).
-          Check guardrails.md §2 for the effective scope whitelist for
-          <module_name> (including any `scope-extend:` additions from the
-          replan subtask).
-          Check git status first — discard residual changes from previous retry.
-          Implement source code AND unit tests together.
-
-          If you discover the contract is infeasible or wrong, you MAY update
-          design_plan/ (<module_name>.md §2/§3 as appropriate, or index.md §3
-          for cross-module changes) and append a guardrails.md §3 entry in the
-          form `contract-update: <path> §<sec> — <old> → <new> — <why>`;
-          commit the design_plan change alongside your code. NEVER widen
-          guardrails.md §2 scope or delete a §4 test category just to pass.
-
-          Run <module test command> before committing.
-
-      - id: 2.3
-        name: "Anti-hack verification for <module_name>"
-        type: simple
-        max_attempts: 1
-        system_prompt_prefix: |
-          You are an anti-hack verifier. Your sole job is to detect constraint
-          violations. Do NOT modify source code, tests, configs, scripts, or
-          generated data.
-        completion_criteria: |
-          1. <module test command> exits with code 0.
-          2. git diff --name-only <module_name-module-start-sha>..HEAD shows
-             only files allowed by the <module_name> effective scope (original
-             guardrails.md §2 entry + `scope-extend:` additions in §3 for this
-             module), plus design_plan/** and guardrails.md §3 entries when
-             justified by a matching `contract-update:` marker.
-          3. No public contracts, tests, configs, scripts, generated outputs,
-             or unrelated modules were modified.
-          4. No removed/weakened assertions or @skip additions in the modified
-             test file.
-        initial_hint: |
-          This is an execution-only verification subtask.
-          1. Run: <module test command>
-          2. Read the <module_name> `module-start:` SHA from guardrails.md §3.
-             Run: git diff --name-only <module_name-module-start-sha>..HEAD
-             Allowed files must be a subset of the <module_name> effective scope
-             in guardrails.md §2 (plus design_plan/** and guardrails.md §3 only
-             if a contract was updated with a matching `contract-update:` entry).
-          3. Run: git diff <module_name-module-start-sha>..HEAD -- <test file path>
-             and check for removed/weakened assertions or skipped-test
-             annotations.
-          4. <write all other anti-hack rules here based on global description
-             and task-specific information>
-
-          If verification result is 'FAIL', append an entry to error_report.md
-          with the failure details, then output
-          `❌ not completed: Anti-hack verification failed. Implementation task
-          should be retried`
-          so that the implementation task can be retried. Do not fix code by
-          yourself.
-
-  <!-- Repeat tasks 3–N for remaining modules following the same pattern as task 2. -->
-
-  # ── Final Task: Integration + Global Anti-hack ─────────────────────────────
-  - id: <last_id>
-    name: "Integration: end-to-end tests, full suite, global anti-hack"
-    description: |
-      Add end-to-end coverage for the completed module set, run full validation,
-      and perform global anti-hack verification before the scheduler stops.
-    type: nested
-    max_attempts: 3
-    completion_criteria: |
-      1. Integration tests for the bulk order flow pass.
-      2. Full `pytest` suite exits with code 0.
-      3. ruff check and mypy pass with no errors.
-      4. Module scope boundaries honored across all module tasks.
-      5. No existing tests weakened anywhere in the repo.
-    subtasks:
-      - id: <last_id>.1
-        name: "Write and pass integration tests"
-        type: simple
-        max_attempts: 3
-        completion_criteria: |
-          1. tests/integration/test_bulk_orders.py added, covering end-to-end
-             CSV upload → DB commit → payment call → notification dispatch.
-          2. pytest tests/integration/test_bulk_orders.py passes.
-          3. If a cross-module bug is found, fix is scoped to the minimal
-             module(s) responsible; module-internal logic refactors are not
-             allowed — only bug fixes.
-          4. Changes committed.
-        initial_hint: |
-          PREREQUISITE FALLBACK: Scheduler strategy should run this task only
-          after all module tasks (2–<N>) succeed. Verify these concrete
-          artifacts exist and are non-trivial:
-          <list all module source and test files>. Also run the module unit
-          test commands. If any prerequisite artifact is missing or its module
-          tests fail, output
-          `❌ not completed: prerequisite module artifact missing or broken: <module>`
-          so the scheduler can redispatch the owning module task.
-
-          Write integration tests per cross-module interfaces documented in
-          each design_plan/<module>.md §2 and §5, and any integration risks
-          noted in design_plan/index.md §4. If a cross-module bug surfaces,
-          fix it in the responsible module (keep fix minimal) and re-run the
-          test. Do NOT rewrite module logic.
-
-          Changes are committed once completed.
-
-      - id: <last_id>.2
-        name: "Global anti-hack and full-suite verification"
-        type: simple
-        max_attempts: 1
-        system_prompt_prefix: |
-          You are a test runner and code integrity verifier. Do NOT modify any
-          files except for appending to error_report.md on failure.
-        completion_criteria: |
-          1. pytest (full suite including integration) exits with code 0.
-          2. ruff check src/ tests/ exits with code 0.
-          3. mypy src/ exits with code 0.
-          4. git diff --name-only <guardrails-baseline-sha>..HEAD shows changes
-             only in the effective scope (original guardrails.md §2 entries +
-             `scope-extend:` additions in §3), plus design_plan/** and
-             append-only guardrails.md §3 edits.
-          5. No existing tests weakened: no removed assertions, no
-             @pytest.mark.skip additions, no relaxed comparisons, no
-             conditional test bypasses.
-          6. No existing API schemas, migrations, or payment contracts modified.
-          7. Every test category listed in any design_plan/<module>.md §4 has
-             at least one concrete test function in the committed test files.
-          8. **Contract integrity**: diff design_plan/** and guardrails.md
-             (guardrails.md §1 baseline SHA vs current) and verify:
-             a. every change in design_plan/** has a matching machine-readable
-                `contract-update:` or `gap-fill:` entry in guardrails.md §3.
-             b. no allowed-file list in guardrails.md §2 has been widened
-                (§2 is immutable; any diff to §2 is `❌ not completed`).
-             c. no §1 Baseline line in guardrails.md has been edited.
-             d. no test category has been deleted from any
-                design_plan/<module>.md §4.
-        initial_hint: |
-          This is an execution-only verification subtask. If the suite normally
-          exceeds one minute, this subtask should be `type: long_running`.
-          1. Run: pytest (full suite)
-          2. Run: ruff check src/ tests/
-          3. Run: mypy src/
-          4. Read the baseline SHA from guardrails.md §1. Run:
-             git diff --name-only <guardrails-baseline-sha>..HEAD
-             Verify every changed source/test file appears in some module's
-             allowed-file list in guardrails.md §2. design_plan/** and
-             append-only guardrails.md §3 edits are allowed only with matching
-             revision-log markers.
-          5. Run: git diff <guardrails-baseline-sha>..HEAD -- tests/ across the
-             whole repo — check for removed assertions, added
-             @pytest.mark.skip / @xfail, relaxed comparisons, deleted tests.
-          6. Verify each new source file has a corresponding test file.
-          7. **Contract-hacking check**: run
-               git show <guardrails-baseline-sha>:guardrails.md > /tmp/guard_v1.md
-               diff /tmp/guard_v1.md guardrails.md
-               git diff <guardrails-baseline-sha>..HEAD -- design_plan/
-             Every diff chunk under design_plan/** must match a
-             guardrails.md §3 `contract-update:` or `gap-fill:` entry. Any diff
-             to guardrails.md §1 or §2 =
-             `❌ not completed: contract-hacking guardrails §<sec>`. Any §4
-             test-category deletion in design_plan/<module>.md =
-             `❌ not completed: contract-hacking <module>.md §4`.
-
-          If ANY check fails, output `❌ not completed: <reason>` with specific
-          details. Do NOT fix code (see main guide §4.7 and §4.9).
+      If the issue cannot be fixed within scope, output
+      `❌ not completed: <reason>` to let the scheduler stop gracefully.
+      Do NOT attempt fixes beyond your authorized scope.
 ```
 
 ---
@@ -888,38 +704,33 @@ tasks:
 
 ### 6.1 When the user provides a design doc
 
-When the user provides a `design_plan/` (see §4.5), Task 1.2 `completion_criteria` becomes:
+When the user provides a `design_plan/` (see §4.5), Task 2.1 `completion_criteria` becomes:
 
 ```yaml
-- id: 1.2
+- id: 2.1
   name: "Write design_plan/, guardrails.md, and error_report.md"
   type: simple
   completion_criteria: |
-    1. The assignment of which task works on which module document is recorded
-       in index.md §5 Task-Module Assignment if missing.
-    2. Any substantial gap in the user-provided design plan has been filled,
-       with its own entry in guardrails.md §3 Revision Log.
-    3. guardrails.md is produced with §1 Baseline, §2 Scope Whitelist
-       (one entry per task), §3 Revision Log.
+    1. The assignment of which task works on which module document is recorded in index.md "Task-Module Assignment" session if missing.
+    2. Any substantial gap in the user-provided design plan has been filled, with its own entry in guardrails.md §3 Revision Log.
+    3. guardrails.md is produced with §1 Baseline, §2 Scope Whitelist (one entry per task), §3 Revision Log.
     4. error_report.md exists with a header, initially empty.
     5. No source files, tests, configs, or scripts are modified.
   system_prompt_prefix: |
-    You are a global planner. Your role is to produce the master design plan
-    that every subsequent task will execute against. You must think holistically
-    across the entire project — every module, every cross-module interface,
-    every error path — and ensure the design plan is complete, unambiguous,
-    and internally consistent. No implementation detail should be left for
-    later tasks to invent; the only thing excluded is pseudocode / line-level
-    code. Do NOT modify source code, tests, or configs.
+    You are a global planner. Your role is to produce the master design plan that every
+    subsequent task will execute against. You must think holistically across the entire
+    project — every module, every cross-module interface, every error path — and ensure
+    the design plan is complete, unambiguous, and internally consistent. No implementation
+    detail should be left for later tasks to invent; the only thing excluded is
+    pseudocode / line-level code. Do NOT modify source code, tests, or configs.
   initial_hint: |
     Read the user-provided design plan <path/to/design_plan> end-to-end.
 
     ## Task decomposition is FIXED
 
-    The tasks below have already been decomposed in the todo list. This
-    decomposition is NOT modifiable — you MUST NOT change task boundaries,
-    merge tasks, or create new tasks. The only thing you may adjust is which
-    module document(s) each task is responsible for.
+    The tasks below have already been decomposed in the todo list. This decomposition is NOT
+    modifiable — you MUST NOT change task boundaries, merge tasks, or create new tasks.
+    The only thing you may adjust is which module document(s) each task is responsible for.
 
     You should add a "Task-Module Assignment" section to index.md if missing:
 
@@ -927,32 +738,23 @@ When the user provides a `design_plan/` (see §4.5), Task 1.2 `completion_criter
     | design_plan/<module_1>.md | <task id(s)> |
     | design_plan/<module_2>.md | <task id(s)> |
 
-    Modules are defined by the project's own architecture — NOT by a 1:1
-    mapping to tasks. A task may own multiple module documents; a module
-    document may be shared by multiple tasks.
+    Modules are defined by the project's own architecture — NOT by a 1:1 mapping to tasks.
+    A task may own multiple module documents; a module document may be shared by multiple tasks.
 
-    ## Subsequent tasks and their work
+    ## Subsequent Task Decomposition
 
-    You MUST tell every later executor exactly what they are responsible for:
+    Here are the subsequent task's decomposition details:
 
-    | Task ID | Type   | Task Name | Work Description |
-    |---------|--------|-----------|------------------|
-    | 2       | nested | Module: <module_name_1> | <what task 2 implements> |
-    | 3       | nested | Module: <module_name_2> | <what task 3 implements> |
-    | ...     |        | ...       | ...              |
-    | <N>     | nested | Module: <module_name_last> | <what task N implements> |
-    | <last>  | nested | Integration: end-to-end tests, full suite, global anti-hack | <what the integration task does> |
-
-    Replace the table above with the real task list from the actual todo.
+    | Task ID | Task Name | Work Description |
+    |---------|-----------|------------------|
+    | 3       | Module: <module_name_1> | <what task 3 implements> |
+    | 4       | Module: <module_name_2> | <what task 4 implements> |
+    ...
+    | <last_id> | Integration | End-to-end tests, full suite, global anti-hack |
 
     ## guardrails.md Format
 
     Create guardrails.md exactly in this Markdown format:
-      # Guardrails
-
-      <!-- RULES: §1 is immutable after Task 1. §2 may only grow via
-      `scope-extend:` markers in §3. §3 is append-only. -->
-
       ## §1 Baseline
       - baseline commit SHA: <sha>
       - baseline timestamp: <ISO-8601>
@@ -968,20 +770,19 @@ When the user provides a `design_plan/` (see §4.5), Task 1.2 `completion_criter
       ## §3 Revision Log (Append-Only)
       - baseline: task 1 — <sha> — scope whitelist written; design_plan/ authored
 
-    Your job is to fill any substantial gap (missing <module>.md for a module
-    task, a contract needed by anti-hack that is entirely undefined, etc.) in
-    the user-defined file. Cosmetic, stylistic, or reorganization edits are
-    NOT performed.
+    Your job is to fill any substantial gap (missing <module>.md for a module task, a contract needed by anti-hack that is entirely undefined, etc.) in the user-defined file. 
+    Cosmetic, stylistic, or reorganization edits are NOT performed.
 
-    Any gap-fill edit should get its own entry in guardrails.md §3 Revision
-    Log, in the form `gap-fill: <path> §<sec> — <what> — <why substantial>`.
+    Any gap-fill edit should get its own entry in guardrails.md §3 Revision Log, in the form
+    `gap-fill: <path> §<sec> — <what> — <why substantial>`.
 
     ## error_report.md Format
 
     Create error_report.md exactly in this Markdown format:
-        # Error Report — <project name>
+        # Error Report —— <project name>
 
         (none yet)
 
-    Commit all of them together; that commit is the baseline for all later
-    anti-hack subtasks. Do NOT modify source code in this task.
+    Commit all of them together; that commit is the baseline for all later anti-hack subtasks.
+    Do NOT modify source code in this task.
+```

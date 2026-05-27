@@ -447,6 +447,8 @@ tasks:
               - Called from: <list of other modules>
 
           3. Create guardrails.md exactly in this Markdown format:
+              # Guardrails
+              
               ## §1 Baseline
               - baseline commit SHA: <sha>
               - baseline timestamp: <ISO-8601>
