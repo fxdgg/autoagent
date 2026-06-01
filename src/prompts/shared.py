@@ -447,6 +447,11 @@ def indent_block(text: str, spaces: int = 4) -> str:
     return "\n".join(prefix + line if line.strip() else line for line in lines)
 
 
+def get_prompt_task_id(task: dict) -> str:
+    """Return the task ID that should be visible inside AI-facing prompts."""
+    return str(task.get('_display_id', task['id']))
+
+
 def build_workflow_section(task: dict, parent_context: dict) -> str:
     """Build the sibling-subtask workflow orientation text.
 
@@ -462,9 +467,9 @@ def build_workflow_section(task: dict, parent_context: dict) -> str:
         return ""
 
     lines = []
-    current_id = str(task.get('_display_id', task['id']))
+    current_id = get_prompt_task_id(task)
     for st in parent_context['subtasks']:
-        st_id = str(st.get('_display_id', st['id']))
+        st_id = get_prompt_task_id(st)
         marker = "→" if st_id == current_id else " "
         lines.append(f"{marker} {st_id}. {st['name']}")
     lines.append("")

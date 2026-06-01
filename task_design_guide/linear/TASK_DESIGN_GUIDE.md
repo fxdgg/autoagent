@@ -260,11 +260,8 @@ Examples of fatal conditions:
 Non-fatal examples:
 
 - Minor prerequisite missing issues (like missing a python module, missing a specific script) that can be easily resolved by `pip install`, `curl`, etc. (and also user allows it).
-- Executor submitted a wrong command that can be fixed by itself.
+- A command returned a normal build error that the executor can fix within task scope.
 - Normal failures that can be resolved by retry, like anti-hack / testing failed in subsequent tasks after a code change —— just retry the implementation task (See §2.3 for more details).
-
-Other:
-- Transient issues like resource busy, file locked, network flake —— Only marked as fatal when the issue cannot be resolved by consecutive retries.
 
 **Implication**: 
 1. If a task detects prerequisite failures, add `fatal: true` in yaml (See §1.4 for schema), and explicitly instructs AI to output `❌ FATAL: <reason>` when prerequisite fails in `initial_hint`. DO NOT add `fatal: true` when a task only detects recoverable local failures.
@@ -319,7 +316,7 @@ Top-level `max_attempts` / `max_attempts_per_loop` inside `nested` / `looping`'s
 
 3. Executor AIs should be instructed to be aware of residual states from previous attempts, and should be instructed to check prerequisites by themselves.
 
-4. An explicit failure record file (e.g. error_report.md) should be maintained and written in root `description`'s Reference Doc P1. Executors should be instructed to write an entry when output `❌ not completed: <reason>` or `❌ FATAL: <reason>`. Only failure/fatal analysis tasks must read this file; normal executor tasks only need to write to it.
+4. An explicit failure record file (e.g. error_report.md) should be maintained and written in root `description`'s Reference Doc P1. Executors should be instructed to write an entry when output `❌ not completed: <reason>` or `❌ FATAL: <reason>` so that failure/fatal analysis tasks can diagnore with details.
 
 **Why an explicit failure record file is recommended: failure/fatal analysis can read and reason about errors themselves, but an explicit failure record file reduces their thinking budget and improves accuracy.**
 
@@ -419,13 +416,8 @@ See §5 for detailed field-writing rules.
 
 ### 3.3 What Must Not Include
 
-- **Step-by-step Instructions**: AI can figure it out themselves. Todo author should be a **context provider** that tells executors where to obtain information, not a step-by-step instructor. 
-- **Potential/Recommended Approach**: AI can figure out the best approach themselves. Locking them into one approach only narrows AI's creativity.
-
-Exceptions are:
-- The project explicitly requires
-- User-defined document format specifications
-- Exact procedural protocols that AI cannot invent
+- **Step-by-step Instructions**: AI can figure it out themselves. Todo author should be a **context provider** that tells executors where to obtain information, not a step-by-step instructor.
+- **Potential/Recommended Approach** (unless the project requires): AI can figure out the best approach themselves. Locking them into one approach only narrows AI's creativity.
 
 ## 4. Guidance on Task Decomposition
 
@@ -562,7 +554,7 @@ Do not put these in `initial_hint`:
 
 - project-wide context that already belongs in root `description`;
 - success conditions from `completion_criteria`;
-- step-by-step instructions unless the project requires / specifying user-defined document format specifications / specifying exact procedural protocols that AI cannot invent;
+- step-by-step instructions unless the project requires;
 - potential/recommended approach unless the project requires;
 - references like "see previous task", see this guide or subguides, etc. (See §2.1).
 
@@ -654,7 +646,7 @@ Design rules:
 
 5. **Be explicit about branches only when branches are part of the design**: Branch-per-condition is useful for isolated experiments, ablations, or risky alternatives. Ordinary linear implementation should usually stay on the current branch unless the project asks otherwise.
 
-6. **Forbid destructive git operations unless intentionally allowed**: Do not instruct executors to use broad `git reset --hard`, `git clean`, force-push, branch deletion, or checkout commands that may discard unrelated work unless the task explicitly owns that state and the user, project rules, or subguides explicitly allow it. Prefer targeted reverts or task-owned commit rollback.
+6. **Forbid destructive git operations unless intentionally allowed**: Do not instruct executors to use broad `git reset --hard`, `git clean`, force-push, branch deletion, or checkout commands that may discard unrelated work unless the task explicitly owns that state and the user/project rules allow it. Prefer targeted reverts or task-owned commit rollback.
 
 7. **Revert with preservation of decision evidence**: For optimization or experiment tasks, if an implementation is rejected, preserve the hypothesis, measurements, and decision record even if the implementation commit is reverted.
 
@@ -697,7 +689,7 @@ Read only the guide relevant to the task domain:
 [ ] Top-level tasks are generally independent.
 [ ] Important intermediate results are written to files; never assume the next task can see prior conversation or reasoning context.
 [ ] Cross-task consumers are told exactly which files to read, what information to extract, and what to do if those files are missing or incomplete.
-[ ] `description` and `initial_hint` act as context providers, not step-by-step scripts unless the project requires / specifying user-defined document format specifications / specifying exact procedural protocols that AI cannot invent.
+[ ] `description` and `initial_hint` act as context providers, not step-by-step scripts unless the project requires exact procedural control.
 [ ] If cross-task communication is required, prior tasks must write information to files. Subsequent task's `initial_hint` must explicitly state what prior tasks are doing, what files it generate should be read by this task. Does not say things like "see the previous task in `todos.yaml`". 
 
 #### 8.2.2 Fatal Analysis
@@ -712,7 +704,7 @@ Read only the guide relevant to the task domain:
 
 [ ] Normal retryable failures should be explicitly instructed with `❌ not completed: <reason>`. The `<reason>` text is meaningful enough for retry decisions.
 [ ] Executor AIs should be instructed to be aware of residual states from previous attempts.
-[ ] An explicit failure record file should be maintained and written in root `description`'s Reference Doc P1. Executors should write an entry when outputting `❌ not completed: <reason>` or `❌ FATAL: <reason>`; only failure/fatal analysis tasks need to read it.
+[ ] An explicit failure record file should be maintained and written in root `description`'s Reference Doc P1. Executors should be instructed to write an entry when output `❌ not completed: <reason>` or `❌ FATAL: <reason>`.
 [ ] Simplify retry handling if user explicitly states that, but do not entirely delete it.
 
 #### 8.2.4 `long_running` Mechanism
@@ -740,7 +732,7 @@ Read only the guide relevant to the task domain:
 
 [ ] Root `description` covers Goal, Architecture, Key file paths, Environments, Key commands, Reference Docs with priority levels, Hard constraints and Rules.
 [ ] Root `description` only covers shared project context; task-local context are put in `initial_hint`, success condition are put in `completion_criteria`, and persona & hard role constraints are put in `system_prompt_prefix`.
-[ ] Root `description` does not cover step-by-step instructions or potential/recommended approach unless the project requires / specifying user-defined document format specifications / specifying exact procedural protocols that AI cannot invent.
+[ ] Root `description` does not cover step-by-step instructions or potential/recommended approach unless the project requires.
 
 ### 8.4 Guidance on Task Decomposition
 
@@ -758,7 +750,7 @@ Read only the guide relevant to the task domain:
 [ ] `completion_criteria` are specific, measurable, and verifiable task success conditions, including positive and negative conditions, not implementation steps.
 [ ] Top-level `completion_criteria` for `nested` tasks should cover all subtask's `completion_criteria` so that evaluator AIs have full decision context.
 [ ] `initial_hint` covers task-local context, with prerequisite checks, residual state awareness, task-specific information, and handoff file handling.
-[ ] `initial_hint` does not cover project-wide context, success conditions, step-by-step scripts or potential/recommended approach unless the project requires / specifying user-defined document format specifications / specifying exact procedural protocols that AI cannot invent.
+[ ] `initial_hint` does not cover project-wide context, success conditions, step-by-step scripts or potential/recommended approach unless the project requires.
 [ ] `system_prompt_prefix` sets the executor's persona, expertise, style, role, or hard behavior constraints, not a duplicate of `completion_criteria` or `initial_hint`.
 [ ] Use `max_attempts: 1` for execution-only subtasks, tasks that not benefit from inner retries, and with explicit `❌ not completed: <reason>` instructions.
 [ ] Use `max_attempts: 2-3` for top-level tasks and targeted uncertain work. Use more for active implementation tasks.
@@ -808,5 +800,5 @@ Read only the guide relevant to the task domain:
 [ ] Does `completion_criteria` and `initial_hint` include negative constraints, and are anti-hack sibling subtask introduced for complex implementations? —— Otherwise AI may hack when encountering difficulty
 [ ] Does `description` or `initial_hint` include potential/recommended approach unless the project requires? —— May largely degrade AI's creativity
 [ ] Are `git` used to track each task's work if the project uses `git`? —— Otherwise work cannot be traced or audited when finished
-[ ] Are destructive `git` operations forbidden unless the user, project rules, or subguides explicitly allow them? —— May accidentally break project state
+[ ] Are destructive `git` operations forbidden unless the user or project rules explicitly allow them? —— May accidentally break project state
 [ ] Are documentations preserved when reverting code for iterative optimization or experiments? —— May largely degrade AI's output quality since they may do repeated failed work

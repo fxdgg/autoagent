@@ -12,6 +12,7 @@ import sys
 import json
 import logging
 import argparse
+import atexit
 
 import yaml
 
@@ -26,6 +27,7 @@ from ai_client.ai_providers import (
 )
 from task_executor import ConfigError
 from util.default_value import generate_default_config, DEFAULTS
+from util.run_lock import RunLock, RunLockError
 
 logger = logging.getLogger(__name__)
 
@@ -592,6 +594,49 @@ Examples:
     args.config = os.path.abspath(args.config)
     if args.ideas:
         args.ideas = os.path.abspath(args.ideas)
+
+    _log_dir_raw = args.log_dir  # may be None
+    _log_dir_abs = os.path.abspath(_log_dir_raw) if _log_dir_raw else os.path.abspath(".autoagent")
+    _workspace_abs = os.path.abspath(args.workspace)
+
+    # These utility commands do not target a todo config for execution.
+    if args.rename:
+        old_dir = os.path.abspath(args.rename[0])
+        new_dir = os.path.abspath(args.rename[1])
+        count = SessionHelper.update_workspace_in_csv(_log_dir_abs, old_dir, new_dir)
+        if count:
+            print(f"✅ Updated {count} session(s): {old_dir} → {new_dir}")
+        else:
+            print(f"⚠️  No sessions found with workspace: {old_dir}")
+        return
+
+    if args.list_sessions:
+        _list_sessions(_log_dir_abs, _workspace_abs)
+        return
+
+    if args.list_providers:
+        providers = list_providers()
+        print(f"\n{'=' * 50}")
+        print(f"  Available AI Providers")
+        print(f"{'=' * 50}")
+        for name, info in providers.items():
+            aliases = ", ".join(info['aliases']) if info['aliases'] else "(none)"
+            print(f"\n  📌 {name}")
+            print(f"     Executable: {info['default_executable']}")
+            print(f"     Default model: {info['default_model']}")
+            print(f"     Aliases: {aliases}")
+        print(f"\n{'=' * 50}")
+        return
+
+    try:
+        _config_lock = RunLock(
+            target_type="config",
+            target_path=args.config,
+        ).acquire()
+        atexit.register(_config_lock.release)
+    except RunLockError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
     
     # Ensure required files exist (create empty if not present)
     if args.ideas:
@@ -606,27 +651,6 @@ Examples:
         with open(args.config, 'w', encoding='utf-8') as f:
             f.write('')  # Create empty file
         print(f"✓ Created empty config file: {args.config}")
-    
-    # Resolve log_dir early so we can point orchestrator.log there too.
-    _log_dir_raw = args.log_dir  # may be None
-    _log_dir_abs = os.path.abspath(_log_dir_raw) if _log_dir_raw else os.path.abspath(".autoagent")
-    _workspace_abs = os.path.abspath(args.workspace)
-
-    # ── Handle --rename early (before session resolution) ──
-    if args.rename:
-        old_dir = os.path.abspath(args.rename[0])
-        new_dir = os.path.abspath(args.rename[1])
-        count = SessionHelper.update_workspace_in_csv(_log_dir_abs, old_dir, new_dir)
-        if count:
-            print(f"✅ Updated {count} session(s): {old_dir} → {new_dir}")
-        else:
-            print(f"⚠️  No sessions found with workspace: {old_dir}")
-        return
-
-    # ── Handle --list-sessions early (before session resolution) ──
-    if args.list_sessions:
-        _list_sessions(_log_dir_abs, _workspace_abs)
-        return
 
     # ── Clean up stale session entries ──
     _stale = SessionHelper.cleanup_stale_sessions(_log_dir_abs)
@@ -657,6 +681,7 @@ Examples:
 
     # Print the resolved session ID
     _session_id = os.path.basename(_session_dir)
+    _config_lock.update_session_id(_session_id)
     print(f"📌 Session: {_session_id}")
 
     # Setup logging – orchestrator.log goes into the session directory
@@ -666,21 +691,6 @@ Examples:
     )
     
     try:
-        # Handle --list-providers
-        if args.list_providers:
-            providers = list_providers()
-            print(f"\n{'=' * 50}")
-            print(f"  Available AI Providers")
-            print(f"{'=' * 50}")
-            for name, info in providers.items():
-                aliases = ", ".join(info['aliases']) if info['aliases'] else "(none)"
-                print(f"\n  📌 {name}")
-                print(f"     Executable: {info['default_executable']}")
-                print(f"     Default model: {info['default_model']}")
-                print(f"     Aliases: {aliases}")
-            print(f"\n{'=' * 50}")
-            return
-
         # Determine idle mode: enabled by default when --ideas is set
         idle_mode = bool(args.ideas) and not args.no_idle
         

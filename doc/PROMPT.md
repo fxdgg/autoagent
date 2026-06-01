@@ -60,6 +60,8 @@ DO NOT use `sleep` or any wait command in your session.
 [`tasks.system_prompt_prefix`]
 
 <task>
+    Current task ID: [`task_id`]
+
     <task_name>
         [`tasks.name`]
     </task_name>
@@ -92,6 +94,8 @@ DO NOT use `sleep` or any wait command in your session.
 [`tasks.system_prompt_prefix`]
 
 <task>
+    Current task ID: [`task_id`]
+
     <task_name>
         [`tasks.name`]
     </task_name>

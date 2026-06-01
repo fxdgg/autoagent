@@ -6,6 +6,7 @@ Corresponds to ``SimpleTaskExecutor._build_prompt()`` in task_executor.py.
 
 from prompts.shared import (
     indent_block,
+    get_prompt_task_id,
     build_workflow_section,
     build_history_section,
     build_previous_subtask_section,
@@ -43,7 +44,7 @@ def build_simple_task_prompt(
     I8 = 8   # indent for content inside nested tags
 
     # ── Section 1: Task ──────────────────────────────────────────────
-    inner = []
+    inner = [f"    Current task ID: {get_prompt_task_id(task)}"]
     inner.append(f"    <task_name>\n{indent_block(task['name'], I8)}\n    </task_name>")
     if task.get('description'):
         inner.append(f"    <task_description>\n{indent_block(task['description'], I8)}\n    </task_description>")
