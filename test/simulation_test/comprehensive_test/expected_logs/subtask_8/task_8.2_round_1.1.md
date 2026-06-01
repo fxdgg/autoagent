@@ -50,6 +50,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
+    Current task ID: 8.2
+
     <task_name>
         Push container image
     </task_name>

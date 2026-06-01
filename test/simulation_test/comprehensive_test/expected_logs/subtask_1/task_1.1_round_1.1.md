@@ -46,6 +46,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
+    Current task ID: 1.1
+
     <task_name>
         One-time environment setup
     </task_name>

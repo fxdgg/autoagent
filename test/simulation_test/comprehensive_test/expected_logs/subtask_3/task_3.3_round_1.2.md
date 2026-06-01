@@ -46,6 +46,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
+    Current task ID: 3.3
+
     <task_name>
         Deploy staging
     </task_name>
@@ -177,6 +179,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
+    Current task ID: 3.3
+
     <task_name>
         Deploy staging
     </task_name>

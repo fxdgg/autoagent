@@ -46,6 +46,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
+    Current task ID: 8.3
+
     <task_name>
         Deploy container
     </task_name>

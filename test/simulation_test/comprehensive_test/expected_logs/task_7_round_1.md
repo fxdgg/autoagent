@@ -45,6 +45,8 @@
 You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task.
 
 <task>
+    Current task ID: 7
+
     <task_name>
         Round-scoped description validation
     </task_name>
