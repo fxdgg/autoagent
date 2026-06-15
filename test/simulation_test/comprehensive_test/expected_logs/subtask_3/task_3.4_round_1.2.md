@@ -30,6 +30,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
+    Current task ID: 3.4
+
     <task_name>
         Smoke test staging
     </task_name>

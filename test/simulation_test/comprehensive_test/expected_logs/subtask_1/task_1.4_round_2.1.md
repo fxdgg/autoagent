@@ -30,6 +30,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
+    Current task ID: 1.4
+
     <task_name>
         Benchmark and validate
     </task_name>

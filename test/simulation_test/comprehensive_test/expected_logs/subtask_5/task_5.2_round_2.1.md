@@ -30,6 +30,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
+    Current task ID: 5.2
+
     <task_name>
         Run fragile transformation
     </task_name>

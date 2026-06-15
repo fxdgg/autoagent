@@ -30,6 +30,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
+    Current task ID: 3.1
+
     <task_name>
         Build artifacts
     </task_name>

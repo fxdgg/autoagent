@@ -30,6 +30,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
+    Current task ID: 6.3
+
     <task_name>
         Finalize truncation validation
     </task_name>

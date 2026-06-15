@@ -30,6 +30,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
+    Current task ID: 5.3
+
     <task_name>
         Verify fallback output
     </task_name>

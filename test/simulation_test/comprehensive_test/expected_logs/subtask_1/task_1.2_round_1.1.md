@@ -30,6 +30,8 @@ You are an AI coding agent. You can read/write files, run shell commands, and an
 
 
 <task>
+    Current task ID: 1.2
+
     <task_name>
         One-time data preparation
     </task_name>
