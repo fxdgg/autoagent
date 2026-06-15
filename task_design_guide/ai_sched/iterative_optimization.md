@@ -22,6 +22,7 @@ Key Considerations:
 - Use `long_running` for benchmark if it takes more than a minute (e.g. GPU profiling, large simulation runs).
 - Prefer `last_result: type: response`: optimization files are durable task-internal state; scheduler decisions should rely on concise final response summaries unless a truly complex strategy must inspect files directly.
 - Task 6 diagnoses repeated execution anomalies only. It must not be triggered by consecutive `reverted` experiments, because `reverted` means an idea failed evaluation rather than execution failed.
+- Executors that output `❌ not completed` must append a concise entry to `error_report.md` before outputting the marker. For external/transient failures, retry the failing command once before escalating.
 
 ---
 
@@ -239,12 +240,12 @@ Keep entries concise. Do not use this file for reverted experiments, normal eval
 
 #### Subtask 1.1: Build and run tests without modifications
 
-Build and test without modifying the repository. If build or tests fail, append a concise entry to `error_report.md`, then output `❌ not completed`.
+Build and test without modifying the repository. If build or tests fail, first retry once to rule out transient issues; only if the failure persists, append a concise entry to `error_report.md`, then output `❌ not completed`.
 
 #### Subtask 1.2: Run baseline benchmark and initialize state files
 
 1. Run the baseline benchmark.
-2. If the baseline benchmark fails, append a concise entry to `error_report.md`, then output `❌ not completed`.
+2. If the baseline benchmark fails, first retry once to rule out transient issues; only if the failure persists, append a concise entry to `error_report.md`, then output `❌ not completed`.
 3. Create or update the optimization state files, and `error_report.md`:
    - `optimization_results.tsv`
    - `optimization_log.md`
@@ -274,7 +275,9 @@ Build and test without modifying the repository. If build or tests fail, append 
 #### Task 4: Run benchmark for the implementation
 
 1. Skip this step if the idea is marked as `rejected` (Guarded by scheduler).
-2. Run the project-specific benchmark only for implemented experiments, and on benchmark failure append a concise entry to `error_report.md`, then immediately output `❌ not completed` so that Task 4 can be retried.
+2. Run the project-specific benchmark only for implemented experiments. On benchmark failure:
+   - If caused by implementation errors: append a concise entry to `error_report.md`, then output `❌ not completed: Benchmark failed. Implementation task should be retried`.
+   - If caused by external/environment issues: first retry once to rule out transient issues; only if the failure persists, append a concise entry to `error_report.md`, then output `❌ not completed: <external issues>`.
 3. Write measured metric values into the selected `optimization_results.tsv` row, and `Profiling Results` section in `optimization_log.md`.
 
 ### Task 5: Evaluate result, keep or revert, and update optimization state
@@ -455,8 +458,8 @@ tasks:
     initial_hint: |
       1. <hint on running build and test commands>
       2. <hints on how to run benchmark commands>
-      3. If the build, tests, or benchmark cannot run or fails, append a concise entry to
-      error_report.md in this Markdown format and output `❌ not completed: <reason>`:
+      3. If the build, tests, or benchmark cannot run or fails, first retry the failing command once to rule out transient issues (e.g. resource busy, file locked, network flake).
+      Only if the failure persists after retry, append a concise entry to error_report.md in this Markdown format and output `❌ not completed: <reason>`:
         # Error Report —— <project name>
 
         ## Execution Errors
@@ -661,11 +664,11 @@ tasks:
         type: simple
         max_attempts: 1
         system_prompt_prefix: |
-          You are an anti-hack verifier. Your sole job is to detect constraint violations. Do NOT modify source code, tests, configs, benchmark scripts, generated data, or documentation.
+          You are an anti-hack verifier. Your sole job is to detect constraint violations. Do NOT modify source code, tests, configs, benchmark scripts, generated data, or documentation except for appending to error_report.md on failure.
         completion_criteria: |
           1. If the selected idea was marked as 'rejected', outputs 'Implementation: rejected' in the second-to-last line 
           to inform the scheduler, and output '✅ completed' in the last line to proceed.
-          2. If verification result is 'FAIL', output `❌ not completed: Anti-hack verification failed. Implementation task should be retried` so that the implementation task can be retried.
+          2. If verification result is 'FAIL', a concise entry is appended to error_report.md, then output `❌ not completed: Anti-hack verification failed. Implementation task should be retried` so that the implementation task can be retried.
           3. No public contracts, tests, configs, benchmark scripts, generated benchmark outputs, or unrelated modules were modified.
         initial_hint: |
           Read the current experiment from optimization_log.md and inspect git to find implementation code changes.
@@ -674,7 +677,7 @@ tasks:
 
           1. Check if the implementation code matches the experiment idea;
           2. <write all other anti-hack rules here based on global description and task-specific informations>
-          3. If verification result is 'FAIL', output `❌ not completed: Anti-hack verification failed. Implementation task should be retried`
+          3. If verification result is 'FAIL', append a concise entry to error_report.md with the failure details, then output `❌ not completed: Anti-hack verification failed. Implementation task should be retried`
           so that the implementation task can be retried. Do not fix code by yourself.
 
   - id: 4
@@ -686,12 +689,12 @@ tasks:
       Run the benchmark for the latest implementation that already
       passed anti-hack verification, producing raw benchmark output for evaluation.
     system_prompt_prefix: |
-      You are a benchmark runner. Do NOT modify source code, tests, configs, benchmark scripts, or documentation except for writing raw benchmark output produced by the benchmark command.
+      You are a benchmark runner. Do NOT modify source code, tests, configs, benchmark scripts, or documentation except for writing raw benchmark output produced by the benchmark command and appending to error_report.md on failure.
     completion_criteria: |
       1. If the selected idea was marked as 'rejected', skip this step.
       2. If code was implemented, <benchmark command> exits 0; optimization_results.tsv has the selected EXP-xxx row updated in place with the measured metric values while keeping status=pending and commit_hash=pending; the 'Profiling Results' section in optimization_log.md records the observed metric values, metric notes, and benchmark reliability notes.
-      3. If the benchmark fails because of external issues (e.g. missing environments), immediately output `❌ not completed: <external issues>` to inform the scheduler.
-      4. If the benchmark fails because of implementation error, immediately output `❌ not completed: Benchmark failed. Implementation task should be retried` so that the implementation task can be retried.
+      3. If the benchmark fails because of external/environment issues (after retrying once for transient issues), a concise entry is appended to error_report.md, then output `❌ not completed: <external issues>` to inform the scheduler.
+      4. If the benchmark fails because of implementation errors, a concise entry is appended to error_report.md, then output `❌ not completed: Benchmark failed. Implementation task should be retried` so that the implementation task can be retried.
     initial_hint: |
       If the selected idea was marked as 'rejected', skip this benchmark step and directly output ✅ completed to proceed to the next task.
 
@@ -699,8 +702,11 @@ tasks:
       <benchmark command>
 
       If the benchmark command fails, its output is incomplete, or the expected raw benchmark output is missing:
-        - If because of external issues (e.g. missing environments), immediately output `❌ not completed: <external issues>` to inform the scheduler.
-        - If because of implementation error, immediately output `❌ not completed: Benchmark failed. Implementation task should be retried` so that the implementation task can be retried.
+        - If because of implementation errors (compilation errors, assertion failures, incorrect output format, logic bugs in the changed code):
+          Append a concise entry to error_report.md, then output `❌ not completed: Benchmark failed. Implementation task should be retried` so that the implementation task can be retried.
+        - If because of external/environment issues (hardware unavailable, out of memory, network timeout, missing external dependencies, corrupted benchmark data, permission denied):
+          First retry the benchmark command once to rule out transient issues (e.g. resource busy, file locked, network flake).
+          Only if the failure persists after retry, append a concise entry to error_report.md, then output `❌ not completed: <external issues>` to inform the scheduler.
       Do not update optimization_results.tsv or optimization_log.md on benchmark failure.
 
       After a successful benchmark, update the selected EXP-xxx row in optimization_results.tsv in place: 
@@ -725,7 +731,7 @@ tasks:
       You are a strict experiment evaluator. Apply the decision rules consistently and use the benchmark results already recorded by the benchmark subtask.
     completion_criteria: |
       1. If required benchmark evidence is missing, incomplete, or internally inconsistent for an implemented experiment, 
-      output `❌ not completed: benchmark incomplete` so that the benchmark task can be retried.
+      a concise entry is appended to error_report.md, then output `❌ not completed: benchmark incomplete` so that the benchmark task can be retried.
       2. Otherwise, exactly one final decision is applied as status=kept/reverted in both optimization_results.tsv and optimization_log.md according to initial_hint, 
       and the implementation commit is kept or removed with git reset, or absent because of 'rejected'.
       3. The selected experiment row in optimization_results.tsv is finalized with measured metric values already written by the benchmark subtask, 
@@ -742,8 +748,8 @@ tasks:
       1. Required benchmark evidence before decision (Skip if the experiment was marked as 'rejected')
         - optimization_results.tsv contains the required metric values for EXP-xxx.
         - The selected experiment's Profiling Results contains observed metrics, metric notes, and benchmark reliability notes.
-        - If required benchmark evidence is missing, incomplete, or internally inconsistent, output `❌ not completed: benchmark incomplete` 
-          so that the benchmark task can be retried.
+        - If required benchmark evidence is missing, incomplete, or internally inconsistent, append a concise entry to error_report.md with the details, 
+          then output `❌ not completed: benchmark incomplete` so that the benchmark task can be retried.
 
       2. Decision rules (Skip if the experiment was marked as 'rejected')
         - Metrics: <project-specific metric names, units, directionality, and where each value is recorded in optimization_results.tsv>

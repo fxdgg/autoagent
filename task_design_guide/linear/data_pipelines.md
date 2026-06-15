@@ -11,7 +11,7 @@ Patterns for **data extraction, transformation, loading, and validation** workfl
 | Simple one-shot script (< 1 min) | Single `simple` task | No decomposition needed. |
 | Multi-stage pipeline (extract → transform → load) | `nested` with per-stage subtasks | Each stage has different failure modes; isolation enables targeted retry. |
 | Long-running data processing (> 1 min) | Use `long_running` for the processing step | Prevents session timeout. |
-| Pipeline with expensive setup (DB init, data download) | `nested` with `simple_once` setup + processing subtasks | Setup runs once; processing can retry without re-downloading. |
+| Pipeline with expensive setup (DB init, data download) | Top-level `simple` or `long_running` setup task + `nested` processing task | Setup runs first as a standalone task; processing can retry independently. |
 
 ---
 
@@ -76,9 +76,9 @@ Pipeline stages are context-isolated — they share the filesystem only. Each st
         Write results to output/validation_report.txt
 ```
 
-### Pattern 2: Expensive setup with `*_once` types
+### Pattern 2: Expensive setup as a top-level task
 
-When the pipeline requires a one-time expensive setup (downloading a large dataset, building a Docker image, initializing a database), use `simple_once` or `long_running_once` to avoid re-running it on retry.
+When the pipeline requires a one-time expensive setup (downloading a large dataset, building a Docker image, initializing a database), make it a **top-level task** before the processing task. This avoids re-running setup on retry.
 
 ```yaml
 subtasks:
@@ -93,13 +93,13 @@ subtasks:
       Save to: data/raw/dataset.parquet
       This is a large file (~100MB+).
 
-  - id: 1.2
-    name: "Process dataset"
-    type: simple
-    completion_criteria: |
-      1. data/processed/output.csv created
-    initial_hint: |
-      Input: data/raw/dataset.parquet (already downloaded by previous step)
+- id: 2
+  name: "Process dataset"
+  type: simple
+  completion_criteria: |
+    1. data/processed/output.csv created
+  initial_hint: |
+    Input: data/raw/dataset.parquet (already downloaded by previous step)
 ```
 
 ### Pattern 3: Validate input data before processing
@@ -180,4 +180,4 @@ For heavy data processing (large file transforms, ML inference, batch API calls)
 | All pipeline stages in one `simple` task | If the last stage fails, the entire pipeline reruns including expensive extraction | Use `nested` to isolate stages |
 | No explicit input/output file paths | AI guesses paths, later stages can't find files | Always specify exact paths in `initial_hint` |
 | Treating any record failure as task failure | Pipeline aborts on first bad record | Use partial success criteria (e.g., "95% processed") |
-| Re-downloading data on every retry | Wastes time and bandwidth | Use `long_running_once` for data download |
+| Re-downloading data on every retry | Wastes time and bandwidth | Make data download a top-level `long_running` task before the processing pipeline |

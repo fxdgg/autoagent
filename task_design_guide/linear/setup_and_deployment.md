@@ -9,17 +9,17 @@ Patterns for **environment setup, dependency installation, build configuration, 
 | Scenario | Structure | Why |
 |----------|-----------|-----|
 | Simple setup (install deps, configure) | Single `simple` task | One logical unit. |
-| Setup + work that depends on it | `nested` with `simple_once` setup + work subtasks | Setup runs once; work can retry without reinstalling. |
-| Expensive one-time build (Docker, compilation) | `long_running_once` subtask | Runs once, avoids re-running on retry, handles long build times. |
+| Setup + work that depends on it | Top-level `simple` setup task + `nested` work task | Setup runs first as a standalone task; work can retry without reinstalling. |
+| Expensive one-time build (Docker, compilation) | Top-level `long_running` build task | Runs first as a standalone task, then subsequent tasks depend on it. |
 | Multi-environment deployment | `nested` with per-environment subtasks | Each environment is an independent failure mode. |
 
 ---
 
 ## Patterns
 
-### Pattern 1: One-time setup with `*_once` types
+### Pattern 1: Separate setup from dependent work
 
-Use `simple_once` and `long_running_once` for expensive setup steps that should never be re-executed on retry. This is the primary use case for `*_once` types.
+Make expensive setup steps **top-level tasks** so they run before dependent work. Dependent tasks reference the setup output (e.g., installed packages) and can retry independently.
 
 ```yaml
 - id: 1
@@ -42,17 +42,35 @@ Use `simple_once` and `long_running_once` for expensive setup steps that should 
         If install fails due to system dependencies, check requirements.txt
         for notes on OS-specific packages.
 
-    - id: 1.2
-      name: "Build project and run smoke tests"
+- id: 2
+  name: "Build project and run smoke tests"
+  type: nested
+  completion_criteria: |
+    1. Project builds successfully
+    2. Smoke tests pass
+  initial_hint: |
+    Dependencies should already be installed from Task 1.
+  subtasks:
+    - id: 2.1
+      name: "Build project"
       type: simple
       completion_criteria: |
         1. python -m build exits with code 0
-        2. pytest tests/smoke/ exits with code 0
+      initial_hint: |
+        Run: python -m build
+
+    - id: 2.2
+      name: "Run smoke tests"
+      type: simple
+      completion_criteria: |
+        1. pytest tests/smoke/ exits with code 0
+      initial_hint: |
+        Run: pytest tests/smoke/
 ```
 
 ### Pattern 2: Docker or long-running builds
 
-When the build itself takes more than a minute, use `long_running_once` to avoid both timeout and re-execution.
+When the build itself takes more than a minute, make it a **top-level** `long_running` task. Subsequent testing runs as a separate task that depends on it.
 
 ```yaml
 subtasks:
@@ -163,25 +181,25 @@ When deploying to environments where a failed deployment should be actively roll
 
 ```yaml
 - id: 1
+  name: "Record current deployment version for rollback"
+  type: simple
+  model: lite
+  system_prompt_prefix: |
+    You are a deployment operator. Do NOT modify any source code.
+  completion_criteria: |
+    1. Current version saved to deploy_state.txt (image tag or commit hash)
+  initial_hint: |
+    Record the current running version so we can roll back if needed.
+    Write to deploy_state.txt: image tag, commit hash, timestamp.
+
+- id: 2
   name: "Deploy to production with rollback safety"
   type: nested
   completion_criteria: |
     1. Application running on production
     2. Health check passes: curl https://app.example.com/health returns 200
   subtasks:
-    - id: 1.1
-      name: "Record current deployment version for rollback"
-      type: simple_once
-      model: lite
-      system_prompt_prefix: |
-        You are a deployment operator. Do NOT modify any source code.
-      completion_criteria: |
-        1. Current version saved to deploy_state.txt (image tag or commit hash)
-      initial_hint: |
-        Record the current running version so we can roll back if needed.
-        Write to deploy_state.txt: image tag, commit hash, timestamp.
-
-    - id: 1.2
+    - id: 2.1
       name: "Deploy new version"
       type: simple
       model: lite
@@ -195,7 +213,7 @@ When deploying to environments where a failed deployment should be actively roll
         Run: ./scripts/deploy.sh production
         If deploy fails, do NOT retry — let the parent handle it.
 
-    - id: 1.3
+    - id: 2.2
       name: "Verify deployment health, rollback if unhealthy"
       type: simple
       max_attempts: 1
@@ -221,7 +239,7 @@ When deploying to environments where a failed deployment should be actively roll
 
 | Anti-pattern | Problem | Better |
 |--------------|---------|--------|
-| Re-installing dependencies on every retry | Wastes time, especially for large dependency trees | Use `simple_once` for installation |
+| Re-installing dependencies on every retry | Wastes time, especially for large dependency trees | Make installation a top-level task before dependent work |
 | No environment validation | Failures deep in the pipeline with cryptic errors | Add a validation subtask at the start |
 | Deploy step can modify source code | AI "helpfully" patches code instead of reporting deploy failure | Use `system_prompt_prefix` to restrict behavior |
-| Using `*_once` for things that can go stale | If a later step changes config, the `*_once` output may be invalid | Only use `*_once` for truly stable setup (deps, base images) |
+| Using setup tasks for things that can go stale | If a later step changes config, the setup output may be invalid | Only make truly stable steps (deps, base images) standalone top-level tasks |

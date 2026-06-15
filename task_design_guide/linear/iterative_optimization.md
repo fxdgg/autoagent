@@ -3,14 +3,15 @@
 ## 1. Recommended Structure
 
 ```
+├── fatal_analysis                           (reserved, simple or long_running)
 ├── nested
-|   ├── build the project                    (simple or long_running, model: lite)
+|   ├── build the project                    (simple or long_running, model: lite, fatal: true)
 |   └── establish baseline                   (simple or long_running, model: lite)
 └── looping (repeat_count: N)
     ├── analyze + propose hypothesis         (simple)
     ├── implement + build + test             (simple)
     ├── anti-hack check                      (simple, max_attempts: 1)
-    ├── benchmark                            (simple or long_running, max_attempts: 1, model: lite)
+    ├── benchmark                            (simple or long_running, max_attempts: 1, model: lite, fatal: true)
     └── evaluate + keep/revert + report      (simple, max_attempts: 1)
 ```
 
@@ -21,6 +22,8 @@ Key Considerations:
 - Anti-hack check, benchmark and evaluation subtasks should use `max_attempts: 1` —— failures should propagate to the parent for proper retry.
 - Benchmark subtask should use `model: lite` —— they just execute.
 - Use `long_running` for benchmark if it takes more than a minute (e.g. GPU profiling, large simulation runs).
+- Build/test and benchmark subtask should use `fatal: true` —— they contain prerequisite failures that `fatal_analysis` should handle.
+- Executors that output `❌ not completed` or `❌ FATAL` must append an entry to `error_report.md` before outputting the marker.
 
 ---
 
@@ -165,7 +168,33 @@ Required structure:
 
 `Key Changes` should stay concise; it is a navigable summary, not a duplicate of the full log.
 
-### 2.4 `failure_patterns.md`
+### 2.4 `error_report.md`
+
+Records execution errors encountered during task retries (build failures, benchmark crashes, anti-hack failures, etc.). This file is separate from `failure_patterns.md` which tracks optimization-level revert decisions. Executors **must write an entry when outputting `❌ not completed`** so that subsequent retry or fatal analysis tasks can diagnose with details.
+
+Required structure:
+
+```md
+# Error Report —— <project name>
+
+(none yet)
+```
+
+Required entry format:
+
+```md
+### Error 00N: <short description>
+Task: <subtask id and name>
+Experiment: EXP-xxx (or N/A for baseline tasks)
+Date: <date>
+Error type: build_failure | benchmark_failure | anti_hack_failure | other
+Details: <error output or summary>
+Residual state: <description of any partial state left behind>
+```
+
+---
+
+### 2.5 `failure_patterns.md`
 
 Records proven failure patterns and promising directions to prevent repeated attempts. This file **must be read before proposing new ideas**.
 
@@ -209,7 +238,7 @@ Keep `Root Cause`, `Why it worked`, and `Lesson` short. This file should be a co
 
 #### Subtask 1.1: Build and run tests without modifications
 
-Build and test without modifying the repository.
+Build and test without modifying the repository. If build or tests fail, first retry once to rule out transient issues (e.g. resource busy, file locked); only if the failure persists, append a concise entry to `error_report.md`, then output `❌ FATAL: <reason>`.
 
 #### Subtask 1.2: Run baseline benchmark and initialize state files
 
@@ -219,35 +248,38 @@ Build and test without modifying the repository.
    - `optimization_log.md`
    - `optimization_report.md`
    - `failure_patterns.md`
+   - `error_report.md`
 
 ### Task 2: Run fixed optimization rounds
 
 #### Subtask 2.1: Analyze and propose one hypothesis
 
-1. read all optimization state files, re-evaluate the current bottleneck, and avoid repeated failed directions.
+1. Read all optimization state files, re-evaluate the current bottleneck, and avoid repeated failed directions.
 2. Append one `pending` row to `optimization_results.tsv`.
-3. Writes `Hypothesis`, `Proposed Changes`, `Expected Outcome`, and `Risk` to `optimization_log.md`.
+3. Write `Hypothesis`, `Proposed Changes`, `Expected Outcome`, and `Risk` to `optimization_log.md`.
 
 #### Subtask 2.2: Implement or reject the proposed experiment
 
-1. implement only the selected pending experiment, or mark it `rejected` if it is stale, unsafe, or no longer meaningful.
+1. Implement only the selected pending experiment, or mark it `rejected` if it is stale, unsafe, or no longer meaningful.
 2. If the idea is not implemented, change status to `rejected` in both `optimization_results.tsv` and `optimization_log.md` and record the reason.
 
 #### Subtask 2.3: Anti-hack verification
 
 1. Skip this step if the idea is marked as `rejected`.
 2. Run anti-hack checks without modifying files.
-3. If anti-hack result is 'FAIL', explicitly output `❌ not completed` so that 2.2 could be retried.
+3. If anti-hack result is 'FAIL', append a concise entry to `error_report.md`, then output `❌ not completed` so that 2.2 could be retried.
 
 #### Subtask 2.4: Run benchmark for the implementation
 
 1. Skip this step if the idea is marked as `rejected`.
-2. Run the project-specific benchmark only for implemented experiments, and immediately output `❌ not completed` on benchmark failure so that 2.2 could be retried.
+2. Run the project-specific benchmark only for implemented experiments. On benchmark failure:
+   - If caused by implementation errors: append a concise entry to `error_report.md`, then output `❌ not completed` so that 2.2 could be retried.
+   - If caused by external/environment issues: first retry once to rule out transient issues; only if the failure persists, append a concise entry to `error_report.md`, then output `❌ FATAL: <reason>`.
 3. Write measured metric values into the selected `optimization_results.tsv` row, and `Profiling Results` section in `optimization_log.md`.
 
 #### Subtask 2.5: Evaluate result, keep or revert, and update optimization state
 
-1. Read the benchmark results already written to `optimization_results.tsv`. if required benchmark evidence is missing or incomplete for an implemented experiment, output `❌ not completed` so that 2.4 could be retried.
+1. Read the benchmark results already written to `optimization_results.tsv`. If required benchmark evidence is missing or incomplete for an implemented experiment, append a concise entry to `error_report.md`, then output `❌ not completed` so that 2.4 could be retried.
 2. Compare against the previous best kept result, use the project-specific metric definitions, metric priorities, and hard failure conditions, and choose `kept` or `reverted`. `rejected` can only be chosen by implementation task.
 3. Update `Decision` and `Status` in `optimization_log.md`.
 4. Update `optimization_report.md` and failure/promising-pattern notes in `failure_patterns.md`.
@@ -312,6 +344,7 @@ description: |
   - <path/to/optimization_log.md> —— detailed experiment log (Read recent entries first; read older entries on demand)
   - <path/to/optimization_report.md> —— rolling summary and final report (Must Read)
   - <path/to/failure_patterns.md> —— proven failures and promising directions (Must Read)
+  - <path/to/error_report.md> —— execution error records; executors write on failure, only failure/fatal analysis reads (P1)
 
   ## Environments
   <environments>
@@ -349,6 +382,26 @@ description: |
   - <other project-specific rules>
 
 tasks:
+  # ── Fatal Analysis ─────────────────────────────────────
+  - id: fatal_analysis
+    name: "Diagnose and resolve fatal prerequisite failures"
+    type: simple
+    max_attempts: 2
+    completion_criteria: |
+      1. The root cause of the fatal failure claimed by previous failed task is identified.
+      2. If fixable within user-defined allowed scope, the correct fix is applied and verified. 
+      3. If not fixable within allowed scope, AutoAgent is stopped with a clear explanation.
+    system_prompt_prefix: |
+      You are a diagnostic engineer. You may inspect any file and fix failures claimed by previous failed task within the user-defined allowed scope.
+    initial_hint: |
+      Read error_report.md for the fatal error details.
+
+      Allowed fixes:
+        <project-specific allowed fixes>
+
+      Not allowed:
+        <project-specific restrictions>
+
   # ── Task 1: Establish baseline ─────────────────────────
   - id: 1
     name: "Build, test, benchmark, and initialize optimization state"
@@ -362,21 +415,27 @@ tasks:
       5. optimization_log.md exists with Project Overview, Environments, Baseline, and Experiment Index sections, including Next experiment id: EXP-001.
       6. optimization_report.md exists with Project Overview, Current Best vs Baseline, Experiment Summary, Cumulative Improvement, and Key Changes sections; the latest BASELINE-00N row is the current best before optimization experiments.
       7. failure_patterns.md exists with Proven Failure Patterns and Promising Directions sections, both initially empty unless history already exists.
-      8. No source files, tests, configs, or benchmark scripts are modified.
+      8. error_report.md exists with a header, initially empty unless history already exists.
+      9. No source files, tests, configs, or benchmark scripts are modified.
     subtasks:
       - id: 1.1
         name: "Build and run tests without modifications"
         type: simple
         max_attempts: 1
         model: lite
+        fatal: true
         completion_criteria: |
           1. <build command> exits 0.
           2. <test command> exits 0.
           3. git diff --name-only shows no changes.
         system_prompt_prefix: |
-          You are a build engineer. Do NOT modify source code, tests, configs, benchmark scripts, generated data, or documentation.
+          You are a build engineer. Do NOT modify source code, tests, configs, benchmark scripts, generated data, or documentation except for appending to error_report.md on failure.
         initial_hint: |
           <hint on running build and test commands>
+
+          If build or test fails, first retry the command once to rule out transient issues (e.g. resource busy, file locked, network flake). 
+          Only if the failure persists after retry, append an entry to error_report.md with the failure details, then output `❌ FATAL: <build/test failure reason>`
+          so that a dedicated analysis task can handle it.
 
       - id: 1.2
         name: "Run baseline benchmark and initialize state files"
@@ -389,7 +448,8 @@ tasks:
           3. optimization_log.md contains Project Overview, Environments, Baseline, and Experiment Index sections with Next experiment id: EXP-001.
           4. optimization_report.md contains Project Overview, Current Best vs Baseline, Experiment Summary with a latest BASELINE-00N row, Cumulative Improvement with that baseline as the last row, and Key Changes.
           5. failure_patterns.md contains Proven Failure Patterns and Promising Directions sections, both initially empty unless history already exists.
-          6. Only optimization docs and allowed benchmark artifacts may change. No source files, tests, configs, or benchmark scripts are modified.
+          6. error_report.md contains a header and initially empty content unless history already exists.
+          7. Only optimization docs and allowed benchmark artifacts may change. No source files, tests, configs, or benchmark scripts are modified.
         system_prompt_prefix: |
           You are a benchmark runner and documenter. Do NOT modify source code, tests, configs, benchmark scripts, or generated data.
         initial_hint: |
@@ -462,6 +522,11 @@ tasks:
           (none yet)
 
           ## Promising Directions
+
+          (none yet)
+
+          6. Create or update error_report.md exactly in this Markdown format:
+          # Error Report —— <project name>
 
           (none yet)
 
@@ -564,7 +629,7 @@ tasks:
 
           If the idea is still valid:
           
-          1. inspect git status first: if a previous commit exists from a failed retry, use git reset --soft and amend fix on residual state.
+          1. Inspect git status first: if a previous commit exists from a failed retry, use git commit --amend to amend fix on residual state. Ensure that only one code commit is present for each experiment.
           
           2. Implement only the selected idea. 
 
@@ -580,7 +645,7 @@ tasks:
         type: simple
         max_attempts: 1
         system_prompt_prefix: |
-          You are an anti-hack verifier. Your sole job is to detect constraint violations. Do NOT modify source code, tests, configs, benchmark scripts, generated data, or documentation.
+          You are an anti-hack verifier. Your sole job is to detect constraint violations. Do NOT modify source code, tests, configs, benchmark scripts, generated data, or documentation except for appending to error_report.md on failure.
         completion_criteria: |
           1. If the selected idea was marked as 'rejected', skip this step.
           2. If verification result is 'FAIL', output `❌ not completed: Anti-hack verification failed. Implementation task should be retried` so that the implementation task can be retried.
@@ -591,7 +656,7 @@ tasks:
 
           1. Check if the implementation code matches the experiment idea;
           2. <write all other anti-hack rules here based on global description and task-specific informations>
-          3. If verification result is 'FAIL', output `❌ not completed: Anti-hack verification failed. Implementation task should be retried`
+          3. If verification result is 'FAIL', append an entry to error_report.md with the failure details, then output `❌ not completed: Anti-hack verification failed. Implementation task should be retried`
           so that the implementation task can be retried. Do not fix code by yourself.
 
       - id: 2.4
@@ -599,12 +664,14 @@ tasks:
         type: long_running
         max_attempts: 1
         model: lite
+        fatal: true
         system_prompt_prefix: |
-          You are a benchmark runner. Do NOT modify source code, tests, configs, benchmark scripts, or documentation except for writing raw benchmark output produced by the benchmark command.
+          You are a benchmark runner. Do NOT modify source code, tests, configs, benchmark scripts, or documentation except for writing raw benchmark output produced by the benchmark command and appending to error_report.md on failure.
         completion_criteria: |
           1. If the selected idea was marked as 'rejected', skip this step.
           2. If code was implemented, <benchmark command> exits 0; optimization_results.tsv has the selected EXP-xxx row updated in place with the measured metric values while keeping status=pending and commit_hash=pending; the 'Profiling Results' section in optimization_log.md records the observed metric values, metric notes, and benchmark reliability notes.
-          3. If the benchmark fails, immediately output `❌ not completed: Benchmark failed. Implementation task should be retried` so that the implementation task can be retried.
+          3. If the benchmark fails due to implementation errors, output `❌ not completed: Benchmark failed. Implementation task should be retried` so that the implementation task can be retried.
+          4. If the benchmark fails due to external/environment issues (after retrying once for transient issues), output `❌ FATAL: <reason>` so that a dedicated analysis task can handle it.
         initial_hint: |
           If the selected idea was marked as 'rejected', skip this benchmark step and directly output ✅ completed to proceed to the next task.
 
@@ -612,7 +679,15 @@ tasks:
           <benchmark command>
 
           If the benchmark command fails, its output is incomplete, or the expected raw benchmark output is missing, 
-          immediately output `❌ not completed: Benchmark failed. Implementation task should be retried` so that the implementation task can be retried.
+          determine the failure cause:
+
+          - If caused by implementation errors (compilation errors, assertion failures, incorrect output format, logic bugs in the changed code):
+            Append an entry to error_report.md with the failure details, then output `❌ not completed: Benchmark failed. Implementation task should be retried` so that the implementation task can be retried.
+
+          - If caused by external/environment issues (hardware unavailable, out of memory, network timeout, missing external dependencies, corrupted benchmark data, permission denied on external resources):
+            First retry the benchmark command once to rule out transient issues (e.g. resource busy, file locked, network flake). 
+            Only if the failure persists after retry, append an entry to error_report.md with the failure details, then output `❌ FATAL: <reason>` so that fatal_analysis can handle it. 
+
           Do not update optimization_results.tsv or optimization_log.md on benchmark failure.
 
           After a successful benchmark, update the selected EXP-xxx row in optimization_results.tsv in place: 
@@ -650,8 +725,8 @@ tasks:
           1. Required benchmark evidence before decision (Skip if the experiment was marked as 'rejected')
             - optimization_results.tsv contains the required metric values for EXP-xxx.
             - The selected experiment's Profiling Results contains observed metrics, metric notes, and benchmark reliability notes.
-            - If required benchmark evidence is missing, incomplete, or internally inconsistent, output `❌ not completed: benchmark incomplete` 
-              so that the benchmark task can be retried.
+            - If required benchmark evidence is missing, incomplete, or internally inconsistent, append an entry to error_report.md with the details, 
+              then output `❌ not completed: benchmark incomplete` so that the benchmark task can be retried.
 
           2. Decision rules (Skip if the experiment was marked as 'rejected')
             - Metrics: <project-specific metric names, units, directionality, and where each value is recorded in optimization_results.tsv>
