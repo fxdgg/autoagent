@@ -275,6 +275,11 @@ STATUS_MARKER_INSTRUCTION = (
 # Helper functions
 # ---------------------------------------------------------------------------
 
+def get_prompt_task_id(task: dict) -> str:
+    """Return the task ID that should be visible inside AI-facing prompts."""
+    return str(task.get('_display_id', task['id']))
+
+
 def indent_block(text: str, spaces: int = 4) -> str:
     """Indent every non-empty line of *text* by *spaces* spaces.
 

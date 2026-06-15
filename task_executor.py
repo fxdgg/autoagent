@@ -17,7 +17,7 @@ from typing import Optional, Tuple
 
 import yaml
 
-from codebuddy_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
+from codebuddy_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError, RateLimitError
 from state_manager import StateManager
 from prompts.shared import build_system_prompt_coding_agent, prepend_system_prompt_prefix
 from prompts.simple_task import build_simple_task_prompt
@@ -577,6 +577,26 @@ class SimpleTaskExecutor:
                         "summary": summary,
                     })
                     
+            except RateLimitError as e:
+                # Rate-limit (429) and server errors (503) are transient
+                # external issues — do NOT consume an attempt.
+                logger.error(f"AI call rate-limited for task {task_id}: {e}")
+                print(f"   ❌ AI call error: {e}")
+                print(f"   ⚠️ Rate-limit/server error — attempt NOT consumed")
+                should_reset = True  # Reset session (the call never started properly)
+                # Roll back the attempt counter so this doesn't count
+                attempts -= 1
+                # Append error as response (prompt was already logged above)
+                if conv_logger:
+                    conv_logger.log_response(
+                        task_id=task_id,
+                        response=f"AI Call Error (rate-limited, attempt not consumed): {e}",
+                        parent_task_id=parent_task_id,
+                        attempt=_log_round,
+                    )
+                # Do NOT record in task history as a real attempt failure
+                # (the backoff in AIClient will handle the wait)
+
             except AICallError as e:
                 logger.error(f"AI call failed for task {task_id}: {e}")
                 print(f"   ❌ AI call error: {e}")
@@ -2660,6 +2680,18 @@ class SubtaskExecutor:
                     "result": "not_completed",
                     "summary": summary,
                 })
+
+            except RateLimitError as e:
+                # Rate-limit (429) and server errors (503) are transient
+                # external issues — do NOT consume an attempt.
+                logger.error(f"AI call rate-limited for long-running task {subtask_id}: {e}")
+                print(f"      ❌ AI call error: {e}")
+                print(f"      ⚠️ Rate-limit/server error — attempt NOT consumed")
+                should_reset = True
+                # Compensate for the consumed iteration in the for-loop
+                max_attempts += 1
+                # Do NOT record in task history
+                # (the backoff in AIClient will handle the wait)
 
             except AICallError as e:
                 logger.error(f"AI call failed for long-running task {subtask_id}: {e}")

@@ -7,6 +7,7 @@ Corresponds to ``SubtaskExecutor._build_long_running_prompt()`` and
 
 from prompts.shared import (
     indent_block,
+    get_prompt_task_id,
     build_workflow_section,
     build_history_section,
     build_previous_subtask_section,
@@ -39,7 +40,7 @@ def build_long_running_prompt(
     I8 = 8
 
     # ── Section 1: Task ──────────────────────────────────────────────
-    inner = []
+    inner = [f"    Current task ID: {get_prompt_task_id(subtask)}"]
     inner.append(f"    <task_name>\n{indent_block(subtask['name'], I8)}\n    </task_name>")
     inner.append(f"    <completion_criteria>\n{indent_block(subtask['completion_criteria'], I8)}\n    </completion_criteria>")
     if subtask.get('initial_hint'):

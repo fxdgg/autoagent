@@ -42,6 +42,7 @@ Output log:  <log-dir>/lr_tasks/lr_<task_id>_output.log
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -50,6 +51,105 @@ import time
 # Can be overridden via --fast-fail-timeout CLI argument,
 # which is configured in config.yaml as fast_fail_timeout.
 DEFAULT_FAST_FAIL_TIMEOUT = 10
+
+
+# ---------------------------------------------------------------------------
+# Defensive redirection detection
+# ---------------------------------------------------------------------------
+
+_REDIRECT_PATTERNS = [
+    # &>> file, &> file  (bash: redirect both stdout+stderr)
+    r'(?P<both1_op>&>>?)\s*(?P<both1_path>\S+)',
+    # 2>&1 > file  or  2>&1 >> file
+    r'(?P<both2_op>2>&1\s*>>?)\s*(?P<both2_path>\S+)',
+    # 2>&1  (fd merge, no file path — just discard the operator)
+    r'(?P<merge_op>2>&1)',
+    # 2>> file, 2> file
+    r'(?P<err_op>2>>?)\s*(?P<err_path>\S+)',
+    # >> file, > file  (but not 2> or &>)
+    r'(?<![12&])(?P<out_op>>>?)\s*(?P<out_path>\S+)',
+    # | tee [-a] file
+    r'(?P<tee_op>\|\s*tee)(?:\s+-a)?\s+(?P<tee_path>\S+)',
+]
+_REDIRECT_RE = re.compile(
+    r'(?:' + '|'.join(_REDIRECT_PATTERNS) + r')\s*$',
+    re.IGNORECASE,
+)
+
+
+class _RedirectInfo:
+    """Result of :func:`_strip_redirections`.
+
+    Attributes:
+        command:     The command string with trailing redirection removed.
+        stdout_path: Extracted stdout redirect target, or ``None``.
+        stderr_path: Extracted stderr redirect target, or ``None``.
+        stripped:    ``True`` if any redirection was actually removed.
+    """
+    __slots__ = ('command', 'stdout_path', 'stderr_path', 'stripped')
+
+    def __init__(self, command: str, stdout_path: 'str | None',
+                 stderr_path: 'str | None', stripped: bool):
+        self.command = command
+        self.stdout_path = stdout_path
+        self.stderr_path = stderr_path
+        self.stripped = stripped
+
+
+def _strip_redirections(command_str: str) -> _RedirectInfo:
+    """Detect and strip trailing output redirection from *command_str*.
+
+    This is a best-effort, **iterative** scan that repeatedly removes the
+    last trailing redirection operator until none remain.  Complex
+    mid-command piping (e.g. ``cmd1 > a.log | cmd2``) is intentionally
+    NOT touched — only redirections anchored at the end of the command
+    are handled.
+
+    Returns a :class:`_RedirectInfo` with the cleaned command and the
+    extracted file paths (if any).
+    """
+    stdout_path: 'str | None' = None
+    stderr_path: 'str | None' = None
+    ever_stripped = False
+    cleaned = command_str
+
+    # Iteratively strip trailing redirections from right to left.
+    while True:
+        m = _REDIRECT_RE.search(cleaned)
+        if not m:
+            break
+        ever_stripped = True
+        cleaned = cleaned[:m.start()].rstrip()
+
+        # Classify which stream(s) were redirected.
+        if m.group('both1_op') is not None:
+            target = m.group('both1_path')
+            if stdout_path is None:
+                stdout_path = target
+            if stderr_path is None:
+                stderr_path = target
+        elif m.group('both2_op') is not None:
+            target = m.group('both2_path')
+            if stdout_path is None:
+                stdout_path = target
+            if stderr_path is None:
+                stderr_path = target
+        elif m.group('merge_op') is not None:
+            pass  # fd merge, no file path to extract
+        elif m.group('err_op') is not None:
+            if stderr_path is None:
+                stderr_path = m.group('err_path')
+        elif m.group('tee_op') is not None:
+            if stdout_path is None:
+                stdout_path = m.group('tee_path')
+        else:
+            # out_op: > or >>
+            if stdout_path is None:
+                stdout_path = m.group('out_path')
+
+    if not ever_stripped:
+        return _RedirectInfo(command_str, None, None, stripped=False)
+    return _RedirectInfo(cleaned, stdout_path, stderr_path, stripped=True)
 
 
 def _ensure_utf8_stdio():
@@ -114,6 +214,16 @@ def parse_args():
     )
     parser.add_argument(
         "--cmd",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--stdout",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--stderr",
         default=None,
         help=argparse.SUPPRESS,
     )
@@ -243,6 +353,17 @@ def main():
             except (json.JSONDecodeError, OSError):
                 pass  # Corrupted or unreadable — proceed normally
 
+        # Clear the default output log for every accepted launch.
+        try:
+            with open(output_log, "wb"):
+                pass
+        except OSError as e:
+            print(
+                f"[ERROR] Failed to clear output log for task-id '{task_id}': {e}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
         # Write the "starting" signal (PID unknown yet — filled in after Popen).
         signal_data = {
             "task_id": task_id,
@@ -266,10 +387,54 @@ def main():
         except OSError:
             pass
 
-    # Open output log file in binary mode so that the subprocess's raw
-    # bytes (which may be GBK on Chinese Windows) are preserved as-is.
-    # We will decode properly when reading the file back.
-    log_fh = open(output_log, "wb")
+    # ── Defensive check: strip redirection and auto-fill --stdout/--stderr ──
+    redir = _strip_redirections(command_str)
+    if redir.stripped:
+        print(
+            f"[autoagent-exec] Detected output redirection in command — "
+            f"stripping it automatically."
+        )
+        print(f"   Original command: {command_str}")
+        print(f"   Cleaned command:  {redir.command}")
+        if redir.stdout_path:
+            print(f"   Extracted stdout target: {redir.stdout_path}")
+        if redir.stderr_path:
+            print(f"   Extracted stderr target: {redir.stderr_path}")
+        sys.stdout.flush()
+
+        # Use the cleaned command from now on.
+        command_str = redir.command
+
+        # Auto-fill --stdout / --stderr only when the user (AI) did not
+        # already specify them via CLI flags.
+        if redir.stdout_path and not args.stdout:
+            args.stdout = redir.stdout_path
+        if redir.stderr_path and not args.stderr:
+            args.stderr = redir.stderr_path
+
+    # ── Resolve stdout / stderr targets ──
+    stdout_path = args.stdout  # may be None
+    stderr_path = args.stderr  # may be None
+
+    if stdout_path:
+        _dir = os.path.dirname(stdout_path)
+        if _dir:
+            os.makedirs(_dir, exist_ok=True)
+        stdout_fh = open(stdout_path, "wb")
+    else:
+        stdout_fh = open(output_log, "wb")
+
+    if stderr_path:
+        _dir = os.path.dirname(stderr_path)
+        if _dir:
+            os.makedirs(_dir, exist_ok=True)
+        stderr_fh = open(stderr_path, "wb")
+    else:
+        # No explicit stderr target → merge into stdout's file
+        stderr_fh = subprocess.STDOUT
+
+    # Compute the effective output path for display/signal purposes
+    effective_output = stdout_path or output_log
 
     # Start the command in a new process group / session so that it
     # survives even if autoagent-exec is killed by the AI's Bash tool
@@ -299,8 +464,8 @@ def main():
         proc = subprocess.Popen(
             command_str,
             shell=True,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
+            stdout=stdout_fh,
+            stderr=stderr_fh,
             stdin=subprocess.DEVNULL,
             cwd=os.getcwd(),
             **kwargs,
@@ -308,7 +473,9 @@ def main():
     except Exception as e:
         print(f"[ERROR] Failed to start command: {e}", file=sys.stderr)
         print(f"   Command: {command_str}", file=sys.stderr)
-        log_fh.close()
+        stdout_fh.close()
+        if stderr_fh not in (subprocess.STDOUT, stdout_fh):
+            stderr_fh.close()
         # Clean up the signal file so a retry is not blocked.
         signal_data = {
             "task_id": task_id,
@@ -367,12 +534,14 @@ def main():
 
     if exit_code is not None:
         # Process exited within the timeout
-        log_fh.close()
+        stdout_fh.close()
+        if stderr_fh not in (subprocess.STDOUT, stdout_fh):
+            stderr_fh.close()
 
         if exit_code == 0:
             # Command finished successfully (it was fast, not really long-running)
             print(f"\n[OK] Command finished quickly (exit code 0).")
-            _print_output_smart(output_log)
+            _print_output_smart(effective_output)
 
             signal_data = {
                 "task_id": task_id,
@@ -390,7 +559,7 @@ def main():
         else:
             # Command failed fast — print error for AI to see and retry
             print(f"\n[FAST-FAIL] Command failed within {fast_fail_timeout}s (exit code {exit_code}).")
-            _print_output_smart(output_log)
+            _print_output_smart(effective_output)
 
             # Write error signal so the concurrency guard allows retry
             signal_data = {
@@ -408,9 +577,11 @@ def main():
             sys.exit(exit_code)
 
     # --- Command is still running after fast_fail_timeout seconds ---
-    # Close our file handle so the subprocess owns the only handle to
-    # the log file.  On Windows this avoids sharing-violation issues.
-    log_fh.close()
+    # Close our file handles so the subprocess owns the only handles to
+    # the log files.  On Windows this avoids sharing-violation issues.
+    stdout_fh.close()
+    if stderr_fh not in (subprocess.STDOUT, stdout_fh):
+        stderr_fh.close()
 
     print(f"\n[RUNNING] Command is still running after {fast_fail_timeout}s -- treating as long-running task.")
 
