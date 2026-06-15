@@ -220,18 +220,39 @@ def parse_args():
     parser.add_argument(
         "--stdout",
         default=None,
-        help=argparse.SUPPRESS,
+        help=(
+            "Copy captured stdout to this file path. "
+            "Use this instead of adding > redirection to the command."
+        ),
     )
     parser.add_argument(
         "--stderr",
         default=None,
-        help=argparse.SUPPRESS,
+        help=(
+            "Copy captured stderr to this file path. "
+            "Use this instead of adding 2> redirection to the command."
+        ),
+    )
+    # Positional argument: the command string to execute.
+    # When invoked via the wrapper script (without --cmd), the command
+    # arrives as one or more positional arguments.
+    parser.add_argument(
+        "command",
+        nargs="*",
+        help='The command to run (wrap in double quotes).',
     )
     args = parser.parse_args()
 
-    if not args.cmd:
-        parser.error("No command specified. Use --cmd '<command>'.")
-    args.command_str = args.cmd
+    # Resolve command: --cmd takes precedence (backward compat),
+    # otherwise join positional arguments.
+    if args.cmd:
+        args.command_str = args.cmd
+    elif args.command:
+        args.command_str = " ".join(args.command)
+    else:
+        parser.error(
+            "No command specified. Usage: autoagent-exec \"<command>\""
+        )
 
     return args
 
@@ -433,8 +454,9 @@ def main():
         # No explicit stderr target → merge into stdout's file
         stderr_fh = subprocess.STDOUT
 
-    # Compute the effective output path for display/signal purposes
-    effective_output = stdout_path or output_log
+    # Compute the effective output paths for display/signal purposes
+    effective_stdout = stdout_path or output_log
+    effective_stderr = stderr_path or effective_stdout  # merged when not split
 
     # Start the command in a new process group / session so that it
     # survives even if autoagent-exec is killed by the AI's Bash tool
@@ -482,6 +504,8 @@ def main():
             "command": command_str,
             "pid": None,
             "output_log": output_log,
+            "stdout_log": effective_stdout,
+            "stderr_log": effective_stderr,
             "status": "error",
             "description": f"Failed to start command: {e}",
             "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -501,6 +525,8 @@ def main():
         "command": command_str,
         "pid": pid,
         "output_log": output_log,
+        "stdout_log": effective_stdout,
+        "stderr_log": effective_stderr,
         "status": "starting",
         "description": (
             f"Process started (PID {pid}). "
@@ -541,13 +567,15 @@ def main():
         if exit_code == 0:
             # Command finished successfully (it was fast, not really long-running)
             print(f"\n[OK] Command finished quickly (exit code 0).")
-            _print_output_smart(effective_output)
+            _print_output_smart(effective_stdout)
 
             signal_data = {
                 "task_id": task_id,
                 "command": command_str,
                 "pid": pid,
                 "output_log": output_log,
+                "stdout_log": effective_stdout,
+                "stderr_log": effective_stderr,
                 "status": "finished",
                 "description": "Command completed successfully.",
                 "exit_code": 0,
@@ -559,7 +587,7 @@ def main():
         else:
             # Command failed fast — print error for AI to see and retry
             print(f"\n[FAST-FAIL] Command failed within {fast_fail_timeout}s (exit code {exit_code}).")
-            _print_output_smart(effective_output)
+            _print_output_smart(effective_stdout)
 
             # Write error signal so the concurrency guard allows retry
             signal_data = {
@@ -567,6 +595,8 @@ def main():
                 "command": command_str,
                 "pid": pid,
                 "output_log": output_log,
+                "stdout_log": effective_stdout,
+                "stderr_log": effective_stderr,
                 "status": "error",
                 "description": f"Command failed quickly (exit code {exit_code}).",
                 "exit_code": exit_code,
@@ -591,6 +621,8 @@ def main():
         "command": command_str,
         "pid": pid,
         "output_log": output_log,
+        "stdout_log": effective_stdout,
+        "stderr_log": effective_stderr,
         "status": "running",
         "description": f"Command still running after {fast_fail_timeout}s. Monitoring in background.",
         "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),

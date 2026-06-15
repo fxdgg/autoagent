@@ -251,22 +251,23 @@ def _write_autoagent_exec_script(
         script_name = "autoagent-exec.bat"
         # %* forwards all arguments.  The AI is instructed to wrap the
         # entire command in quotes so that shell operators (&&, |, ;)
-        # are preserved as a single argument.
+        # are preserved as a single argument.  Optional --stdout/--stderr
+        # flags are placed before the command and parsed by argparse.
         content = (
             "@echo off\r\n"
             f'python "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
-            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} --cmd %*\r\n'
+            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} %*\r\n'
         )
     else:
         script_name = "autoagent-exec.sh"
-        # "$*" joins all positional parameters into a single string
-        # (separated by the first character of IFS, which is space by
-        # default).  This preserves the command as a single shell string
-        # when the AI wraps it in quotes.
+        # "$@" preserves each positional parameter as a separate quoted
+        # argument, so optional flags like --stdout/--stderr are forwarded
+        # correctly to argparse.  (Using "$*" would merge all parameters
+        # into a single string, breaking flag parsing.)
         content = (
             "#!/usr/bin/env bash\n"
             f'python3 "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
-            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} --cmd "$*"\n'
+            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} "$@"\n'
         )
 
     script_path = os.path.join(scripts_dir, script_name)
@@ -446,9 +447,20 @@ class SimpleTaskExecutor:
             should_reset = True
             try:
                 # Write prompt to log BEFORE calling AI (crash safety)
+                _log_session_dir = self.session_dir or ""
+                if not _log_session_dir:
+                    subtask_exec = getattr(self, '_subtask_executor', None)
+                    if subtask_exec and subtask_exec.session_dir:
+                        _log_session_dir = subtask_exec.session_dir
+                default_output_log = (
+                    os.path.join(_log_session_dir, "lr_tasks", f"lr_{task_id}_output.log")
+                    if exec_script_path and _log_session_dir
+                    else ""
+                )
                 system_prompt = build_system_prompt_coding_agent(
                     exec_script_path,
                     supports_system_prompt=client.provider.supports_system_prompt,
+                    output_log=default_output_log,
                 )
                 # Prepend system_prompt_prefix to user prompt — but skip for
                 # lightweight continuation prompts (the session already has
@@ -2473,9 +2485,13 @@ class SubtaskExecutor:
             
             try:
                 # Write prompt to log BEFORE calling AI (crash safety)
+                default_output_log = os.path.join(
+                    log_session_dir, "lr_tasks", f"lr_{subtask_id}_output.log"
+                )
                 system_prompt = build_system_prompt_coding_agent(
                     exec_script_path,
                     supports_system_prompt=client.provider.supports_system_prompt,
+                    output_log=default_output_log,
                 )
                 # Prepend system_prompt_prefix — skip for continuation prompts
                 if _is_continuation:
@@ -2946,6 +2962,8 @@ class SubtaskExecutor:
             max_initial_wait=_load_fast_fail_timeout() * 2,
         )
         # Re-read signal file for possibly updated command
+        _stdout_log = ""
+        _stderr_log = ""
         if os.path.exists(signal_file):
             try:
                 with open(signal_file, 'r', encoding='utf-8') as _f:
@@ -2953,11 +2971,15 @@ class SubtaskExecutor:
                 _cmd = _sig.get('command', '')
                 if _cmd:
                     command_info = f"\nCommand: {_cmd}"
+                _stdout_log = _sig.get('stdout_log', '')
+                _stderr_log = _sig.get('stderr_log', '')
             except Exception:
                 pass
         reanalyze_prompt = _build_lr_analysis_prompt(
             output_log=output_log,
             command_info=command_info,
+            stdout_log=_stdout_log,
+            stderr_log=_stderr_log,
         )
         if conv_logger:
             conv_logger.log_prompt(
@@ -3001,6 +3023,8 @@ class SubtaskExecutor:
         # Read exit code and command from signal file if available
         exit_code_info = ""
         command_info = ""
+        stdout_log = ""
+        stderr_log = ""
         if signal_file and os.path.exists(signal_file):
             try:
                 with open(signal_file, 'r', encoding='utf-8') as f:
@@ -3011,12 +3035,16 @@ class SubtaskExecutor:
                 command = signal_data.get('command')
                 if command:
                     command_info = f"\nCommand: {command}"
+                stdout_log = signal_data.get('stdout_log', '')
+                stderr_log = signal_data.get('stderr_log', '')
             except Exception:
                 pass
         
         prompt = _build_lr_analysis_prompt(
             output_log=output_log,
             command_info=command_info,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
         )
         try:
             # No system_prompt or system_prompt_prefix needed here —
