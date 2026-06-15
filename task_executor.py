@@ -2382,7 +2382,9 @@ class SubtaskExecutor:
                 f"with no signal file — will continue in same session"
             )
 
-        for attempt in range(1, max_attempts + 1):
+        attempt = 0
+        while attempt < max_attempts:
+            attempt += 1
             # Reset session before each retry to prevent context accumulation
             # (same rationale as SimpleTaskExecutor — see comment there).
             # Skip reset after StreamTimeoutError (session still alive).
@@ -2688,8 +2690,8 @@ class SubtaskExecutor:
                 print(f"      ❌ AI call error: {e}")
                 print(f"      ⚠️ Rate-limit/server error — attempt NOT consumed")
                 should_reset = True
-                # Compensate for the consumed iteration in the for-loop
-                max_attempts += 1
+                # Roll back the attempt counter so this doesn't count
+                attempt -= 1
                 # Do NOT record in task history
                 # (the backoff in AIClient will handle the wait)
 
@@ -3121,6 +3123,11 @@ class SubtaskExecutor:
                 error_type=None if is_completed else "validation_failed",
                 response_text=result,
             )
+
+        except RateLimitError:
+            # Let rate-limit errors propagate to the outer retry loop
+            # so the attempt counter is properly rolled back.
+            raise
             
         except AICallError as e:
             logger.error(f"Failed to analyze long-running result: {e}")
