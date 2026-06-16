@@ -1,3 +1,9 @@
+> **此分支为 v1.0 版本，v2.0 版本请切换到 `ai-schedule` 分支：**
+>
+> ```bash
+> git checkout ai-schedule
+> ```
+
 <div align="center">
 
 # AutoAgent

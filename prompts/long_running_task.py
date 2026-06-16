@@ -7,6 +7,7 @@ Corresponds to ``SubtaskExecutor._build_long_running_prompt()`` and
 
 from prompts.shared import (
     indent_block,
+    get_prompt_task_id,
     build_workflow_section,
     build_history_section,
     build_previous_subtask_section,
@@ -39,7 +40,7 @@ def build_long_running_prompt(
     I8 = 8
 
     # ── Section 1: Task ──────────────────────────────────────────────
-    inner = []
+    inner = [f"    Current task ID: {get_prompt_task_id(subtask)}"]
     inner.append(f"    <task_name>\n{indent_block(subtask['name'], I8)}\n    </task_name>")
     inner.append(f"    <completion_criteria>\n{indent_block(subtask['completion_criteria'], I8)}\n    </completion_criteria>")
     if subtask.get('initial_hint'):
@@ -114,6 +115,8 @@ def build_long_running_prompt(
 def build_long_running_analysis_prompt(
     output_log: str,
     command_info: str = "",
+    stdout_log: str = "",
+    stderr_log: str = "",
 ) -> str:
     """Build the prompt for AI to analyse a completed long-running task.
 
@@ -121,15 +124,31 @@ def build_long_running_analysis_prompt(
     is preserved — it already knows the task name, criteria, workflow, etc.
 
     Args:
-        output_log: Path to the output log file (raw, will be normalised).
+        output_log: Path to the default output log file (fallback).
         command_info: Optional formatted string like ``"\\nCommand: ..."``
+        stdout_log: Path where stdout was captured (from signal file).
+            When empty, falls back to *output_log*.
+        stderr_log: Path where stderr was captured (from signal file).
+            When empty or same as *stdout_log*, not shown separately.
     """
-    output_log_display = output_log.replace("\\", "/")
-
     # command_info typically looks like "\nCommand: ..." — strip leading newline
     command_line = command_info.strip()
+
+    # Determine which output paths to show
+    effective_stdout = (stdout_log or output_log).replace("\\", "/")
+    effective_stderr = (stderr_log or "").replace("\\", "/")
+
+    if effective_stderr and effective_stderr != effective_stdout:
+        # stdout and stderr were written to separate files
+        output_display = (
+            f"    stdout: {effective_stdout}\n"
+            f"    stderr: {effective_stderr}"
+        )
+    else:
+        # Merged output (default)
+        output_display = f"    {effective_stdout}"
 
     return f"""You previously launched this task using autoagent-exec:
     {command_line}
 The task has now finished. Output has been saved to:
-    {output_log_display}"""
+{output_display}"""

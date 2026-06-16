@@ -163,9 +163,17 @@ ROLE_CODING_AGENT = (
     "commands, and analyze outputs. Complete the following task."
 )
 
+
+def get_effective_stdout_log(output_log: str, stdout_log: str = "") -> str:
+    """Return the stdout path shown to agents for autoagent-exec output."""
+    return (stdout_log or output_log).replace("\\", "/")
+
+
 def build_system_prompt_coding_agent(
     exec_script_path: str = "",
     supports_system_prompt: bool = True,
+    output_log: str = "",
+    stdout_log: str = "",
 ) -> str:
     """Build the system prompt for coding-agent tasks.
 
@@ -194,6 +202,9 @@ def build_system_prompt_coding_agent(
             dedicated ``--append-system-prompt`` CLI parameter.  When
             *False*, the returned text is appended (not prepended) to
             the user prompt, with section headings for clarity.
+        output_log: Path to the default autoagent-exec output log.
+        stdout_log: Path where stdout is captured when known.  When empty,
+            falls back to *output_log*.
     """
     parts = []
 
@@ -209,21 +220,37 @@ def build_system_prompt_coding_agent(
     ]
 
     if exec_script_path:
+        effective_stdout = get_effective_stdout_log(output_log, stdout_log)
+        _output_hint = (
+            f' in redirected files or "{effective_stdout}"'
+            if effective_stdout
+            else " in redirected files"
+        )
         rules.append(
-            "For any command that may run longer than a few minutes "
-            "(compilation, benchmarking, profiling, training, etc.), \n"
-            "you MUST use autoagent-exec instead of running it directly in Bash:\n"
+            "For any command that may run longer than a few minutes,\n"
+            "you MUST use autoagent-exec instead of running it directly in Bash (which may cause **session timeout**):\n"
             f'  "{exec_script_path}" "<your entire command>"\n'
-            "Always wrap the command in double quotes so that shell operators are passed correctly.\n"
+            "Always wrap the command in double quotes so that shell operators are passed correctly.\n\n"
+            "How does this work:\n"
+            "You are SUBMITTING the command to the background, instead of executing commands using autoagent-exec.\n"
+            "So DO NOT manually wait for the command to finish —— Just output ⏳ LONG_RUNNING_IN_PROGRESS after it shows \"TASK SUBMITTED\".\n\n"
             "autoagent-exec has three possible outcomes:\n"
-            "  - \"TASK SUBMITTED\" → the command is running in the background. "
+            "  - \"TASK SUBMITTED\" → the command is submitted to background. "
             "Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.\n"
             "  - \"[OK]\" → the command finished quickly with exit code 0. "
             "Continue working — treat it as a normal completed command.\n"
             "  - \"[FAST-FAIL]\" → the command failed quickly. "
-            "Read the error output, fix the issue, and retry.\n"
-            "NEVER run long commands directly in Bash — the session may be "
-            "killed due to timeout, wasting time or leaving the project in broken state.\n"
+            "Read the error output, fix the issue, and retry.\n\n"
+            "⚠️ CRITICAL — No Output Redirection:\n"
+            "autoagent-exec automatically captures ALL stdout/stderr to a log file.\n"
+            "If you add output redirection (>, >>, 2>, &>, | tee, etc.), you may NOT see any of the three outcomes above.\n"
+            "If commands in `initial_hint` already includes redirection, strip the redirection and use --stdout / --stderr instead:\n"
+            f'  "{exec_script_path}" --stdout build.log --stderr build_err.log "make"\n\n'
+            "⚠️ If you can't see autoagent-exec's any of the three outcomes:\n"
+            "The output may have been already redirected. DO NOT run autoagent-exec again before checking the process by PID.\n"
+            "Output ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately if it's still running.\n"
+            f"Check the command outputs{_output_hint} and continue working if it has already finished.\n"
+            "DO NOT use `sleep` or any wait command in your session.\n"
         )
 
     rules.append(
@@ -274,6 +301,11 @@ STATUS_MARKER_INSTRUCTION = (
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
+
+def get_prompt_task_id(task: dict) -> str:
+    """Return the task ID that should be visible inside AI-facing prompts."""
+    return str(task.get('_display_id', task['id']))
+
 
 def indent_block(text: str, spaces: int = 4) -> str:
     """Indent every non-empty line of *text* by *spaces* spaces.

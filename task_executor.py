@@ -17,7 +17,7 @@ from typing import Optional, Tuple
 
 import yaml
 
-from codebuddy_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError
+from codebuddy_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError, RateLimitError
 from state_manager import StateManager
 from prompts.shared import build_system_prompt_coding_agent, prepend_system_prompt_prefix
 from prompts.simple_task import build_simple_task_prompt
@@ -251,22 +251,23 @@ def _write_autoagent_exec_script(
         script_name = "autoagent-exec.bat"
         # %* forwards all arguments.  The AI is instructed to wrap the
         # entire command in quotes so that shell operators (&&, |, ;)
-        # are preserved as a single argument.
+        # are preserved as a single argument.  Optional --stdout/--stderr
+        # flags are placed before the command and parsed by argparse.
         content = (
             "@echo off\r\n"
             f'python "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
-            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} --cmd %*\r\n'
+            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} %*\r\n'
         )
     else:
         script_name = "autoagent-exec.sh"
-        # "$*" joins all positional parameters into a single string
-        # (separated by the first character of IFS, which is space by
-        # default).  This preserves the command as a single shell string
-        # when the AI wraps it in quotes.
+        # "$@" preserves each positional parameter as a separate quoted
+        # argument, so optional flags like --stdout/--stderr are forwarded
+        # correctly to argparse.  (Using "$*" would merge all parameters
+        # into a single string, breaking flag parsing.)
         content = (
             "#!/usr/bin/env bash\n"
             f'python3 "{exec_py}" --log-dir "{log_dir}" --task-id {task_id}'
-            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} --cmd "$*"\n'
+            f' --fast-fail-timeout {fast_fail_timeout}{show_console_flag} "$@"\n'
         )
 
     script_path = os.path.join(scripts_dir, script_name)
@@ -446,9 +447,20 @@ class SimpleTaskExecutor:
             should_reset = True
             try:
                 # Write prompt to log BEFORE calling AI (crash safety)
+                _log_session_dir = self.session_dir or ""
+                if not _log_session_dir:
+                    subtask_exec = getattr(self, '_subtask_executor', None)
+                    if subtask_exec and subtask_exec.session_dir:
+                        _log_session_dir = subtask_exec.session_dir
+                default_output_log = (
+                    os.path.join(_log_session_dir, "lr_tasks", f"lr_{task_id}_output.log")
+                    if exec_script_path and _log_session_dir
+                    else ""
+                )
                 system_prompt = build_system_prompt_coding_agent(
                     exec_script_path,
                     supports_system_prompt=client.provider.supports_system_prompt,
+                    output_log=default_output_log,
                 )
                 # Prepend system_prompt_prefix to user prompt — but skip for
                 # lightweight continuation prompts (the session already has
@@ -577,6 +589,26 @@ class SimpleTaskExecutor:
                         "summary": summary,
                     })
                     
+            except RateLimitError as e:
+                # Rate-limit (429) and server errors (503) are transient
+                # external issues — do NOT consume an attempt.
+                logger.error(f"AI call rate-limited for task {task_id}: {e}")
+                print(f"   ❌ AI call error: {e}")
+                print(f"   ⚠️ Rate-limit/server error — attempt NOT consumed")
+                should_reset = True  # Reset session (the call never started properly)
+                # Roll back the attempt counter so this doesn't count
+                attempts -= 1
+                # Append error as response (prompt was already logged above)
+                if conv_logger:
+                    conv_logger.log_response(
+                        task_id=task_id,
+                        response=f"AI Call Error (rate-limited, attempt not consumed): {e}",
+                        parent_task_id=parent_task_id,
+                        attempt=_log_round,
+                    )
+                # Do NOT record in task history as a real attempt failure
+                # (the backoff in AIClient will handle the wait)
+
             except AICallError as e:
                 logger.error(f"AI call failed for task {task_id}: {e}")
                 print(f"   ❌ AI call error: {e}")
@@ -2362,7 +2394,9 @@ class SubtaskExecutor:
                 f"with no signal file — will continue in same session"
             )
 
-        for attempt in range(1, max_attempts + 1):
+        attempt = 0
+        while attempt < max_attempts:
+            attempt += 1
             # Reset session before each retry to prevent context accumulation
             # (same rationale as SimpleTaskExecutor — see comment there).
             # Skip reset after StreamTimeoutError (session still alive).
@@ -2451,9 +2485,13 @@ class SubtaskExecutor:
             
             try:
                 # Write prompt to log BEFORE calling AI (crash safety)
+                default_output_log = os.path.join(
+                    log_session_dir, "lr_tasks", f"lr_{subtask_id}_output.log"
+                )
                 system_prompt = build_system_prompt_coding_agent(
                     exec_script_path,
                     supports_system_prompt=client.provider.supports_system_prompt,
+                    output_log=default_output_log,
                 )
                 # Prepend system_prompt_prefix — skip for continuation prompts
                 if _is_continuation:
@@ -2660,6 +2698,18 @@ class SubtaskExecutor:
                     "result": "not_completed",
                     "summary": summary,
                 })
+
+            except RateLimitError as e:
+                # Rate-limit (429) and server errors (503) are transient
+                # external issues — do NOT consume an attempt.
+                logger.error(f"AI call rate-limited for long-running task {subtask_id}: {e}")
+                print(f"      ❌ AI call error: {e}")
+                print(f"      ⚠️ Rate-limit/server error — attempt NOT consumed")
+                should_reset = True
+                # Roll back the attempt counter so this doesn't count
+                attempt -= 1
+                # Do NOT record in task history
+                # (the backoff in AIClient will handle the wait)
 
             except AICallError as e:
                 logger.error(f"AI call failed for long-running task {subtask_id}: {e}")
@@ -2912,6 +2962,8 @@ class SubtaskExecutor:
             max_initial_wait=_load_fast_fail_timeout() * 2,
         )
         # Re-read signal file for possibly updated command
+        _stdout_log = ""
+        _stderr_log = ""
         if os.path.exists(signal_file):
             try:
                 with open(signal_file, 'r', encoding='utf-8') as _f:
@@ -2919,11 +2971,15 @@ class SubtaskExecutor:
                 _cmd = _sig.get('command', '')
                 if _cmd:
                     command_info = f"\nCommand: {_cmd}"
+                _stdout_log = _sig.get('stdout_log', '')
+                _stderr_log = _sig.get('stderr_log', '')
             except Exception:
                 pass
         reanalyze_prompt = _build_lr_analysis_prompt(
             output_log=output_log,
             command_info=command_info,
+            stdout_log=_stdout_log,
+            stderr_log=_stderr_log,
         )
         if conv_logger:
             conv_logger.log_prompt(
@@ -2967,6 +3023,8 @@ class SubtaskExecutor:
         # Read exit code and command from signal file if available
         exit_code_info = ""
         command_info = ""
+        stdout_log = ""
+        stderr_log = ""
         if signal_file and os.path.exists(signal_file):
             try:
                 with open(signal_file, 'r', encoding='utf-8') as f:
@@ -2977,12 +3035,16 @@ class SubtaskExecutor:
                 command = signal_data.get('command')
                 if command:
                     command_info = f"\nCommand: {command}"
+                stdout_log = signal_data.get('stdout_log', '')
+                stderr_log = signal_data.get('stderr_log', '')
             except Exception:
                 pass
         
         prompt = _build_lr_analysis_prompt(
             output_log=output_log,
             command_info=command_info,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
         )
         try:
             # No system_prompt or system_prompt_prefix needed here —
@@ -3089,6 +3151,11 @@ class SubtaskExecutor:
                 error_type=None if is_completed else "validation_failed",
                 response_text=result,
             )
+
+        except RateLimitError:
+            # Let rate-limit errors propagate to the outer retry loop
+            # so the attempt counter is properly rolled back.
+            raise
             
         except AICallError as e:
             logger.error(f"Failed to analyze long-running result: {e}")

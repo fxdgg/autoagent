@@ -65,6 +65,17 @@ class StreamTimeoutError(AICallError):
     pass
 
 
+class RateLimitError(AICallError):
+    """Raised when the AI service returns a transient rate-limit (429) or server error (503).
+
+    These errors are external to the task execution and should NOT consume
+    retry attempts.  The backoff mechanism in AIClient/AIClientSDK will
+    handle the wait-and-retry automatically.
+    """
+
+    pass
+
+
 class AIClient:
     """
     AI CLI client with context management.
@@ -301,10 +312,14 @@ class AIClient:
                         f"Error: {message}"
                     )
                 prefix = f"[{error_type}] " if error_type else ""
-                raise AICallError(
+                error_msg = (
                     f"{self.provider.name} returned exit code {process.returncode}: "
                     f"{prefix}{message}"
                 )
+                # Detect rate-limit (429) and server errors (503)
+                if self._is_rate_limit_error(error_msg):
+                    raise RateLimitError(error_msg)
+                raise AICallError(error_msg)
 
             # Combine all assistant text from stream-json events
             response = "".join(assistant_text_parts).strip()
@@ -941,6 +956,27 @@ class AIClient:
             f"Response preview: {response[:500]}"
         )
 
+    @staticmethod
+    def _is_rate_limit_error(error_msg: str) -> bool:
+        """Check if an error message indicates a rate-limit (429) or server error (503).
+
+        These are transient errors from the AI service that should not
+        consume retry attempts.
+        """
+        lower = error_msg.lower()
+        # HTTP 429 rate limit patterns
+        if "429" in error_msg and ("rate" in lower or "limit" in lower or "frequency" in lower or "usage exceeds" in lower):
+            return True
+        # HTTP 503 server error patterns
+        if "503" in error_msg and "server error" in lower:
+            return True
+        # Generic rate limit phrases
+        if "rate limit" in lower or "rate_limit" in lower:
+            return True
+        if "usage exceeds frequency limit" in lower:
+            return True
+        return False
+
     def reset_session(self):
         """Reset the session state, so next call starts a new session."""
         self._session_id = None
@@ -1083,6 +1119,10 @@ class AIClientSDK:
             err_lower = str(e).lower()
             if "timeout" in err_lower:
                 raise StreamTimeoutError(f"Failed to call CodeBuddy SDK: {e}")
+            # Detect rate-limit (429) and server errors (503) — these are
+            # transient and should not consume retry attempts.
+            if AIClient._is_rate_limit_error(str(e)):
+                raise RateLimitError(f"Failed to call CodeBuddy SDK: {e}")
             raise AICallError(f"Failed to call CodeBuddy SDK: {e}")
 
         if not response:
@@ -1264,9 +1304,12 @@ class AIClientSDK:
                         if errors:
                             error_type = getattr(message, "error_type", None) or ""
                             prefix = f"[{error_type}] " if error_type else ""
-                            raise AICallError(
+                            error_msg = (
                                 f"CodeBuddy SDK error: {prefix}{'; '.join(str(e) for e in errors)}"
                             )
+                            if AIClient._is_rate_limit_error(error_msg):
+                                raise RateLimitError(error_msg)
+                            raise AICallError(error_msg)
 
                 elif isinstance(message, StreamEvent):
                     pass
