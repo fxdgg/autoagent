@@ -215,6 +215,36 @@ Session 目录名为 `{workspace名}_{8位随机}`，注册在 `.autoagent/sessi
 
 客户端有三种实现：`AIClient`（CLI 子进程，支持所有 provider）、`AIClientSDK`（CodeBuddy Agent SDK，默认）、`AIClientTest`（测试模式）。非 codebuddy/test 的 provider 会被强制切到 CLI 模式。
 
+#### Provider 枚举
+
+`config.yaml` 的 `preset.provider`、CLI `--provider` / `-P` 用同一套取值，定义在 `ai_providers.py` 的 `PROVIDERS` / `PROVIDER_ALIASES`。可用 `python orchestrator.py --list-providers` 列出。
+
+| 取值 | 别名 | 调的 CLI | 默认模型 | 说明 |
+|---|---|---|---|---|
+| `codebuddy` | `cb` | `codebuddy` | `config.yaml` 的 `default_model`（当前 `glm-5.0-ioa`） | 默认。SDK / CLI 都能跑；模型 ID 是 CodeBuddy 网关里的名字，可同时挂 Claude、GLM、DeepSeek |
+| `claude` | `claude-code` | `claude` | `claude-sonnet-4-6` | Claude Code。模型必须是 Anthropic / Claude Code 认的 ID |
+| `gemini` | `gemini-cli` | `gemini` | `gemini-3-flash` | Gemini CLI。模型必须是 Gemini 认的 ID |
+| `opencode` | `oc` | `opencode` | 空，用 OpenCode 自己的配置 | 省略 `-m` 时走 OpenCode 本地默认模型 |
+| `codex` | （无） | `codex` | `gpt-5.4-mini` | OpenAI Codex CLI |
+| `test` | （无） | 不调真 AI | `test` | 按 `--test-rules` 规则文件顺序吐预定义回复，用来测编排、不烧 token |
+
+一次运行只用 **一个** provider。四个角色（`plan` / `default` / `lite` / `evaluation`）只是在同一套 CLI 上换 `--model`，不能按角色换 provider。
+
+#### 模型名必须对应当前 provider
+
+`plan` / `default` / `lite` / `evaluation` 是 AutoAgent 的**角色别名**，不是模型枚举。真正发给 CLI 的是右边那个字符串。AutoAgent **没有**模型白名单，写错了要等 CLI 报错。
+
+| provider | 模型名从哪来 | 能写的例子 | 不能写的例子 |
+|---|---|---|---|
+| `codebuddy` | CodeBuddy 账号里能切到的模型（带 `-ioa` 的是内部网关） | `glm-5.0-ioa`、`claude-opus-4.6`、`deepseek-v3-2-volc-ioa` | 只存在于 Gemini/Codex 的 ID |
+| `claude` | Claude Code 的模型 ID | `claude-sonnet-4-6`、`claude-opus-4.6` | `glm-5.0-ioa`（Claude Code 不认识） |
+| `gemini` | Gemini CLI 的模型 ID | `gemini-3-flash` | `claude-opus-4.6`、`glm-5.0-ioa` |
+| `opencode` | OpenCode 配置里的 `provider/model` | 依本机 OpenCode 配置 | 把 CodeBuddy 网关 ID 直接塞过去 |
+| `codex` | Codex 支持的模型 ID | `gpt-5.4-mini` | `glm-5.0-ioa` |
+| `test` | 忽略 | — | 不发请求 |
+
+当前 `default` preset 能同时写 `claude-opus-4.6` 和 `glm-5.0-ioa`，是因为 **provider 是 `codebuddy`**，这两个都是 CodeBuddy 网关 ID。若改成 `provider: claude` 再写 `lite: glm-5.0-ioa` 会失败。
+
 ---
 
 ## 三、应用场景
@@ -392,7 +422,7 @@ python orchestrator.py --no-skip
 |---|---|---|---|
 | `--config` | `-c` | `todos.yaml` | 任务配置路径 |
 | `--workspace` | `-w` | `.` | AI 的工作目录 |
-| `--provider` | `-P` | `codebuddy` | AI 提供商 |
+| `--provider` | `-P` | `codebuddy` | AI 提供商，枚举见 [Provider 枚举](#provider-枚举) |
 | `--model` | `-m` | 依 provider | 单模型或 `plan:X;default:Y;lite:Z;evaluation:W` |
 | `--preset` | — | `default` | 加载 config.yaml 里的预设 |
 | `--task` | `-t` | — | 只执行指定 ID |
@@ -462,6 +492,8 @@ truncation_limits:
 **preset 与 `${workspace}`**：`${workspace}` 会被替换为 `--workspace` 的绝对路径，**只对 preset 内的字符串值生效**，非递归，不支持其他变量。
 
 preset 可覆盖的字段：`config`、`ideas`、`provider`、`model`、`executable`、`workspace`、`timeout`、`log_dir`、`idle_interval`、`include_directories`、`test_rules`、`verbose`、`no_skip`、`no_idle`、`use_cli`、`ideas_only`、`human_review`。
+
+`provider` / `model` 写在 preset 里，不在全局段。取值和模型绑定见 [Provider 枚举](#provider-枚举)；`config.yaml` 里也有注释和示例 preset。
 
 ### todos.yaml（任务定义）
 

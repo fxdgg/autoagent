@@ -12,9 +12,17 @@
 # Leave empty or remove to skip.
 system_prompt_prefix: "You are an AI coding agent. You can read/write files, run shell commands, and analyze outputs. Complete the following task."
 
-# Default AI model for providers that support model selection
-# This is used when no model is specified via CLI --model or preset
-# Supported models depend on the provider (e.g., codebuddy supports deepseek-v3.2, claude-*)
+# Default AI model for providers that support model selection.
+# Used when neither CLI --model nor preset.model is set.
+# This is a provider-specific model ID, NOT an AutoAgent enum.
+# It must be a model the chosen provider actually serves:
+#   codebuddy  → CodeBuddy gateway IDs (glm-5.0-ioa, claude-opus-4.6, deepseek-v3-2-volc-ioa, ...)
+#   claude     → Claude Code IDs (claude-sonnet-4-6, claude-opus-4.6, ...)
+#   gemini     → Gemini CLI IDs (gemini-3-flash, ...)
+#   opencode   → OpenCode's own provider/model spec (omit to use OpenCode default)
+#   codex      → Codex IDs (gpt-5.4-mini, ...)
+#   test       → ignored (no real AI call)
+# AutoAgent forwards --model as-is; it does not validate against a whitelist.
 default_model: glm-5.0-ioa
 
 # Session timeout (in seconds).
@@ -88,6 +96,14 @@ truncation_limits:
 # Use ${workspace} to refer to the current working directory.
 # Command-line arguments will override preset values.
 preset:
+  # provider enum (aliases in parentheses):
+  #   codebuddy (cb) | claude (claude-code) | gemini (gemini-cli)
+  #   opencode (oc)  | codex                | test
+  # See RESEARCH.md "Provider 枚举". python orchestrator.py --list-providers
+  #
+  # model roles: plan / default / lite / evaluation
+  # Values are the provider's model IDs. Missing roles inherit `default`.
+  # Example: lite: glm-5.0-ioa is valid here only because provider is codebuddy.
   - name: default
     ideas: ${workspace}/ideas.md
     config: ${workspace}/todos.yaml
@@ -114,4 +130,24 @@ preset:
     human_review: true  # When processing ideas, force human review After AI review
     verbose: true
 
+  # Empty preset: no ideas watcher, no idle. Use for one-shot todos.yaml runs:
+  #   python orchestrator.py --preset nothing --config todos.yaml --workspace ./project
   - name: nothing
+
+  # Example: Claude Code. Model IDs must be Claude's — glm-*-ioa would fail.
+  # - name: claude
+  #   provider: claude
+  #   model:
+  #     plan: claude-opus-4.6
+  #     default: claude-sonnet-4-6
+  #     lite: claude-sonnet-4-6
+  #     evaluation: claude-opus-4.6
+
+  # Example: Gemini CLI
+  # - name: gemini
+  #   provider: gemini
+  #   model:
+  #     default: gemini-3-flash
+  #     lite: gemini-3-flash
+  #     plan: gemini-3-flash
+  #     evaluation: gemini-3-flash
