@@ -165,7 +165,7 @@ AutoAgent 会自动按顺序执行任务。遇到 `looping` 任务时，AI 会�
 
 ### 现有方案的问题
 
-开发 AutoAgent 之前，我们先试过几条现成路。
+开发 AutoAgent 之前，先试过几条现成路。
 
 #### AutoResearch：一次注入 program.md，长任务容易跑偏
 
@@ -214,7 +214,7 @@ AutoResearch、Claude Code Goal、Codex Goal 解决的都是续跑：别让 Agen
 
 Anthropic 在 [Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) 里写过：复杂任务无法总在一个上下文窗口里完成；新会话天然缺少上一段工作的完整记忆，单靠上下文压缩撑不住长期任务，Agent 需要一种方法弥合会话之间的间隙。他们的改进是：长期运行时把进度文件、feature list 和 git 记录结构化保存，让后续 Agent 可以渐进推进，也方便还原错误代码。
 
-这条判断和我们一致。**AutoAgent 是补在长周期工程任务上的调度层**：上面承接用户目标，下面连接 Agent provider，把中间那段漫长、容易丢状态的运行过程，拆成一组可检查、可复用的任务节点，并按既定规则自动串联多个 session。最终把 AutoResearch 这类 harness 的闭环能力从特定实验里抽出来，变成面向长周期任务的通用调度框架。**只有任务本身被结构化，模型能力才能被稳定释放。**
+这也是 AutoAgent 的出发点。**AutoAgent 是补在长周期工程任务上的调度层**：上面承接用户目标，下面连接 Agent provider，把中间那段漫长、容易丢状态的运行过程，拆成一组可检查、可复用的任务节点，并按既定规则自动串联多个 session。最终把 AutoResearch 这类 harness 的闭环能力从特定实验里抽出来，变成面向长周期任务的通用调度框架。**只有任务本身被结构化，模型能力才能被稳定释放。**
 
 
 ### 🎯 声明式：YAML 定义目标，不用写执行逻辑
