@@ -157,6 +157,62 @@ AutoAgent 会自动按顺序执行任务。遇到 `looping` 任务时，AI 会�
 
 ## 💡 为什么用 AutoAgent？
 
+现有方案已经能让 Agent「不要那么容易停下来」，但长周期任务真正缺的是一层调度：把目标拆成可检查的节点，跨 session 传递状态，并在中断后自己恢复。AutoAgent 就是补上这一层。
+
+### 现有方案的问题
+
+开发 AutoAgent 之前，我们先试过几条现成路。
+
+#### AutoResearch：一次注入 program.md，长任务容易跑偏
+
+3 月，Karpathy 发布了 [AutoResearch](https://github.com/karpathy/autoresearch)。一份 `program.md` 写清实验规则、约束和循环逻辑，Agent 就能自己改代码、训练、评估、迭代。它证明了 AI 可以走完「提出假设 → 跑实验 → 读结果 → 做决策」的闭环，实际任务里也确实能迭代优化。但问题出在设计本身。
+
+AutoResearch 的核心是在 `program.md` 里写死一套研究流程：创建实验环境、修改训练文件、运行并读取指标，再按指标 keep 或 reset。文件里还会要求 Agent 进入实验循环后不要停下来问用户，一直往下推。把这份文件当作 prompt 一次性交给 Agent，它就会按定义持续推进。
+
+<p align="center">
+  <img src="images/autoresearch-structure.png" alt="AutoResearch 结构图" width="880">
+</p>
+<p align="center"><em>图 2　AutoResearch 结构图（基于 DeepWiki / program.md 流程整理）</em></p>
+
+它会遇到三个问题：
+
+1. **长任务容易失控。** `program.md` 只在一开始注入。短任务没问题；一旦训练拉长、上下文超出窗口，Agent 会压缩记忆。压缩时约束容易漂移，「不要停下来问用户」「不要擅自改评价逻辑」这些硬规则后续不再稳定遵守。
+2. **执行逻辑是固定单线。** 提出方案 → 训练 → 总结 → 保留或回退。简单实验够用；一旦要根据中间结果动态分支，或同时探索多个方向再择优合并，单线循环就不够用。
+3. **没有 token 成本控制。** 长周期任务会拆成环境检测、提方案、写代码、跑程序、判指标、失败归因。这些子任务并不都需要最强模型。闭环一旦跑起来、时间一长，成本就会顶上来。
+
+#### Claude Code / Codex Goal：续跑增强，不是调度器
+
+5 月，Claude Code 和 Codex 的 Goal 模式先后上线。官方说法是：用户设定持续目标后，Agent 每轮结束会再检查目标是否完成；未满足就继续，直到完成、用户暂停或预算耗尽。
+
+Claude Code 主要靠 stop hook 拦住 Agent 原本要停的时刻。主 Agent 跑完一轮后，独立评估器读取本轮 transcript，对照目标判断是否真完成。未满足则 hook 回一条继续指令，进入下一轮。评估器通常是小模型、不带工具。
+
+<p align="center">
+  <img src="images/claude-code-goal.png" alt="Claude Code Goal 模式执行逻辑" width="880">
+</p>
+<p align="center"><em>图 3　Claude Code Goal 模式执行逻辑（Keep Claude working）</em></p>
+
+Codex 则把目标持久化，并在每轮自动续跑时作为 continuation prompt 重新注入。线程进入 idle 且目标仍 active 时，会自动发起下一轮。
+
+<p align="center">
+  <img src="images/codex-goal.png" alt="Codex Goal 模式执行逻辑" width="880">
+</p>
+<p align="center"><em>图 4　Codex Goal 模式执行逻辑（Using Goals in Codex）</em></p>
+
+两者都是在现有 Agent 会话上做续跑增强：Claude Code 用 hook 拦截，Codex 用线程 idle 自动续跑。Agent 不那么容易过早停下。但长任务仍然没有独立调度器。模型连接一异常，续跑逻辑往往触发不了，也就不能主动恢复会话、继续往下做。
+
+#### 续跑解决的是「别停」，不是「别丢」
+
+AutoResearch、Claude Code Goal、Codex Goal 解决的都是续跑：别让 Agent 自己停下来。实质仍是把整块复杂任务一次性交给同一个 Agent 去迭代。任务拆分、上下文传递、异常恢复，都还靠它自己。跑到几十轮实验或多小时之后，问题会被放大：
+
+1. 上下文随压缩逐渐稀释
+2. 长时间命令容易撞上 SDK timeout 或会话中断，失败后缺少稳定的恢复入口
+3. 不同步骤无法按难度选不同模型，成本很难控
+
+Anthropic 在 [Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) 里写过：复杂任务无法总在一个上下文窗口里完成；新会话天然缺少上一段工作的完整记忆，单靠上下文压缩撑不住长期任务，Agent 需要一种方法弥合会话之间的间隙。他们的改进是：长期运行时把进度文件、feature list 和 git 记录结构化保存，让后续 Agent 可以渐进推进，也方便还原错误代码。
+
+这条判断和我们一致。**AutoAgent 是补在长周期工程任务上的调度层**：上面承接用户目标，下面连接 Agent provider，把中间那段漫长、容易丢状态的运行过程，拆成一组可检查、可复用的任务节点，并按既定规则自动串联多个 session。最终把 AutoResearch 这类 harness 的闭环能力从特定实验里抽出来，变成面向长周期任务的通用调度框架。**只有任务本身被结构化，模型能力才能被稳定释放。**
+
+
 ### 🎯 声明式：YAML 定义目标，不用写执行逻辑
 
 你只描述"做什么"和"做到什么程度"，AutoAgent 负责"怎么做"和"做到为止"。
