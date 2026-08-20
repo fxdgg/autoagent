@@ -137,11 +137,11 @@ tasks:
 > [!TIP]
 > **不想手写这么复杂的 YAML？让 AI 帮你写。**
 >
-> 你只需要用自然语言描述你想做的事情，然后把 [TASK_DESIGN_GUIDE.md](TASK_DESIGN_GUIDE.md) 喂给任意 AI（ChatGPT、Claude、CodeBuddy 等），让它按照这份指南帮你拆解成 `todos.yaml`。这份指南详细定义了任务类型、字段含义、最佳实践和常见陷阱，AI 读完就能生成高质量的任务配置。
+> 你只需要用自然语言描述你想做的事情，然后把 [task_design_guide/TASK_DESIGN_GUIDE.md](task_design_guide/TASK_DESIGN_GUIDE.md) 喂给任意 AI（ChatGPT、Claude、CodeBuddy 等），让它按照这份指南帮你拆解成 `todos.yaml`。这份指南详细定义了任务类型、字段含义、最佳实践和常见陷阱，AI 读完就能生成高质量的任务配置；同目录下还有按场景细分的子指南（构建交付、数据管道、迭代优化、调研分析、环境部署、测试验证）。
 >
 > ```
 > 你：「我想让 AI 自动把项目的测试覆盖率从 60% 提到 90%」
-> AI：（读取 TASK_DESIGN_GUIDE.md）→ 生成完整的 todos.yaml
+> AI：（读取 task_design_guide/TASK_DESIGN_GUIDE.md）→ 生成完整的 todos.yaml
 > 你：python orchestrator.py --config todos.yaml
 > ```
 
