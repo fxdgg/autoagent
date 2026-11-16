@@ -23,7 +23,13 @@ import time
 import asyncio
 from typing import Union, Optional, List
 
-from ai_providers import AIProvider, CodeBuddyProvider, get_provider
+from ai_providers import (
+    AIProvider,
+    CodeBuddyProvider,
+    PROVIDER_ALIASES,
+    PROVIDERS,
+    get_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +82,366 @@ class RateLimitError(AICallError):
     pass
 
 
-class AIClient:
+# Tool-only turn sentinel: the AI called tools but produced no assistant text.
+# Constraints: must not contain '{' (avoids _parse_json_response Strategy 3);
+#              must not contain completion/failure markers (avoids the three
+#              regex layers in _check_completion).
+NO_ASSISTANT_TEXT = "__AUTOAGENT_NO_ASSISTANT_TEXT__"
+
+
+def is_no_assistant_text(value) -> bool:
+    """Return True when value is the no-assistant-text sentinel."""
+    return isinstance(value, str) and value == NO_ASSISTANT_TEXT
+
+
+class FallbackTarget:
+    """Normalized candidate target for client-side fallback rotation."""
+
+    def __init__(
+        self,
+        model: str,
+        provider_name: Optional[str] = None,
+        executable: Optional[str] = None,
+        extra_args: Optional[str] = None,
+        quota_domain: Optional[str] = None,
+    ):
+        self.model = model
+        self.provider_name = provider_name
+        self.executable = executable
+        self.extra_args = extra_args
+        self._quota_domain = quota_domain
+
+    @property
+    def quota_domain(self) -> str:
+        """Return the quota/billing domain this target belongs to."""
+        if self._quota_domain:
+            return self._quota_domain
+        if self.provider_name:
+            return self.provider_name
+        if "/" in (self.model or ""):
+            return self.model.split("/", 1)[0]
+        return "default"
+
+    def __repr__(self):
+        return (
+            f"FallbackTarget(provider={self.provider_name!r}, "
+            f"model={self.model!r}, domain={self.quota_domain!r})"
+        )
+
+
+class FallbackMixin:
+    """Transparent client-side retry across configured fallback targets.
+
+    Subclasses keep their original single-call logic in ``_ask_once`` and
+    route ``ask()`` through :meth:`_call_with_fallback`. Nothing in
+    task_executor / providers / provider subclasses needs to change.
+    """
+
+    _QUOTA_MARKERS = (
+        "token quota is not enough",
+        "pre_consume_token_quota_failed",
+        "quota",
+    )
+
+    @property
+    def _fb_ctx(self) -> str:
+        """Context tag used in fallback logs."""
+        return getattr(self, "context_id", None) or "fallback"
+
+    def _init_fallback_state(self):
+        """Initialize per-client fallback state (safe without configuration)."""
+        self._fallback_targets = []
+        self._fallback_resolver = None
+        self._on_session_restore = None
+        self._persistent_session_getter = None
+        self._exhausted_quota_domains = set()
+
+    def configure_fallback(
+        self,
+        specs,
+        provider_resolver=None,
+        on_session_restore=None,
+        persistent_session_getter=None,
+    ):
+        """Configure ordered fallback targets for this client instance.
+
+        Args:
+            specs: str (comma-separated) / list[str] / list[dict] / None.
+            provider_resolver: callable(name, model, executable, extra_args)
+                rebuilding a provider instance for cross-provider targets.
+            on_session_restore: callable(session_id) restoring the persisted
+                session id after an exhausted fallback chain.
+            persistent_session_getter: callable() returning the persisted
+                session id, snapshotted before any switch.
+        """
+        self._fallback_resolver = provider_resolver
+        self._on_session_restore = on_session_restore
+        self._persistent_session_getter = persistent_session_getter
+        self._exhausted_quota_domains = set()
+        self._fallback_targets = self._normalize_fallback_specs(specs)
+
+    def _normalize_fallback_specs(self, specs) -> List[FallbackTarget]:
+        """Normalize raw specs into a deduplicated, ordered target list."""
+        if not specs:
+            return []
+        if isinstance(specs, str):
+            raw_specs = [part.strip() for part in specs.split(",")]
+        elif isinstance(specs, (list, tuple)):
+            raw_specs = list(specs)
+        else:
+            raise ValueError(
+                f"fallback_models must be str or list, got {type(specs).__name__}"
+            )
+
+        primary_domain = self._current_quota_domain()
+        seen = {(None, self.provider.model)}
+        targets = []
+        for spec in raw_specs:
+            target = self._parse_fallback_spec(spec, primary_domain)
+            if target is None:
+                continue
+            key = (target.provider_name, target.model)
+            if key in seen:
+                continue
+            seen.add(key)
+            targets.append(target)
+        return targets
+
+    def _parse_fallback_spec(self, spec, primary_domain: str) -> Optional[FallbackTarget]:
+        """Parse one spec (str or dict) into a FallbackTarget."""
+        if isinstance(spec, dict):
+            model = str(spec.get("model") or "").strip()
+            provider_name = str(spec.get("provider") or "").strip().lower() or None
+            executable = spec.get("executable") or None
+            extra_args = spec.get("extra_args") or None
+        elif isinstance(spec, str):
+            value = spec.strip()
+            if not value:
+                return None
+            if ":" in value:
+                provider_name, model = value.split(":", 1)
+                provider_name = provider_name.strip().lower()
+                model = model.strip()
+            else:
+                provider_name = None
+                model = value
+            executable = None
+            extra_args = None
+        else:
+            logger.warning("[%s] Ignore invalid fallback spec: %r", self._fb_ctx, spec)
+            return None
+
+        if not model:
+            return None
+
+        if provider_name:
+            resolved = PROVIDER_ALIASES.get(provider_name, provider_name)
+            if resolved not in PROVIDERS:
+                available = ", ".join(
+                    sorted(set(list(PROVIDERS.keys()) + list(PROVIDER_ALIASES.keys())))
+                )
+                logger.warning(
+                    "[%s] Ignore fallback with unknown provider %r. Available: %s",
+                    self._fb_ctx,
+                    provider_name,
+                    available,
+                )
+                return None
+            quota_domain = provider_name
+        else:
+            if "/" not in model and self.provider.name == "opencode":
+                print(
+                    f"   ⚠️ [{self._fb_ctx}] Fallback model {model!r} has no provider "
+                    f"prefix; opencode needs 'provider/model' full name for -m routing."
+                )
+            quota_domain = None if "/" in model else primary_domain
+
+        return FallbackTarget(
+            model=model,
+            provider_name=provider_name,
+            executable=executable,
+            extra_args=extra_args,
+            quota_domain=quota_domain,
+        )
+
+    def _current_quota_domain(self) -> str:
+        """Return the quota domain of the current primary target."""
+        model = self.provider.model or ""
+        if "/" in model:
+            return model.split("/", 1)[0]
+        return self.provider.name or "default"
+
+    def _fallback_candidates(self) -> List[FallbackTarget]:
+        """Build [primary] + configured fallbacks, deduplicated, no wrap-around."""
+        primary = FallbackTarget(
+            model=self.provider.model,
+            quota_domain=self._current_quota_domain(),
+        )
+        candidates = [primary]
+        seen = {(None, primary.model)}
+        for target in self._fallback_targets:
+            key = (target.provider_name, target.model)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(target)
+        return candidates
+
+    @staticmethod
+    def should_fallback(exc) -> bool:
+        """All AICallError subclasses trigger a fallback (incl. 403/misjudged auth)."""
+        return isinstance(exc, AICallError)
+
+    @staticmethod
+    def _is_quota_exhausted(exc) -> bool:
+        """Return True when the error indicates account quota exhaustion."""
+        message = str(exc).lower()
+        if "403" in message:
+            return True
+        return any(marker in message for marker in FallbackMixin._QUOTA_MARKERS)
+
+    def _switch_target(self, target: FallbackTarget, original_provider):
+        """Switch provider/model in place.
+
+        Returns:
+            tuple: (old_provider, old_model, new_provider, new_model)
+        """
+        old_provider = self.provider.name
+        old_model = self.provider.model
+        if target.provider_name:
+            if self._fallback_resolver is None:
+                raise ValueError(
+                    f"No provider resolver for cross-provider target "
+                    f"{target.provider_name}:{target.model}"
+                )
+            new_provider = self._fallback_resolver(
+                target.provider_name,
+                target.model,
+                target.executable,
+                target.extra_args,
+            )
+            self.provider = new_provider
+        else:
+            self.provider.set_model(target.model)
+        return old_provider, old_model, self.provider.name, self.provider.model
+
+    def _log_fallback_switch(self, idx: int, total: int, old, new, reason: str):
+        """Emit console + logger warning for one target switch."""
+        old_provider, old_model = old
+        new_provider, new_model = new
+        message = (
+            f"🔀 [{self._fb_ctx}] fallback {idx}/{total - 1}: "
+            f"{old_provider}/{old_model} → {new_provider}/{new_model} "
+            f"(reason: {reason})"
+        )
+        print(f"   {message}")
+        logger.warning("[%s] %s", self._fb_ctx, message)
+
+    def _call_with_fallback(self, call_fn, **kwargs):
+        """Run ``call_fn(**kwargs)`` across candidates until one succeeds.
+
+        Kept transparent to callers: attempt counting, skip decisions and
+        exception semantics stay unchanged in task_executor.
+        """
+        candidates = self._fallback_candidates()
+        if len(candidates) <= 1:
+            return call_fn(**kwargs)
+
+        base_failures = getattr(self, "_consecutive_failures", 0)
+        original_provider = self.provider
+        original_model = self.provider.model
+        original_session = self._session_id
+        getter = self._persistent_session_getter
+        original_persistent_session = None
+        if getter:
+            try:
+                original_persistent_session = getter()
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning(
+                    "[%s] Failed to snapshot persistent session: %s", self._fb_ctx, exc
+                )
+
+        primary_exc = None
+        last_exc = None
+        failures = []
+
+        for idx, target in enumerate(candidates):
+            domain = target.quota_domain
+            if idx > 0 and domain in self._exhausted_quota_domains:
+                logger.warning(
+                    "[%s] fallback skip exhausted domain: %s", self._fb_ctx, domain
+                )
+                print(f"   ⏭ [{self._fb_ctx}] fallback skip exhausted domain: {domain}")
+                continue
+
+            if idx > 0:
+                old = (self.provider.name, self.provider.model)
+                try:
+                    self._switch_target(target, original_provider)
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning(
+                        "[%s] fallback switch to %s failed: %s", self._fb_ctx, target, exc
+                    )
+                    continue
+                new = (self.provider.name, self.provider.model)
+                self.reset_session()
+                self._consecutive_failures = 0
+                reason = (
+                    f"{type(last_exc).__name__}: {last_exc}"
+                    if last_exc is not None
+                    else "previous failure"
+                )
+                self._log_fallback_switch(idx, len(candidates), old, new, reason)
+
+            try:
+                return call_fn(**kwargs)
+            except AICallError as exc:
+                if idx == 0:
+                    primary_exc = exc
+                last_exc = exc
+                failures.append(
+                    f"{self.provider.name}/{self.provider.model}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                if self._is_quota_exhausted(exc):
+                    self._exhausted_quota_domains.add(domain)
+                logger.warning(
+                    "[%s] fallback %d/%d failed: %s: %s",
+                    self._fb_ctx,
+                    idx,
+                    len(candidates) - 1,
+                    type(exc).__name__,
+                    exc,
+                )
+
+        self.provider = original_provider
+        original_provider.set_model(original_model)
+        self._consecutive_failures = base_failures + 1
+        self._session_id = original_session
+        if self._on_session_restore and original_persistent_session is not None:
+            try:
+                self._on_session_restore(original_persistent_session)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning(
+                    "[%s] Failed to restore persistent session: %s", self._fb_ctx, exc
+                )
+
+        summary = " | fallback exhausted: " + "; ".join(failures)
+        exc_to_raise = primary_exc if primary_exc is not None else last_exc
+        if exc_to_raise is not None:
+            if exc_to_raise.args:
+                exc_to_raise.args = (
+                    str(exc_to_raise.args[0]) + summary,
+                ) + tuple(exc_to_raise.args[1:])
+            else:
+                exc_to_raise.args = (summary.lstrip(" |"),)
+            if last_exc is not None and exc_to_raise is not last_exc:
+                raise exc_to_raise from last_exc
+            raise exc_to_raise
+        raise AICallError(f"All fallback targets failed{summary}")
+
+
+class AIClient(FallbackMixin):
     """
     AI CLI client with context management.
 
@@ -126,6 +491,7 @@ class AIClient:
         self._consecutive_failures = 0
         self._backoff_base = 5  # seconds
         self._backoff_max = 300  # default max wait, overridden by config
+        self._init_fallback_state()
 
     @property
     def session_id(self) -> str:
@@ -173,6 +539,24 @@ class AIClient:
         Raises:
             AICallError: If the call fails
         """
+        return self._call_with_fallback(
+            self._ask_once,
+            prompt=prompt,
+            expect_json=expect_json,
+            timeout=timeout,
+            system_prompt=system_prompt,
+            **kwargs,
+        )
+
+    def _ask_once(
+        self,
+        prompt: str,
+        expect_json: bool = False,
+        timeout: int = None,
+        system_prompt: str = None,
+        **kwargs,
+    ) -> Union[str, dict]:
+        """Execute one AI call using the original, unmodified prompt args."""
         effective_timeout = timeout or self.timeout
 
         # Exponential backoff: wait before retrying after consecutive failures
@@ -323,21 +707,23 @@ class AIClient:
 
             # Combine all assistant text from stream-json events
             response = "".join(assistant_text_parts).strip()
-            # Fallback: if stream-json parsing yielded nothing, use raw stdout
             if not response:
-                response = stdout_text.strip()
-            if not response:
-                raise AICallError(f"{self.provider.name} returned empty response")
+                if expect_json:
+                    raise AICallError(
+                        f"{self.provider.name} returned no assistant text (JSON expected)"
+                    )
+                response = NO_ASSISTANT_TEXT
 
             # Store full log (with tool calls) for conversation logger
-            self.last_full_log = "\n".join(full_log_parts).strip()
-            if not self.last_full_log:
-                self.last_full_log = response
+            self.last_full_log = "\n".join(full_log_parts).strip() or response
 
             # Session is now active (session_id captured from stream events)
             self._consecutive_failures = 0  # Reset backoff on success
-            logger.info(f"[{self.context_id}] Got response ({len(response)} chars)")
-            logger.debug(f"[{self.context_id}] Response: {response[:200]}...")
+            logger.debug(
+                f"[{self.context_id}] no assistant text -> sentinel"
+                if is_no_assistant_text(response)
+                else f"[{self.context_id}] Got response ({len(response)} chars)"
+            )
 
             if expect_json:
                 return self._parse_json_response(response)
@@ -983,7 +1369,7 @@ class AIClient:
         logger.info(f"[{self.context_id}] Session reset")
 
 
-class AIClientSDK:
+class AIClientSDK(FallbackMixin):
     """
     AI client using the CodeBuddy Agent SDK (Python package) instead of CLI subprocess.
 
@@ -1031,6 +1417,7 @@ class AIClientSDK:
         self._consecutive_failures = 0
         self._backoff_base = 5  # seconds
         self._backoff_max = 300  # default max wait, overridden by config
+        self._init_fallback_state()
 
     @property
     def session_id(self) -> str:
@@ -1078,6 +1465,24 @@ class AIClientSDK:
         Raises:
             AICallError: If the call fails
         """
+        return self._call_with_fallback(
+            self._ask_once,
+            prompt=prompt,
+            expect_json=expect_json,
+            timeout=timeout,
+            system_prompt=system_prompt,
+            **kwargs,
+        )
+
+    def _ask_once(
+        self,
+        prompt: str,
+        expect_json: bool = False,
+        timeout: int = None,
+        system_prompt: str = None,
+        **kwargs,
+    ) -> Union[str, dict]:
+        """Execute one AI call using the original, unmodified prompt args."""
         effective_timeout = timeout or self.timeout
 
         # SDK does not support a separate system prompt; append to user prompt
@@ -1126,15 +1531,20 @@ class AIClientSDK:
             raise AICallError(f"Failed to call CodeBuddy SDK: {e}")
 
         if not response:
-            self._consecutive_failures += 1
-            raise AICallError("CodeBuddy SDK returned empty response")
+            if expect_json:
+                raise AICallError(
+                    f"{self.provider.name} returned no assistant text (JSON expected)"
+                )
+            response = NO_ASSISTANT_TEXT
 
         self.last_full_log = full_log or response
         # Session is now active (session_id captured from ResultMessage)
         self._consecutive_failures = 0  # Reset backoff on success
-
-        logger.info(f"[{self.context_id}] Got response ({len(response)} chars)")
-        logger.debug(f"[{self.context_id}] Response: {response[:200]}...")
+        logger.debug(
+            f"[{self.context_id}] no assistant text -> sentinel"
+            if is_no_assistant_text(response)
+            else f"[{self.context_id}] Got response ({len(response)} chars)"
+        )
 
         if expect_json:
             return self._parse_json_response(response)
@@ -1564,7 +1974,20 @@ class AIClientTest:
         # command, actually execute it so signal files are created.
         response = self._maybe_run_autoagent_exec(prompt, response)
 
+        if not response:
+            if expect_json:
+                raise AICallError(
+                    f"{self.provider.name} returned no assistant text (JSON expected)"
+                )
+            response = NO_ASSISTANT_TEXT
+
         self.last_full_log = response
+        self._consecutive_failures = 0
+        logger.debug(
+            f"[{self.context_id}] no assistant text -> sentinel"
+            if is_no_assistant_text(response)
+            else f"[{self.context_id}] Got response ({len(response)} chars)"
+        )
 
         if expect_json:
             return self._parse_json_response(response)

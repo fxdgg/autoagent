@@ -297,10 +297,10 @@ class OpenCodeProvider(AIProvider):
     AI backends (Claude, GPT, Gemini, etc.) through its own configuration.
 
     Command pattern (new session):
-        type prompt.txt | opencode run --format json [-m <model>]
+        type prompt.txt | opencode run --format json [-m <model>] --auto
 
     Command pattern (continue session):
-        type prompt.txt | opencode run --format json [-m <model>] -s <session_id>
+        type prompt.txt | opencode run --format json [-m <model>] -s <session_id> --auto
 
     Key differences from other providers:
     - Session continuation uses -s <session_id>
@@ -308,6 +308,7 @@ class OpenCodeProvider(AIProvider):
     - Output format uses line-delimited JSON with types:
       step_start, text, tool_call, tool_result, step_finish
     - The --format json flag is required for machine-readable output
+    - Auto-approves permissions via --auto (requires an OpenCode version that supports this flag).
     - Does not set a default model; uses opencode's own configuration
     """
 
@@ -325,6 +326,9 @@ class OpenCodeProvider(AIProvider):
 
         if session_id:
             parts.extend(["-s", session_id])
+
+        # Auto-approve permissions (dangerous); aligns with claude/gemini/codex defaults.
+        parts.append("--auto")
 
         if self.extra_args:
             parts.append(self.extra_args)

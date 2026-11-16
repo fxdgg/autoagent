@@ -26,7 +26,15 @@ import yaml
 from typing import Optional, List
 
 from codebuddy_client import AIClient, AIClientSDK, AIClientTest, AICallError
-from ai_providers import get_provider, list_providers, AIProvider, TestProvider, parse_model_spec
+from ai_providers import (
+    AIProvider,
+    get_provider,
+    list_providers,
+    parse_model_spec,
+    PROVIDER_ALIASES,
+    PROVIDERS,
+    TestProvider,
+)
 from task_executor import (
     SimpleTaskExecutor,
     NestedTaskExecutor,
@@ -40,6 +48,98 @@ from conversation_logger import ConversationLogger
 from ideas_watcher import IdeasWatcher
 
 logger = logging.getLogger(__name__)
+
+
+def parse_fallback_models(raw, provider_name=None) -> List:
+    """Parse CLI/preset fallback specs into an ordered, deduplicated list.
+
+    Supports three forms: ``provider:model`` (cross-provider, split on the
+    FIRST colon), a compound full model name containing ``/`` (same
+    provider), and a structured dict (config.yaml only).
+
+    Args:
+        raw: Comma-separated string, list[str|dict], or None.
+        provider_name: Active provider name, used for bare-name warnings.
+
+    Returns:
+        list: Ordered specs (str or dict), duplicates and blanks removed.
+
+    Raises:
+        ValueError: If a ``provider:model`` spec names an unknown provider.
+    """
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        items = [part.strip() for part in raw.split(",")]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        raise ValueError(f"fallback_models must be str or list, got {type(raw).__name__}")
+
+    active = (provider_name or "").lower()
+    active = PROVIDER_ALIASES.get(active, active)
+    available = ", ".join(
+        sorted(set(list(PROVIDERS.keys()) + list(PROVIDER_ALIASES.keys())))
+    )
+
+    specs = []
+    seen = set()
+    for item in items:
+        if isinstance(item, dict):
+            provider = str(item.get("provider") or "").strip().lower()
+            model = str(item.get("model") or "").strip()
+            normalized = item
+        elif isinstance(item, str):
+            spec = item.strip()
+            if not spec:
+                continue
+            if ":" in spec:
+                provider, model = spec.split(":", 1)
+                provider = provider.strip().lower()
+                model = model.strip()
+            else:
+                provider = ""
+                model = spec
+            normalized = f"{provider}:{model}" if provider else model
+        else:
+            print(f"⚠️  Warning: ignoring invalid fallback entry: {item!r}")
+            continue
+
+        if not model:
+            continue
+        if provider:
+            if PROVIDER_ALIASES.get(provider, provider) not in PROVIDERS:
+                raise ValueError(
+                    f"Unknown fallback provider {provider!r} in {item!r}. "
+                    f"Available providers: {available}"
+                )
+        elif active == "opencode" and "/" not in model:
+            print(
+                f"⚠️  Warning: fallback model {model!r} is a bare name; "
+                f"opencode needs 'provider/model' full name for -m routing."
+            )
+
+        key = (provider, model)
+        if key in seen:
+            continue
+        seen.add(key)
+        specs.append(normalized)
+    return specs
+
+
+def _fallback_provider_resolver(
+    name: str,
+    model: str,
+    executable: str = None,
+    extra_args: str = None,
+) -> AIProvider:
+    """Rebuild a provider instance for a cross-provider fallback target."""
+    return get_provider(
+        name=name,
+        model=model,
+        executable=executable,
+        extra_args=extra_args,
+    )
 
 
 class TodoOrchestrator:
@@ -268,6 +368,7 @@ class TodoOrchestrator:
         use_cli: bool = False,
         backoff_max_wait: int = 300,
         model_roles: dict = None,
+        fallback_models: list = None,
     ):
         """
         Initialize the TodoOrchestrator.
@@ -295,6 +396,8 @@ class TodoOrchestrator:
                      when AI CLI calls fail repeatedly (default: 300)
             model_roles: Model role dict ({"plan": ..., "default": ..., "lite": ...}),
                      parsed by parse_model_spec(). None uses provider's default model.
+            fallback_models: Ordered cross-provider fallback targets,
+                     parsed by parse_fallback_models(). Empty disables fallback.
         """
         self.todos_file = todos_file
         self.workspace = os.path.abspath(workspace)
@@ -303,6 +406,8 @@ class TodoOrchestrator:
         self.idle_interval = idle_interval
         self.use_cli = use_cli
         self.backoff_max_wait = backoff_max_wait
+        self.fallback_models = fallback_models or []
+        self._fallback_provider_resolver = _fallback_provider_resolver
 
         self.provider = provider
 
@@ -660,6 +765,12 @@ class TodoOrchestrator:
         # Check if this task was interrupted and has a saved session_id
         task_state = self.state_manager.get_task_state(task_id)
         saved_session_id = task_state.get("session_id", "")
+
+        def on_session_restore(session_id: str):
+            self.state_manager.update_task_field(task_id, "session_id", session_id)
+
+        def persistent_session_getter():
+            return self.state_manager.get_task_state(task_id).get("session_id")
         
         if isinstance(self.provider, TestProvider):
             client = AIClientTest(
@@ -685,6 +796,12 @@ class TodoOrchestrator:
                 context_id=context_id,
             )
             client._backoff_max = self.backoff_max_wait
+            client.configure_fallback(
+                self.fallback_models,
+                provider_resolver=self._fallback_provider_resolver,
+                on_session_restore=on_session_restore,
+                persistent_session_getter=persistent_session_getter,
+            )
         else:
             client = AIClientSDK(
                 provider=self.provider,
@@ -694,6 +811,12 @@ class TodoOrchestrator:
                 context_id=context_id,
             )
             client._backoff_max = self.backoff_max_wait
+            client.configure_fallback(
+                self.fallback_models,
+                provider_resolver=self._fallback_provider_resolver,
+                on_session_restore=on_session_restore,
+                persistent_session_getter=persistent_session_getter,
+            )
         
         # Resume session if we have a saved session_id
         if saved_session_id:
@@ -902,6 +1025,10 @@ class TodoOrchestrator:
                 context_id="ideas_processor",
             )
             client._backoff_max = self.backoff_max_wait
+            client.configure_fallback(
+                self.fallback_models,
+                provider_resolver=self._fallback_provider_resolver,
+            )
             review_client = AIClient(
                 provider=self.provider,
                 workspace=self.workspace,
@@ -910,6 +1037,10 @@ class TodoOrchestrator:
                 context_id="ideas_reviewer",
             )
             review_client._backoff_max = self.backoff_max_wait
+            review_client.configure_fallback(
+                self.fallback_models,
+                provider_resolver=self._fallback_provider_resolver,
+            )
         else:
             client = AIClientSDK(
                 provider=self.provider,
@@ -919,6 +1050,10 @@ class TodoOrchestrator:
                 context_id="ideas_processor",
             )
             client._backoff_max = self.backoff_max_wait
+            client.configure_fallback(
+                self.fallback_models,
+                provider_resolver=self._fallback_provider_resolver,
+            )
             review_client = AIClientSDK(
                 provider=self.provider,
                 workspace=self.workspace,
@@ -927,6 +1062,10 @@ class TodoOrchestrator:
                 context_id="ideas_reviewer",
             )
             review_client._backoff_max = self.backoff_max_wait
+            review_client.configure_fallback(
+                self.fallback_models,
+                provider_resolver=self._fallback_provider_resolver,
+            )
         
         count = self.ideas_watcher.process_new_ideas(
             client,
@@ -1203,6 +1342,7 @@ def _merge_preset_with_args(args, preset):
         'ideas': 'ideas',
         'provider': 'provider',
         'model': 'model',
+        'fallback_models': 'fallback_models',
         'executable': 'executable',
         'workspace': 'workspace',
         'timeout': 'timeout',
@@ -1224,6 +1364,7 @@ def _merge_preset_with_args(args, preset):
     defaults_not_set = {
         'config': 'todos.yaml',
         'provider': 'codebuddy',
+        'fallback_models': None,
         'workspace': '.',
         'idle_interval': 30,
         'verbose': False,
@@ -1385,6 +1526,14 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
              'Roles: plan (idea decomposition), default (task execution), '
              'lite (lightweight tasks), evaluation (failure analysis & main task evaluation). '
              'Missing roles inherit from default.',
+    )
+    parser.add_argument(
+        '--fallback-models',
+        default=None,
+        help='Comma-separated fallback targets tried when the primary model fails. '
+             'Forms: "provider/model" (same provider, opencode full name), '
+             '"provider:model" (cross provider, e.g. codebuddy:glm-5). '
+             'Preset fallback_models is used when this flag is omitted.',
     )
     parser.add_argument(
         '--workspace', '-w',
@@ -1637,6 +1786,12 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
         )
         
         logger.info(f"Using AI provider: {provider}")
+
+        # CLI --fallback-models takes precedence over preset fallback_models
+        fallback_models = parse_fallback_models(
+            args.fallback_models,
+            provider_name=resolved_provider_name,
+        )
         
         # Create orchestrator
         # Resolve timeout: CLI arg > config.yaml > fallback
@@ -1656,6 +1811,7 @@ python orchestrator.py --ideas ideas.md --ideas-only   # Process ideas only (no 
             use_cli=args.use_cli,
             backoff_max_wait=backoff_max,
             model_roles=model_roles,
+            fallback_models=fallback_models,
         )
         
         # Handle special commands

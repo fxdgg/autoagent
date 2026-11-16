@@ -17,7 +17,7 @@ from typing import Optional, Tuple
 
 import yaml
 
-from codebuddy_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError, RateLimitError
+from codebuddy_client import AIClient, AICallError, BashTimeoutError, SessionTimeoutError, StreamTimeoutError, RateLimitError, NO_ASSISTANT_TEXT, is_no_assistant_text
 from state_manager import StateManager
 from prompts.shared import build_system_prompt_coding_agent, prepend_system_prompt_prefix
 from prompts.simple_task import build_simple_task_prompt
@@ -27,7 +27,7 @@ from prompts.long_running_task import (
 )
 from prompts.failure_analysis import build_failure_analysis_prompt
 from prompts.main_evaluation import build_main_evaluation_prompt
-from prompts.marker_nudge import MAX_MARKER_NUDGES, MARKER_NUDGE_PROMPT
+from prompts.marker_nudge import MAX_MARKER_NUDGES, MARKER_NUDGE_PROMPT, TOOL_ONLY_NUDGE_PROMPT
 from prompts.timeout_continuation import (
     BASH_TIMEOUT_CONTINUATION_PROMPT,
     STREAM_TIMEOUT_CONTINUATION_PROMPT,
@@ -36,6 +36,16 @@ from prompts.timeout_continuation import (
 from truncation_limits import limits
 
 logger = logging.getLogger(__name__)
+
+
+class _ToolOnlyTurn:
+    """Sentinel state: the AI turn executed tools but emitted no text."""
+
+    def __repr__(self):
+        return "TOOL_ONLY_TURN"
+
+
+TOOL_ONLY_TURN = _ToolOnlyTurn()
 
 
 _fast_fail_timeout_cache: int | None = None
@@ -514,12 +524,16 @@ class SimpleTaskExecutor:
                 # work — all context is fresh — so a short follow-up asking
                 # "did you meet the criteria?" is far cheaper than a full
                 # session reset + re-execution.
-                if completion_status is None:
+                if (
+                    completion_status is None
+                    or completion_status is TOOL_ONLY_TURN
+                ):
                     nudge_result = self._nudge_for_marker(
                         client, task, result,
                         conv_logger=conv_logger,
                         parent_task_id=parent_task_id,
                         log_round=_log_round,
+                        tool_only=(completion_status is TOOL_ONLY_TURN),
                     )
                     if nudge_result is not None:
                         result = nudge_result
@@ -534,6 +548,14 @@ class SimpleTaskExecutor:
                             ):
                                 return True
                         completion_status = self._check_completion(result)
+                        if completion_status is TOOL_ONLY_TURN:
+                            # Tool-only reply after a nudge: converge through
+                            # the existing explicit-failure branch.
+                            completion_status = False
+                            result = (
+                                f"❌ not completed: no assistant text after "
+                                f"{MAX_MARKER_NUDGES} tool-only turns"
+                            )
                     else:
                         # All nudges exhausted without a marker.  As a last
                         # resort, check the signal file — the AI may have
@@ -747,7 +769,11 @@ class SimpleTaskExecutor:
             True  - AI explicitly indicates completion
             False - AI explicitly indicates not completed
             None  - No completion/not-completion marker found in response
+            TOOL_ONLY_TURN - response was a tool-only turn with no text
         """
+        if is_no_assistant_text(response):
+            return TOOL_ONLY_TURN
+
         response_lower = response.lower()
         import re
 
@@ -812,6 +838,7 @@ class SimpleTaskExecutor:
         parent_task_id: str = None,
         log_round: str = None,
         max_nudges: int = None,
+        tool_only: bool = False,
     ) -> Optional[str]:
         """Send a lightweight follow-up in the same session to elicit a marker.
 
@@ -829,6 +856,9 @@ class SimpleTaskExecutor:
             parent_task_id: Parent task ID for log organisation.
             log_round: Round label for log file naming.
             max_nudges: Override ``MAX_MARKER_NUDGES`` (for tests).
+            tool_only: True when the previous turn executed tools but emitted
+                no text; use the stricter prompt and converge on a synthetic
+                failure after N consecutive tool-only turns.
 
         Returns:
             The AI's response string if a nudge was sent and answered,
@@ -836,6 +866,8 @@ class SimpleTaskExecutor:
         """
         task_id = str(task['id'])
         remaining = max_nudges if max_nudges is not None else MAX_MARKER_NUDGES
+        nudge_prompt = TOOL_ONLY_NUDGE_PROMPT if tool_only else MARKER_NUDGE_PROMPT
+        consecutive = 0
 
         # ── Pre-nudge check: detect already-running long-running tasks ──
         # If autoagent-exec already submitted a background task (signal file
@@ -855,13 +887,13 @@ class SimpleTaskExecutor:
                     conv_logger.log_prompt(
                         task_id=task_id,
                         task_name=task['name'],
-                        prompt=MARKER_NUDGE_PROMPT,
+                        prompt=nudge_prompt,
                         attempt=log_round or "nudge",
                         parent_task_id=parent_task_id,
                         metadata={"type": "marker_nudge", "nudge": i},
                     )
 
-                result = client.ask(MARKER_NUDGE_PROMPT)
+                result = client.ask(nudge_prompt)
                 self.last_response_text = result
 
                 if conv_logger:
@@ -874,6 +906,14 @@ class SimpleTaskExecutor:
 
                 # Check if the nudge response contains a marker
                 status = self._check_completion(result)
+                if status is TOOL_ONLY_TURN:
+                    consecutive += 1
+                    logger.info(
+                        f"Task {task_id}: nudge {i}/{remaining} was tool-only "
+                        f"(no assistant text), consecutive={consecutive}"
+                    )
+                    continue
+
                 if status is not None:
                     # Got a definitive answer (True or False)
                     return result
@@ -889,6 +929,15 @@ class SimpleTaskExecutor:
             except AICallError as e:
                 logger.warning(f"Task {task_id}: nudge {i} failed: {e}")
                 break  # Don't keep nudging if the API is failing
+
+        if tool_only:
+            # N tool-only turns produced no text: return a synthetic strict
+            # failure so the caller's re-check hits Layer 1 -> False and
+            # follows the existing failure branch (reset + 1 attempt).
+            return (
+                f"❌ not completed: no assistant text after "
+                f"{remaining} tool-only turns"
+            )
 
         # All nudges exhausted — caller will fall through to normal retry
         return None
@@ -2584,12 +2633,16 @@ class SubtaskExecutor:
                 completion_status = self.simple_executor._check_completion(result)
 
                 # Nudge for marker if missing (same logic as SimpleTaskExecutor)
-                if completion_status is None:
+                if (
+                    completion_status is None
+                    or completion_status is TOOL_ONLY_TURN
+                ):
                     nudge_result = self.simple_executor._nudge_for_marker(
                         client, subtask, result,
                         conv_logger=conv_logger,
                         parent_task_id=parent_task_id,
                         log_round=_log_round,
+                        tool_only=(completion_status is TOOL_ONLY_TURN),
                     )
                     if nudge_result is not None:
                         result = nudge_result
@@ -2632,6 +2685,14 @@ class SubtaskExecutor:
                             )
                             continue
                         completion_status = self.simple_executor._check_completion(result)
+                        if completion_status is TOOL_ONLY_TURN:
+                            # Tool-only reply after a nudge: converge through
+                            # the existing explicit-failure branch.
+                            completion_status = False
+                            result = (
+                                f"❌ not completed: no assistant text after "
+                                f"{MAX_MARKER_NUDGES} tool-only turns"
+                            )
                     else:
                         # All nudges exhausted.  Last resort: check the
                         # signal file — the AI may have launched
@@ -3086,12 +3147,16 @@ class SubtaskExecutor:
                 completion_status = self.simple_executor._check_completion(result)
 
             # Nudge for marker if still missing (same logic as SimpleTaskExecutor)
-            if completion_status is None:
+            if (
+                completion_status is None
+                or completion_status is TOOL_ONLY_TURN
+            ):
                 nudge_result = self.simple_executor._nudge_for_marker(
                     client, subtask, result,
                     conv_logger=conv_logger,
                     parent_task_id=parent_task_id,
                     log_round=_log_round,
+                    tool_only=(completion_status is TOOL_ONLY_TURN),
                 )
                 if nudge_result is not None:
                     result = nudge_result
@@ -3103,6 +3168,14 @@ class SubtaskExecutor:
                             command_info, conv_logger, parent_task_id, _log_round,
                         )
                     completion_status = self.simple_executor._check_completion(result)
+                    if completion_status is TOOL_ONLY_TURN:
+                        # Tool-only reply after a nudge: converge through the
+                        # existing explicit-failure branch.
+                        completion_status = False
+                        result = (
+                            f"❌ not completed: no assistant text after "
+                            f"{MAX_MARKER_NUDGES} tool-only turns"
+                        )
 
             is_completed = completion_status is True
             

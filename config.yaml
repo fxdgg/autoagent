@@ -117,6 +117,20 @@ preset:
     human_review: true  # When processing ideas, force human review After AI review
     verbose: true
 
+    # Fallback targets tried in order when the primary model fails (CLI wins).
+    # Three supported forms:
+    #   - opencode/deepseek-v4.1-flash-free   # A: same provider full name, opencode routes via `-m provider/model`
+    #   - codebuddy:glm-5                     # B: cross provider instance (split on FIRST ':')
+    #   - provider: codebuddy                 # C: structured dict (can override executable / extra_args)
+    #     model: glm-5
+    #     # executable: codebuddy
+    #     # extra_args: ""
+    # NOTE: opencode needs a compound 'provider/model' name; a bare model name
+    # cannot be routed by -m. '/' is part of the model name, ':' separates provider.
+    # fallback_models:
+    #   - opencode/deepseek-v4.1-flash-free
+    #   - codebuddy:glm-5
+
   - name: test
     ideas: ${workspace}/../ideas.md
     config: ${workspace}/../todos.yaml

@@ -47,11 +47,26 @@ MAX_MARKER_NUDGES = _load_max_marker_nudges()
 # tokens to the existing session context instead of replaying the whole
 # task description.
 MARKER_NUDGE_PROMPT = (
+    "你上一回合只执行了工具而没有输出任何文本，这是不被接受的。\n"
+    "Your previous turn produced tool calls but NO assistant text. This is not acceptable.\n"
     "Your previous response did not end with a status marker.\n"
     "If you already called autoagent-exec, do NOT call it again — \n"
     "just reply with: ⏳ LONG_RUNNING_IN_PROGRESS and end your session immediately.\n"
     "Otherwise, continue working on the task from where you left off.\n"
     "When you are done, end your response with EXACTLY one of:\n"
+    "  ✅ completed\n"
+    "  ❌ not completed: <reason>\n"
+    "  ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints \"TASK SUBMITTED\")"
+)
+
+# Dedicated nudge for tool-only turns: the previous response executed tools
+# but emitted no assistant text at all.  Explicitly forbid further tool calls
+# so the AI must reply with text carrying a status marker.
+TOOL_ONLY_NUDGE_PROMPT = (
+    "你上一回合只执行了工具而没有输出任何文本，这是不被接受的。\n"
+    "Your previous turn ONLY called tools and produced NO assistant text. This is not acceptable.\n"
+    "Do NOT call any tool in this turn. Reply with TEXT ONLY.\n"
+    "End your response with EXACTLY one of:\n"
     "  ✅ completed\n"
     "  ❌ not completed: <reason>\n"
     "  ⏳ LONG_RUNNING_IN_PROGRESS (only after autoagent-exec prints \"TASK SUBMITTED\")"
